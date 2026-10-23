@@ -1,0 +1,29 @@
+
+services:
+  hermes:
+    image: nousresearch/hermes-agent:stable
+    restart: unless-stopped
+    command: gateway run
+
+    ports:
+      - "127.0.0.1:8642:8642"
+      - "127.0.0.1:9119:9119"
+
+    volumes:
+      - ./data/hermes:/opt/data
+
+    env_file:
+      - ./secrets/hermes.env
+
+    environment:
+      HERMES_DASHBOARD: "1"
+
+    mem_limit: 4g
+    cpus: 2.0
+
+    networks:
+      - ai-internal
+
+networks:
+  ai-internal:
+    driver: bridge
