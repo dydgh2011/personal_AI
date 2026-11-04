@@ -24,18 +24,23 @@ services:
       # Empty: forwarded headers from clients are dropped and the TCP peer is the client.
       DASHBOARD_TRUSTED_PROXIES: ${DASHBOARD_TRUSTED_PROXIES:-}
       DASHBOARD_SESSION_IDLE_MINUTES: "30"
+      LEARNING_URL: http://learning:3000
+      LEARNING_TOKEN_FILE: /run/secrets/learning_token
       DASHBOARD_SESSION_ABSOLUTE_HOURS: "8"
     secrets:
       - source: dashboard_controller_token
         target: controller_token
       - source: dashboard_admin_hash
         target: admin_password_hash
+      - source: learning_dashboard_token
+        target: learning_token
     ports:
       - "127.0.0.1:${DASHBOARD_HOST_PORT:-8710}:3000"   # host-local only
     volumes:
       - dashboard-data:/var/lib/dashboard              # audit log
     networks:
       - admin-internal       # shared only with the controller (defined in compose.controller.yaml)
+      - learning-internal    # shared only with the learning service (compose.learning.yaml)
     read_only: true
     tmpfs:
       - /tmp:size=16m
@@ -62,7 +67,14 @@ services:
 volumes:
   dashboard-data:
 
+networks:
+  # Dashboard <-> learning service. Nothing else is on it.
+  learning-internal:
+    driver: bridge
+
 secrets:
+  learning_dashboard_token:
+    file: ./secrets/learning-dashboard.token     # services/learning/scripts/init-secrets.mjs
   dashboard_controller_token:
     file: ./secrets/dashboard-controller.token   # services/dashboard/scripts/init-secrets.mjs
   dashboard_admin_hash:

@@ -1,0 +1,71 @@
+# AI Learning OS service (L1). Merge with the existing files, e.g.:
+#   docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.dashboard.yaml -f compose.learning.yaml up -d --build --no-deps learning
+# Credentials first: node services/learning/scripts/init-secrets.mjs
+#
+# - Owns its database (learning-data volume). No other service reads or writes it.
+# - Reachable only by the Admin Dashboard server over learning-internal (defined in
+#   compose.dashboard.yaml). Hermes, the workers, the publisher and the test runner are not on it.
+#   (Hermes access is planned for L4, through hermes-broker with a narrower token.)
+# - learning-egress: outbound only, for the AI provider once the owner configures it.
+# - No Docker socket, no controller / GitHub / worker / publisher credentials.
+#
+# AI drafts are off until the owner sets, in secrets/learning.env:
+#   LEARNING_AI_PROVIDER=gemini
+#   LEARNING_AI_MODEL=<model id>
+#   LEARNING_AI_MONTHLY_BUDGET_USD=<hard monthly cap>
+#   LEARNING_AI_INPUT_USD_PER_MTOK=<price per 1M input tokens>
+#   LEARNING_AI_OUTPUT_USD_PER_MTOK=<price per 1M output tokens>
+# and puts the API key into secrets/learning-ai.key (mounted below), then recreates this service.
+
+services:
+  learning:
+    build:
+      context: ./services/learning
+    image: personal_ai-learning:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./secrets/learning.env           # LEARNING_DASHBOARD_TOKEN (+ the AI settings above, when set)
+    environment:
+      LEARNING_DB_PATH: /var/lib/learning/learning.db
+      LEARNING_AI_KEY_FILE: /run/secrets/ai_key
+    secrets:
+      - source: learning_ai_key
+        target: ai_key
+    volumes:
+      - learning-data:/var/lib/learning
+    networks:
+      - learning-internal
+      - learning-egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  learning-data:
+
+networks:
+  learning-egress:
+    driver: bridge
+
+secrets:
+  learning_ai_key:
+    file: ./secrets/learning-ai.key      # empty until the owner adds a key

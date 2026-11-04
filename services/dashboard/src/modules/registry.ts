@@ -19,4 +19,5 @@ export const MODULES: DashboardModule[] = [
   { id: 'tasks', title: 'Tasks', href: '/tasks', description: 'Claude / Codex tasks', permission: 'admin' },
   { id: 'projects', title: 'Projects', href: '/projects', description: 'Project registry', permission: 'admin' },
   { id: 'reviews', title: 'Code Reviews', href: '/reviews', description: 'Diffs and approvals', permission: 'admin' },
+  { id: 'learning', title: 'Learning', href: '/learning', description: 'AI Learning OS: domains, ideas, goals, roadmaps', permission: 'admin' },
 ];
