@@ -1,0 +1,61 @@
+# Isolated test runner (Phase E-2B). Merge with the existing files, e.g.:
+#   docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.test-runner.yaml up -d --build --no-deps test-runner
+# Credentials first: node services/test-runner/scripts/init-secrets.mjs
+#
+# Runs a project's admin-approved test commands (registry testCommands) on one exact approved commit.
+# - Network: test-internal only (internal: no internet), shared with the controller alone.
+# - The orchestrator runs as root with just CHOWN, SETUID, SETGID, KILL and DAC_READ_SEARCH; every test
+#   command runs as uid 10001 with no capabilities, a clean environment and its own checkout.
+# - Its token and evidence key are environment variables of the root process only (env_file), so the
+#   sandbox user cannot read them (no secret files to open, /proc/1/environ belongs to root).
+# - Read-only: the workers' artifact volumes and the publisher export (both owner-only, uid 1000).
+# - No Docker socket, no GitHub credentials, no worker homes or clones.
+
+services:
+  test-runner:
+    build:
+      context: ./services/test-runner
+    image: personal_ai-test-runner:local
+    restart: unless-stopped
+    init: true
+    user: "0:0"
+    env_file:
+      - ./secrets/test-runner.env        # TEST_RUNNER_CONTROLLER_TOKEN + TEST_EVIDENCE_KEY
+    environment:
+      CONTROLLER_URL: http://controller:3000
+      TEST_RUNNER_ARTIFACT_ROOTS: claude=/artifacts/claude,codex=/artifacts/codex
+      TEST_RUNNER_EXPORT_ROOT: /repo-exports
+      TEST_RUNNER_WORK_DIR: /work
+    volumes:
+      - publisher-artifacts-claude:/artifacts/claude:ro
+      - publisher-artifacts-codex:/artifacts/codex:ro
+      - repo-export-publisher:/repo-exports:ro
+    networks:
+      - test-internal
+    read_only: true
+    tmpfs:
+      - /work:size=1g,mode=0755,exec
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
+      - KILL
+      - DAC_READ_SEARCH
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 256
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  publisher-artifacts-claude:
+  publisher-artifacts-codex:
+  repo-export-publisher:

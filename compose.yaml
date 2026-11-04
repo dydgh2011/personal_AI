@@ -11,12 +11,29 @@ services:
 
     volumes:
       - ./data/hermes:/opt/data
+      # Personal AI OS, read-only from the repository so Hermes cannot change them:
+      # the skill (loaded via skills.external_dirs) and the plugin with the personal_ai_task
+      # tool and the pre_tool_call guard (enabled via plugins.enabled).
+      - ./services/hermes-integration/skills:/opt/personal-ai/skills:ro
+      - ./services/hermes-integration/plugins/personal-ai-controller:/opt/data/plugins/personal-ai-controller:ro
 
     env_file:
       - ./secrets/hermes.env
 
     environment:
       HERMES_DASHBOARD: "1"
+      # Hermes holds no task-controller credential: the personal_ai_task tool calls the
+      # hermes-broker (compose.controller.yaml), which adds the restricted delegator token.
+      PERSONAL_AI_BROKER_URL: http://hermes-broker:8080
+      PERSONAL_AI_HOST_WORKSPACES: 'D:\personal_ai\workspaces'
+      # Broker client key, read only by the personal_ai_task plugin (Hermes has no file or
+      # terminal tools, and the guard blocks /run/secrets). Not a hard boundary against code
+      # running as the hermes user; the controller credential itself stays in hermes-broker.
+      PERSONAL_AI_BROKER_KEY_FILE: /run/secrets/broker_client_key
+
+    secrets:
+      - source: hermes_broker_client_key
+        target: broker_client_key
 
     mem_limit: 4g
     cpus: 2.0
@@ -27,3 +44,7 @@ services:
 networks:
   ai-internal:
     driver: bridge
+
+secrets:
+  hermes_broker_client_key:
+    file: ./secrets/hermes-broker-client.key   # services/hermes-broker/scripts/add-client-key.mjs

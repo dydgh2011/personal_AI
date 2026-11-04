@@ -2,3 +2,7 @@
 /secrets/
 .env
 *.log
+/workspaces/
+
+# Phase specs pasted by the owner (not project source)
+/request.txt

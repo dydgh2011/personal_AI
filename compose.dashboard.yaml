@@ -1,0 +1,69 @@
+# Admin Dashboard (Next.js backend-for-frontend). Merge with the existing files, e.g.:
+#   docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.dashboard.yaml up -d --build --no-deps dashboard
+# Secrets first: node services/dashboard/scripts/init-secrets.mjs
+#
+# The browser talks only to this server (http://127.0.0.1:8710). The server calls the controller
+# over admin-internal with its own admin token (Docker secret); the token never reaches the browser.
+# No Docker socket, no repository volumes: the dashboard only displays and records decisions.
+
+services:
+  dashboard:
+    build:
+      context: ./services/dashboard
+    image: personal_ai-dashboard:local
+    restart: unless-stopped
+    init: true
+    environment:
+      CONTROLLER_URL: http://controller:3000
+      CONTROLLER_TOKEN_FILE: /run/secrets/controller_token
+      DASHBOARD_ADMIN_USER: ${DASHBOARD_ADMIN_USER:-owner}
+      DASHBOARD_ADMIN_HASH_FILE: /run/secrets/admin_password_hash
+      # Set to "true" once served over HTTPS (e.g. a Tailscale / reverse proxy in front).
+      DASHBOARD_COOKIE_SECURE: ${DASHBOARD_COOKIE_SECURE:-false}
+      # Addresses of reverse proxies whose X-Forwarded-For is believed (comma-separated).
+      # Empty: forwarded headers from clients are dropped and the TCP peer is the client.
+      DASHBOARD_TRUSTED_PROXIES: ${DASHBOARD_TRUSTED_PROXIES:-}
+      DASHBOARD_SESSION_IDLE_MINUTES: "30"
+      DASHBOARD_SESSION_ABSOLUTE_HOURS: "8"
+    secrets:
+      - source: dashboard_controller_token
+        target: controller_token
+      - source: dashboard_admin_hash
+        target: admin_password_hash
+    ports:
+      - "127.0.0.1:${DASHBOARD_HOST_PORT:-8710}:3000"   # host-local only
+    volumes:
+      - dashboard-data:/var/lib/dashboard              # audit log
+    networks:
+      - admin-internal       # shared only with the controller (defined in compose.controller.yaml)
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+      - /app/.next/cache:size=32m,uid=1000,gid=1000
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 384m
+    cpus: 1.0
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  dashboard-data:
+
+secrets:
+  dashboard_controller_token:
+    file: ./secrets/dashboard-controller.token   # services/dashboard/scripts/init-secrets.mjs
+  dashboard_admin_hash:
+    file: ./secrets/dashboard-admin.hash

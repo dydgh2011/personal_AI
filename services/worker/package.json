@@ -1,0 +1,21 @@
+{
+  "name": "personal-ai-worker",
+  "version": "0.1.0",
+  "description": "Pull-based agent worker: claims tasks from the controller and runs a coding CLI on them",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --test-reporter=spec --test-timeout=60000 \"dist/**/*.test.js\"",
+    "start": "node dist/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~6.0.3"
+  }
+}

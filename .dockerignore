@@ -1,0 +1,9 @@
+# Build context for images built from the repository root (images/coding-worker).
+# Credentials, persistent data and workspaces must never be sent to the builder.
+.git
+data
+secrets
+workspaces
+**/node_modules
+**/dist
+services/controller

@@ -1,0 +1,9 @@
+{
+  "name": "personal-ai-dashboard-browser-test",
+  "private": true,
+  "type": "module",
+  "description": "Real-browser (Edge/Chromium) checks of the dashboard forms; not part of the dashboard image",
+  "dependencies": {
+    "puppeteer-core": "24.10.0"
+  }
+}

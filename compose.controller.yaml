@@ -1,0 +1,176 @@
+# NestJS Task Controller. Merge with the existing files, e.g.:
+#   docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yaml up -d --build controller
+#
+# Networks:
+#   ai-internal - shared with Hermes (defined in compose.yaml); hermes-broker lives here
+#   default     - the project network claude-worker / codex-worker already use
+#   repo-egress - internet access for repo-sync only
+#   admin-internal - the Admin Dashboard (compose.dashboard.yaml) and the controller only
+#   publisher-internal - the GitHub Publisher (compose.publisher.yaml) and the controller only
+#   test-internal - the isolated test runner (compose.test-runner.yaml) and the controller only; no internet
+# The controller joins ai-internal and default so the broker and the workers can reach
+# http://controller:3000, while the workers and Hermes stay on separate networks.
+# Hermes holds no controller token; it reaches the controller only through hermes-broker.
+#
+# No Docker socket is mounted: the controller cannot control containers.
+
+services:
+  controller:
+    build:
+      context: ./services/controller
+    image: personal_ai-controller:local
+    restart: unless-stopped
+    init: true
+
+    env_file:
+      - ./secrets/controller.env      # tokens only; generate with services/controller/scripts/init-secrets.mjs
+    environment:
+      CONTROLLER_PROJECT_IDS: ${CONTROLLER_PROJECT_IDS:-sandbox}
+      # Workers heartbeat every 30s; a task whose worker stops renewing is failed after this.
+      CONTROLLER_LEASE_SECONDS: ${CONTROLLER_LEASE_SECONDS:-300}
+      CONTROLLER_LEASE_SWEEP_SECONDS: ${CONTROLLER_LEASE_SWEEP_SECONDS:-15}
+      CONTROLLER_STATUS_PROBES: hermes=http://hermes:9119/
+
+    ports:
+      - "127.0.0.1:${CONTROLLER_HOST_PORT:-8700}:3000"   # host-local admin access only
+
+    volumes:
+      # Named volume (not a bind mount): SQLite's locking and WAL are reliable on the
+      # Docker VM's native filesystem, unlike Windows-host bind mounts.
+      - controller-data:/var/lib/controller
+
+    networks:
+      - ai-internal
+      - default
+      - admin-internal   # Admin Dashboard only (compose.dashboard.yaml)
+      - publisher-internal   # GitHub Publisher only (compose.publisher.yaml)
+      - test-internal        # isolated test runner only (compose.test-runner.yaml)
+
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 256
+
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Credential broker for Hermes. The only holder of the Hermes (delegator) controller token:
+  # Hermes and its LLM tools call http://hermes-broker:8080 without any credential, and the
+  # broker forwards a fixed set of task/project read operations and task creation/cancel.
+  hermes-broker:
+    build:
+      context: ./services/hermes-broker
+    image: personal_ai-hermes-broker:local
+    restart: unless-stopped
+    init: true
+    environment:
+      CONTROLLER_URL: http://controller:3000
+      BROKER_TOKEN_FILE: /run/secrets/controller_token
+      BROKER_SUBMIT_PER_MINUTE: "5"
+      BROKER_SUBMIT_PER_HOUR: "30"
+      # Callers must send this key (only the Hermes plugin reads it); see compose.yaml.
+      BROKER_CLIENT_KEY_FILE: /run/secrets/broker_client_key
+    secrets:
+      - source: hermes_controller_token
+        target: controller_token
+      - source: hermes_broker_client_key
+        target: broker_client_key
+    networks:
+      - ai-internal          # reachable by Hermes; reaches the controller. No host port.
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8080/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Read-only repository mirror tool (run on demand, never started by `up`):
+  #   docker compose ... run --rm repo-sync sync --id <project> --url <https clone url> --branch <branch>
+  # or services/repo-sync/scripts/sync-project.ps1. Holds no controller or GitHub credentials,
+  # only reaches the internet (own network), and never checks out repository content.
+  repo-sync:
+    build:
+      context: ./services/repo-sync
+    image: personal_ai-repo-sync:local
+    profiles: ["tools"]
+    volumes:
+      - repo-cache:/repo-cache       # <id>.git bare mirrors of everything synced (only repo-sync mounts this)
+      # Per-agent exports: only the projects each agent may use (export command), mounted
+      # read-only at /repo-cache in that agent's worker.
+      - repo-export-claude:/exports/claude
+      - repo-export-codex:/exports/codex
+      # The GitHub Publisher's trusted copies (compose.publisher.yaml mounts it read-only).
+      - repo-export-publisher:/exports/publisher
+    networks:
+      - repo-egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 1.0
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  controller-data:
+  repo-cache:
+  repo-export-claude:
+  repo-export-codex:
+  repo-export-publisher:
+
+networks:
+  repo-egress:
+    driver: bridge
+  # Dashboard <-> controller. Hermes and the workers are not on it.
+  admin-internal:
+    driver: bridge
+  # Publisher <-> controller. Nothing else is on it.
+  publisher-internal:
+    driver: bridge
+  # Test runner <-> controller. internal: no route to the internet for untrusted test code.
+  test-internal:
+    driver: bridge
+    internal: true
+
+secrets:
+  hermes_broker_client_key:
+    file: ./secrets/hermes-broker-client.key   # services/hermes-broker/scripts/add-client-key.mjs
+  hermes_controller_token:
+    file: ./secrets/hermes-controller.token   # add-hermes-token.mjs / rotate-hermes-token.mjs

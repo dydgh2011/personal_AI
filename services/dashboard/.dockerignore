@@ -1,0 +1,7 @@
+node_modules
+.next
+tsconfig.tsbuildinfo
+scripts
+*.log
+.env*
+browser-test

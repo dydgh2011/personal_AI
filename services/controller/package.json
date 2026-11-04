@@ -1,0 +1,41 @@
+{
+  "name": "personal-ai-controller",
+  "version": "0.1.0",
+  "description": "Task controller for the Personal AI system: task queue, state tracking and worker API",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@nestjs/common": "^12.2.0",
+    "@nestjs/core": "^12.2.0",
+    "@nestjs/platform-express": "^12.2.0",
+    "better-sqlite3": "^13.0.3",
+    "class-transformer": "^0.5.1",
+    "class-validator": "^0.15.1",
+    "reflect-metadata": "^0.2.2",
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@nestjs/testing": "^12.2.0",
+    "@types/better-sqlite3": "^9.6.0",
+    "@types/express": "^5.0.6",
+    "@types/node": "^24.0.0",
+    "@types/supertest": "^7.2.1",
+    "supertest": "^7.3.1",
+    "typescript": "~6.0.3",
+    "vitest": "^4.1.12"
+  },
+  "overrides": {
+    "multer": "^2.5.0"
+  }
+}

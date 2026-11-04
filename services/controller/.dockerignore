@@ -1,0 +1,15 @@
+node_modules
+dist
+coverage
+data
+*.db
+*.db-wal
+*.db-shm
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+Dockerfile
+.dockerignore
+README.md

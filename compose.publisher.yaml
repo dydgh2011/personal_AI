@@ -1,0 +1,86 @@
+# GitHub Publisher (Phase E-2B: policy gate + publish authorization; real publishing disabled). Merge with the existing files, e.g.:
+#   docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.publisher.yaml up -d --build --no-deps github-publisher
+# Secret first: node services/github-publisher/scripts/init-secrets.mjs
+#
+# What it can reach:
+#   - controller:3000 over publisher-internal (claim requests, report results; publisher token only)
+#   - api.github.com over publisher-egress (read-only GETs, no credentials)
+#   - read-only: the workers' artifact volumes and the repo-sync publisher export
+# What it does NOT have: a GitHub token or App key, the Docker socket, worker home directories,
+# worker clones or worktrees, the full repository cache, the controller admin token.
+
+services:
+  github-publisher:
+    build:
+      context: ./services/github-publisher
+    image: personal_ai-github-publisher:local
+    restart: unless-stopped
+    init: true
+    environment:
+      PUBLISHER_MODE: dry-run
+      CONTROLLER_URL: http://controller:3000
+      PUBLISHER_TOKEN_FILE: /run/secrets/controller_token
+      # Repositories that may ever be targeted (owner/repo). The default is the sandbox fork used
+      # for every test so far; dry-run only, and the publisher has no write access to it anyway.
+      PUBLISHER_ALLOWED_REPOSITORIES: ${PUBLISHER_ALLOWED_REPOSITORIES:-octocat/hello-world}
+      PUBLISHER_ARTIFACT_ROOTS: claude=/artifacts/claude,codex=/artifacts/codex
+      PUBLISHER_EXPORT_ROOT: /repo-exports
+      # Owner policies (fixed; the publisher refuses to start with any other value).
+      PUBLISHER_REQUIRE_REPORTED_TESTS: "true"
+      PUBLISHER_COMMIT_AUTHOR_POLICY: preserve_worker
+      # Real publishing stays off in Phase E-2B (allowed: disabled | mock).
+      PUBLISHER_PUBLISH_BACKEND: disabled
+      PUBLISHER_TEST_EVIDENCE_KEY_FILE: /run/secrets/test_evidence_key
+      GITHUB_API_URL: https://api.github.com
+      # GitHub App (E-2B, not configured yet). When it is:
+      #   PUBLISHER_GITHUB_APP_ID: "<app id>"
+      #   PUBLISHER_GITHUB_APP_INSTALLATION_ID: "<installation id>"
+      #   PUBLISHER_GITHUB_APP_KEY_FILE: /run/secrets/github_app_key   (+ the secret below)
+    secrets:
+      - source: publisher_controller_token
+        target: controller_token
+      - source: test_evidence_key
+        target: test_evidence_key
+      # - source: github_app_key
+      #   target: github_app_key
+    volumes:
+      - publisher-artifacts-claude:/artifacts/claude:ro
+      - publisher-artifacts-codex:/artifacts/codex:ro
+      - repo-export-publisher:/repo-exports:ro
+      - publisher-data:/var/lib/publisher           # run journal
+    networks:
+      - publisher-internal
+      - publisher-egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,uid=1000,gid=1000,mode=0700   # scratch verification repositories
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 128
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  publisher-data:
+  publisher-artifacts-claude:
+  publisher-artifacts-codex:
+  repo-export-publisher:
+
+networks:
+  publisher-egress:
+    driver: bridge
+
+secrets:
+  publisher_controller_token:
+    file: ./secrets/publisher-controller.token   # services/github-publisher/scripts/init-secrets.mjs
+  test_evidence_key:
+    file: ./secrets/test-evidence.key            # services/test-runner/scripts/init-secrets.mjs
+  # github_app_key:
+  #   file: ./secrets/github-app.pem             # the App's private key (never printed, never committed)

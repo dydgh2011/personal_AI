@@ -1,0 +1,375 @@
+# Personal AI OS — Roadmap
+
+상태 표기: ✅ 완료(검증됨) · 🟡 부분 완료 · ⬜ 미착수. 완료는 실제 Docker 환경에서 검증한 경우에만 표시합니다.
+마지막 갱신: 2026-10-25 (Phase D)
+
+```text
+사용자 ─ Telegram/hermes chat ─▶ Hermes ─▶ hermes-broker ─▶ Controller ◀─ claude-worker / codex-worker
+                                                              │
+                                     Project Registry ─ GitHub API (읽기)   repo-sync ─▶ repo-cache (읽기 전용 미러)
+```
+
+---
+
+## 1. Task Controller MVP ✅
+
+- **목표**: 작업 등록·배정·취소·상태·결과 저장. pull 방식, Docker 제어 없음.
+- **구현 상태**: NestJS + SQLite(named volume), admin/worker 토큰, lease와 만료 처리, 상태 전환 CAS.
+- **완료 조건**: 작업 등록 → Worker claim → complete/fail/cancel-ack, 재시작 후 상태 유지.
+- **검증 근거**: Controller 테스트(현재 83개), `services/controller/scripts/verify.ps1`, 재생성 후 작업 유지 확인.
+- **남은 문제**: Worker presence가 메모리에만 있음. 승인(approval) 상태 없음.
+- **다음 의존 작업**: 8 (Push 승인).
+
+## 2. Claude Worker ✅
+
+- **목표**: Controller 작업을 Claude Code로 자동 실행하고 결과를 보고.
+- **구현 상태**: polling 클라이언트, 작업별 worktree와 브랜치, 결과 커밋, heartbeat·취소·재시작 복구, 제한된 권한(`--restricted`).
+- **완료 조건**: 실제 작업 생성 → 브랜치 커밋 → completed.
+- **검증 근거**: Worker 테스트 59개, `verify-worker.ps1 -Agent claude` 10/10, 실제 Claude 작업 다수(예: `57934196-…`).
+- **남은 문제**: claude-worker 이미지는 Codex 단계 이전 빌드(공통 출력 버퍼 개선 미반영). 다음 재빌드 때 반영.
+- **다음 의존 작업**: 7.
+
+## 3. Codex Worker ✅
+
+- **목표**: 같은 공통 코드로 Codex CLI 실행.
+- **구현 상태**: CodexRunner(JSONL), bubblewrap 샌드박스용 seccomp 프로필, `~/.codex/tmp` tmpfs.
+- **완료 조건**: 실제 작업 성공·취소, 샌드박스 탈출 차단.
+- **검증 근거**: `verify-worker.ps1 -Agent codex` 13/13, 샌드박스 프로브 42/42, 실제 취소 테스트(`50df693c-…`).
+- **남은 문제**: seccomp에서 user namespace 허용(커널 공격 면 증가). Codex는 git 명령 사용 불가(설계상).
+- **다음 의존 작업**: 7.
+
+## 4. Hermes ↔ Controller 연동 ✅
+
+- **목표**: 자연어로 작업 위임, 상태·결과 보고.
+- **구현 상태**: delegator 역할(자기 작업만), Idempotency-Key, Hermes 플러그인 도구 `personal_ai_task`, Skill(읽기 전용).
+- **완료 조건**: Hermes 대화 → 등록 → Worker 실행 → 결과 보고.
+- **검증 근거**: 실제 Hermes 대화로 Claude 작업 등록·대기·결과 보고(`57934196-…`), Codex 등록 후 실행 중 취소(`50df693c-…`), 미등록 프로젝트 거부, 작업 목록 조회.
+- **남은 문제**: 행동 품질은 LLM(gemini-3.5-flash-lite)에 따라 달라짐. 보고문은 `userReport`로 고정해 보완.
+- **다음 의존 작업**: 13 (Dashboard).
+
+## 5. Phase A — Hermes 위임 보안 강화 🟡 (최소 개선안 완료)
+
+- **목표**: 코딩 위임은 반드시 Controller 경유, 직접 코딩·시스템 제어 최소화, 인증 정보를 LLM 실행 환경에서 분리.
+- **구현 상태 (완료)**:
+  - hermes-broker: delegator 토큰은 브로커 컨테이너에만 있음. Hermes 컨테이너에는 토큰이 없음.
+  - 토큰 교체: Hermes에 노출됐던 토큰을 교체함.
+  - Hermes 플랫폼(telegram/cli/cron)에서 `terminal`, `code_execution`, `file`, `computer_use`, `delegation` 제거.
+  - `pre_tool_call` 가드(Controller 우회, 인증 파일 접근, 같은 이름 Skill 생성 차단).
+  - 플러그인과 Skill은 읽기 전용 마운트. 충돌하는 내장 Skill 3개는 비활성화.
+- **완료 조건**: Hermes에서 토큰을 얻을 경로가 없고, 위임 외 직접 코딩 수단이 없으며, 기존 대화 기능이 유지됨.
+- **검증 근거**:
+  - Hermes 컨테이너: `/run/secrets` 없음, 토큰 환경변수 0건, Controller 직접 호출 401, 브로커의 `/internal/*` 404.
+  - 플러그인 디렉터리 읽기 전용, 플러그인 상태 차이는 `personal-ai-controller` 1건뿐.
+  - Hermes 대화 4회로 등록, 조회, 결과, 취소, 미등록 프로젝트 거부를 확인하고, `docker ps` 시도는 "도구 없음"으로 처리됨.
+  - 토큰 값 노출 0건(로그, 파일, 대화 기록).
+  - 테스트: 플러그인·클라이언트 31개, 브로커 6개.
+- **남은 문제 (권장안)**:
+  - 브로커는 호출자를 인증하지 않음(Hermes 컨테이너 안의 무엇이든 delegator 권한으로 호출 가능). 장기적으로는 Hermes 게이트웨이와 도구 실행 프로세스를 분리(별도 UID 또는 컨테이너)하고, 브로커가 게이트웨이 전용 자격을 확인하는 구조가 필요함.
+  - 가드는 패턴 기반이라 우회 가능. 주 통제는 toolset 제거와 인증 정보 부재.
+  - `config.yaml`은 Hermes가 쓸 수 있는 위치에 있음(파일 도구는 제거됨). 설정 무결성 점검(`configure-hermes.mjs --check`)을 정기 실행 권장.
+  - 레거시 `secrets/hermes.controller.env`(현재 유효한 admin 토큰 사본, 미사용) 수동 삭제 필요.
+- **다음 의존 작업**: 8 (승인 흐름은 브로커가 아닌 사용자 승인 채널 필요).
+
+## 6. Phase B — GitHub Repository Registry MVP ✅
+
+- **목표**: GitHub 프로젝트를 중앙 Registry에서 관리하고 저장소 정보를 안전하게 조회.
+- **구현 상태**:
+  - `projects` 테이블(v3)과 env 시드 호환.
+  - API: `GET/POST/PATCH /projects`, `/projects/:id/status`, `GET /github/repositories`, `GET /internal/projects`.
+  - GitHub REST 어댑터: 페이지네이션, rate limit, 인증 인터페이스.
+  - repo-sync: bare 미러, checkout·hook 없음.
+- **검증 근거**:
+  - 실제 `octocat` Discovery, `octocat/Hello-World` 등록과 동기화.
+  - 테스트: Controller 83개, repo-sync 6개.
+- **남은 문제**:
+  - 인증된 Discovery와 private 저장소는 미검증(토큰 미설정).
+  - 동기화는 운영자 스크립트(`sync-project.ps1`)로 실행하며, 자동 주기 동기화는 없음.
+- **다음 의존 작업**: 14 (Private 읽기 인증).
+
+## 7. Phase C — Registry ↔ Coding Worker 연결 ✅
+
+- **목표**: Registry에 등록된 공개 GitHub 프로젝트를 Claude/Codex Worker가 독립 작업 공간에서 수정하고 결과를 보고.
+- **구현 상태**:
+  - **Registry 기준 판단**: Worker는 작업마다 `GET /internal/projects`(worker 토큰)로 활성 여부·allowedAgents·allowCodeChanges·동기화 상태를 확인.
+  - **fail-closed**: 조회에 실패하면 실행하지 않고 failed로 보고.
+  - **환경변수 역할 축소**: `WORKER_PROJECTS`/`WORKER_WRITABLE_PROJECTS`는 미설정이 기본이며, 설정하면 추가 제한으로만 동작.
+  - **캐시 연결**: `repo-cache` 볼륨을 두 Worker에 `/repo-cache`로 **읽기 전용** 마운트. 쓰기는 repo-sync만.
+  - **GitHub 프로젝트 작업 흐름**:
+    - 캐시 검증: 캐시 루트 안의 경로인지, bare 저장소인지, 크기 제한(`WORKER_MAX_REPO_BYTES`, 기본 1GiB) 이내인지.
+    - Worker 전용 저장소 `/workspace/repos/<id>.git`로 `file://` fetch(객체 복사, alternates·hardlink 없음).
+    - 원격 브랜치는 `refs/remotes/origin/*`에만 받으므로 작업 브랜치가 덮이지 않음.
+    - Registry의 `cachedHeadSha`로 `.worktrees/<taskId>`에 worktree 생성 → 브랜치 `<agent>/task-<id>`에 커밋.
+  - **악성 콘텐츠 대비**: `core.hooksPath=/dev/null`, `core.symlinks=false`(symlink는 일반 파일로 체크아웃), submodule 미초기화, fsck, `GIT_ALLOW_PROTOCOL=file`, 전역·시스템 git 설정 무시. symlink·submodule 개수는 보고서 `workspace.notes`에 기록.
+  - **거부 조건**: 동기화되지 않은 프로젝트, 캐시에 없는 커밋, 크기 초과, 비활성 프로젝트.
+  - **Controller 변경**: worker view에서 remote URL을 제거하고 `syncStatus` 추가. Worker는 Git URL을 받지 않음.
+- **완료 조건**: Hermes 위임 → Worker가 GitHub 프로젝트의 독립 작업 공간에서 수정·커밋 → completed. 기본 브랜치, 캐시, 원격 변경 없음.
+- **검증 근거 (2026-10-24, 실제 Docker)**:
+  - Hermes 대화로 Claude에 `hello-world` 작업 위임 `d8bc0ec1-…` → `README.md` 추가. 기준 `7fd1a60`, 커밋 `7c27c66` on `claude/task-d8bc0ec1-…`.
+  - Codex 작업 `171eeb27-…` → `CONTRIBUTING.md`, 커밋 `a8763a4` on `codex/task-171eeb27-…`.
+  - 두 Worker의 저장소에는 서로의 브랜치가 없음. 캐시 refs는 변경 전과 동일. GitHub 원격 master `7fd1a60`, 브랜치 3개 그대로(task 브랜치 0개).
+  - Worker 재시작 없이 프로젝트 활성화·비활성화가 반영됨. 미동기화 프로젝트 `spoon-knife`는 CLI 실행 없이 거부.
+  - sandbox 회귀 작업 `738fa96a-…` completed.
+  - 테스트: Worker 69개(Linux 69/69, Registry 통합 5개와 GitHub 캐시 작업 공간 5개 포함), Controller 83개, `verify-worker` Claude 10/10, Codex 13/13(샌드박스 42/42).
+- **디스크 비용 (측정값, Hello-World 기준)**:
+  - 캐시 68KB, Worker별 독립 저장소 124KB(객체 복사본 + worktree 메타데이터), worktree당 체크아웃 4KB.
+  - `--shared`(alternates)를 쓰면 Worker 저장소가 수 KB로 줄지만, 캐시가 강제 갱신·gc되면 이미 만든 작업 커밋이 깨질 수 있어 채택하지 않음.
+  - 독립 저장소는 Worker당 한 벌만 두고 작업마다 worktree를 만들므로, 작업 수가 늘어도 체크아웃 크기만 늘어남. 첫 fetch는 저장소 전체 크기만큼 걸리고 이후는 증분.
+- **남은 문제**:
+  - Worker 저장소와 worktree를 정리하는 기능 없음(작업물 보존이 우선).
+  - 동기화 상태는 Registry 값을 신뢰함. 캐시가 Registry보다 오래되면 "커밋 없음"으로 거부.
+  - symlink를 일반 파일로 바꾸면 symlink에 의존하는 프로젝트는 동작이 달라질 수 있음(의도된 제한).
+  - Codex는 git 메타데이터를 읽을 수 없음(기존과 같음).
+- **다음 의존 작업**: 8, 14 (Phase D에서 일부 해결).
+
+## 8. Git Diff 검토와 Push 승인 ⬜
+
+- **목표**: 작업 브랜치 diff를 사용자에게 보여 주고 명시적 승인 후에만 push.
+- **확장 지점**:
+  - Controller `task-state.ts`에 `awaiting_approval`/`approved`/`rejected` 상태 추가.
+  - `GET /tasks/:id/diff`(Worker 또는 repo 서비스가 생성).
+  - push는 별도 서비스(예: repo-sync 확장, 쓰기 권한 deploy key/GitHub App)만 수행. Hermes·코딩 에이전트에는 권한을 주지 않음.
+- **완료 조건**: 승인 없이는 push 불가를 테스트로 증명.
+- **다음 의존 작업**: 9.
+
+## 9. Pull Request 생성 ⬜
+
+- **목표**: 승인된 브랜치로 PR 생성.
+- **확장 지점**: `GitHubCredentials`에 GitHub App 설치 토큰 구현(`github-credentials.ts`). PR 생성은 쓰기 권한이 있는 별도 서비스에서만.
+- **다음 의존 작업**: 10.
+
+## 10. CI 결과 확인 ⬜
+
+- **목표**: PR/브랜치의 check run 결과를 Registry 상태와 Hermes 보고에 반영.
+- **확장 지점**: `GitHubClient`에 checks API 읽기 추가. `userReport`의 "테스트" 줄을 실제 결과로 대체(보고된 경우에만).
+
+## 11. 사용자 Git 작성 스타일 분석과 Commit Author 설정 ⬜
+
+- **목표**: 사용자의 커밋 메시지 스타일 반영, 작성자 정보 설정.
+- **확장 지점**: Registry 프로젝트 필드 추가(`commitAuthor`, `commitStyle`). Worker `workspace.ts`의 `GIT_IDENTITY`를 프로젝트 설정에서 받기.
+
+## 12. 프로젝트별 AI 코딩 규칙 ⬜
+
+- **목표**: 프로젝트마다 에이전트 지침(예: 코딩 규칙, 금지 경로)을 관리.
+- **확장 지점**: Registry에 `agentInstructions` 필드 추가. Runner의 시스템 프롬프트(`UNATTENDED_PROMPT`)에 병합.
+
+## 13. Dashboard에서 프로젝트 선택 🟡 (E-1.5에서 읽기 전용 Projects 화면 완료, 선택·변경은 미구현)
+
+- **목표**: 관리 화면에서 프로젝트와 작업 관리.
+- **확장 지점**: 기존 admin API(`/projects`, `/tasks`, `/github/repositories`) 재사용. Dashboard 전용 토큰/역할 추가 권장.
+
+## 14. Phase D — Private Repository 읽기 전용 연동 🟡 (구현·Mock 검증 완료, 실제 Private 저장소 미검증)
+
+- **목표**: 선택한 Private 저장소를 읽기 전용으로 동기화하고, 허용된 Worker만 독립 작업 공간에서 사용.
+- **구현 상태**:
+  - **인증**: Fine-grained PAT 파일 `secrets/github-readonly.token`을 선택적 overlay `compose.github.yaml`의 Docker secret으로 **Controller와 repo-sync에만** 주입.
+    - Controller는 메타데이터와 Discovery에 사용(`GitHubCredentials`/`TokenFileCredentials`).
+    - repo-sync는 git fetch에 `http.<origin>/.extraHeader`로 사용하며, 이 설정은 git 프로세스 환경변수(`GIT_CONFIG_*`)로만 전달. URL, argv, 저장소 설정, 로그에는 남지 않음.
+  - **익명 대체 없음**: `authMode=token` 프로젝트에 토큰이 없으면 `auth_required`, 거부된 토큰은 `auth_failed`, 접근이 철회되면 `not_found_or_no_access`.
+  - **실패 상태 보존**: 실패 시 Registry `syncStatus=error`와 `lastSyncError`(코드 포함)를 남기고, 마지막으로 성공한 캐시는 유지. Worker는 error 상태 프로젝트를 거부.
+  - **제한**: 저장소 크기(2GiB), 전체 캐시(20GiB), 단일 파일(100MB).
+  - **기본 비활성**: 동기화해도 프로젝트는 활성화되지 않음(등록 기본값 `enabled: false`).
+  - **수동 동기화 + 향후 자동화**: `sync-project.ps1 -ProjectId|-All`. repo-sync CLI(JSON 입출력)가 향후 cron이나 이벤트 실행기가 호출할 인터페이스.
+  - **저장소별 파일 격리 (커널 수준, 마운트)**:
+    - repo-sync가 에이전트별 export 볼륨(`repo-export-claude`, `repo-export-codex`)에 해당 에이전트가 쓸 수 있는 프로젝트만 독립 복사본으로 넣음.
+    - 각 Worker는 자기 볼륨만 `/repo-cache`에 읽기 전용으로 마운트하고, 전체 캐시는 마운트하지 않음.
+    - 비활성화나 allowedAgents 변경 후 `provision-exports.ps1`을 실행하면 해당 Worker 컨테이너에서 저장소가 사라짐.
+  - **브로커 호출자 인증**: `X-Broker-Key`(compose secret). Hermes 플러그인만 읽으며, 키가 없으면 401(Controller에 전달하지 않음). 가드가 browser 도구의 `file:`·내부 서비스 접근을 차단.
+  - **admin 토큰 교체**: 레거시 사본 `secrets/hermes.controller.env`는 무효(401).
+- **검증 근거**:
+  - Mock·로컬 인증 git 서버(`git http-backend`) 테스트: 토큰 있음, 토큰 없음, 만료·잘못된 토큰, 접근 철회, 크기 제한, 로그 정리, export 부여·회수(repo-sync 15/15, Linux).
+  - 실제 Docker:
+    - Codex 권한 회수 → Codex 컨테이너에서 저장소가 사라짐(`not a git repository`) → 재부여 후 복구.
+    - export 기반 실제 작업: Claude `aa29dc81-…`(Hermes 경유, 키 포함 브로커), Codex `58445bd8-…`.
+    - Phase C 작업 브랜치 유지, 캐시·export·GitHub 브랜치 동일.
+    - 키 없는 브로커 호출 401, 레거시 admin 토큰 401.
+  - 테스트: broker 7/7, Hermes 연동 33/33.
+- **미검증**: 실제 Private 저장소와 실제 PAT(토큰 없음). 실제 인증 성공은 보고하지 않음.
+- **남은 문제**:
+  - 회수는 Registry 변경 후 `provision-exports.ps1` 실행이 필요한 2단계 절차. Worker의 Registry 검사는 즉시 적용되지만, 파일 회수는 프로비저닝 시점에 일어남.
+  - Worker 자신의 clone(`workspaces/<agent>/repos/<id>.git`, 과거 작업 브랜치 포함)은 회수 시 삭제되지 않음(작업물 보존).
+  - 같은 에이전트의 Worker는 그 에이전트에 허용된 모든 프로젝트를 볼 수 있음(작업 단위 노출은 아님).
+  - 브로커 키는 hermes 사용자로 실행되는 코드라면 읽을 수 있음(LLM 격리가 아님).
+- **향후 권장 (작업 단위 격리)**: 프로젝트 또는 작업 단위 실행 컨테이너(`claude-worker-<project>`)에 해당 export만 마운트하거나, Docker API 권한을 가진 별도 provisioner가 작업마다 일회용 Worker를 띄우는 방식. 다만 Docker 소켓을 쓰는 구성요소가 새로 생기므로 별도 보안 검토가 필요함.
+
+## 14-1. Phase D 실제 검증 시도 (2026-10-25) 🟡
+
+- PAT 파일 존재 확인(fine-grained 형식). `compose.github.yaml`로 Controller에 적용한 뒤 인증된 Discovery 성공(rate limit 5000/h).
+- **실제 Private 저장소 검증은 미완료**: 이 토큰으로 보이는 저장소 11개가 모두 public이며, 토큰의 저장소 선택에 private 저장소가 없음. 공개 저장소로 대신 검증하지 않음.
+- Discovery의 `permissions`(push/admin=true)는 **계정 역할**이지 토큰 권한이 아님. 토큰이 Contents: Read-only인지는 GitHub 설정에서 사용자가 확인해야 함(쓰기 시도는 하지 않음).
+- **권한 회수 후 남는 데이터**:
+  - `repo-cache`(전체 미러): repo-sync만 접근, 명시적으로 삭제하지 않으면 남음.
+  - `workspaces/<agent>/repos/<id>.git`·`.worktrees/<taskId>`: Worker가 접근할 수 있고, 과거 작업 결과로 보존됨.
+  - 정리 정책(보존 기간, 승인·거부 후 정리)이 필요함.
+- **외부 AI 전송 정책(제안)**: Private 저장소는 작업 전 worktree에서 민감 파일 패턴(.env, 키, 인증 정보 파일)을 검사해 발견 시 실행 거부. 현재 구현된 것은 diff 단계의 민감 파일 패치 제외, 그리고 Hermes(외부 모델)에 private 패치를 보내지 않는 정책.
+
+## 14-2. Phase E-1 — Diff 검토와 승인 기록 ✅
+
+- **구현**:
+  - Worker가 커밋할 때 diff 데이터를 기록: base·head·tree SHA, 파일별 +/- 줄 수, 바이너리·민감 정보 표시, 200KB 이하 patch(바이너리·민감 파일 제외), 커밋 메시지.
+  - Controller `reviews` 테이블(스키마 v4): 작업 하나와 head 커밋 하나에 행 하나. 상태는 awaiting_approval → approved / rejected, invalidated.
+  - API: `GET /tasks/:id/diff`, `GET /tasks/:id/review`(admin, delegator는 자기 작업만), `POST /tasks/:id/approve|reject`(admin 전용, headSha 필수), `POST /internal/tasks/:id/observed-head`(작업을 가진 Worker, 다른 커밋이 관찰되면 승인 무효화).
+  - 결정은 조건부 UPDATE 한 번으로 처리하므로 동시 요청 중 하나만 성공. Hermes에는 private 저장소 patch를 주지 않음. 브로커는 diff·review 조회만 중계. 플러그인 `review` 동작은 읽기 전용.
+- **검증 근거**:
+  - Controller 92/92, Worker 71/71(Linux), broker 7/7, Hermes 연동 34/34.
+  - 실제 Codex 작업 `cbd2ede2-…`: diff가 Worker git과 일치(base 7fd1a60, head a638d09, tree 1b39935, +4/-0).
+  - 승인 시나리오: 잘못된 SHA 409, Hermes·Worker 403, 브로커 404, admin 200, 재요청 409.
+  - 이전 작업 `d8bc0ec1`: 승인 후 다른 head 관찰 → invalidated.
+  - Controller 재생성 후 승인 이력 유지. GitHub 원격 변경 없음.
+  - Hermes 대화에서 승인 요청을 거부함.
+- **남은 문제**:
+  - Worker가 브랜치 tip을 자동으로 다시 보고하는 기능이 없음. 무효화는 observed-head를 호출할 때만 일어나며, E-2 Publisher가 push 직전에 반드시 확인해야 함.
+  - ~~승인자는 `admin` 하나로만 기록됨~~ → E-1.5에서 Dashboard 결정은 `dashboard:<user>`로 기록.
+  - E-1 이전 작업은 줄 수와 patch가 없음.
+
+## 14-3. Phase E-1.5 — Admin Dashboard MVP ✅ (2026-10-25)
+
+- **구현**: `services/dashboard`(Next.js 15 App Router, React 19, TypeScript), `compose.dashboard.yaml`, 접속 주소 `http://127.0.0.1:8710`.
+  - **BFF 구조**: 브라우저는 Dashboard 서버와만 통신. 서버가 전용 admin 토큰(`CONTROLLER_DASHBOARD_TOKEN`, Docker secret)으로 Controller를 호출하며, 토큰은 브라우저에 전달하지 않음.
+  - **화면**:
+    - Overview: Controller·DB·Hermes·Claude/Codex Worker 상태, 작업 수, 승인 대기 수, 응답 시간. 모르는 값은 unknown으로 표시하며, 자원 지표는 확장 지점만 둠.
+    - Tasks: 목록, 필터, 상세, 취소.
+    - Projects: 읽기 전용.
+    - Code Reviews: 목록, 파일별 diff, 경고, 확인 단계, 승인·거부, 이력.
+  - **인증**:
+    - 단일 관리자 계정, scrypt 해시(secret 파일).
+    - 서버 메모리 세션, HttpOnly + SameSite=Strict 쿠키, 유휴 30분·최대 8시간.
+    - CSRF: 세션 토큰 + Origin/Sec-Fetch-Site 검사.
+    - 로그인 제한: IP와 사용자별로 15분에 5회.
+    - 감사 로그: `dashboard-data` 볼륨의 JSONL.
+  - **Controller 변경**(스키마 변경 없음):
+    - 전용 dashboard 토큰(역할은 admin, 이름은 `dashboard`).
+    - `X-Approver` 헤더로 결정자를 `dashboard:<user>`로 기록.
+    - `GET /reviews?status=`(admin 전용) 추가, `/tasks?projectId=` 필터 추가.
+  - **네트워크**: `admin-internal` 네트워크(Controller와 Dashboard만 참여). Hermes와 Worker는 Dashboard 이름을 해석할 수 없음.
+- **검증 근거**:
+  - 테스트: Dashboard 단위 22/22, Controller 93/93.
+  - E2E: 실제 컨테이너와 실제 Controller 대상 47/55 → 수정 후 46/46. 첫 실행의 실패 8건 중 6건은 미들웨어 상대 경로 리다이렉트로 인한 500, 2건은 테스트의 문자열 비교 문제였음.
+  - 실제 승인: Codex `ff303fe6`(XSS 마크업이 들어간 diff, 이스케이프 확인).
+  - 실제 거부: Claude `aa29dc81`.
+  - 409 처리: 잘못된 SHA와 중복 결정 모두 409로 처리됨.
+  - 모바일·데스크톱(390px/1280px): Edge 헤드리스로 7개 화면에서 가로 넘침 없음.
+  - Dashboard 재생성 후 감사 로그 유지.
+- **남은 문제**:
+  - 세션이 메모리에 있어 Dashboard를 재시작하면 다시 로그인해야 함.
+  - Docker 포트 매핑에서는 모든 접속의 IP가 게이트웨이 주소로 보여, IP 제한이 사실상 전역으로 동작함.
+  - HTTPS가 아니므로 `DASHBOARD_COOKIE_SECURE=false`. Tailscale이나 리버스 프록시 뒤에서는 true로 바꿔야 함.
+  - 승인 화면은 Worker가 보고한 diff를 보여 줄 뿐, git 객체를 직접 다시 검증하지 않음(아래 E-2 참조).
+
+## 14-4. Phase E-2A — Secure GitHub Publisher (Dry-run) ✅ (2026-10-25)
+
+- **구성**:
+  - `services/github-publisher`: 독립 컨테이너. 비root, read-only rootfs, Docker 소켓 없음, GitHub 쓰기 자격 증명 없음.
+  - Compose: `compose.publisher.yaml`.
+  - 네트워크:
+    - `publisher-internal`: Controller와 Publisher만 참여.
+    - `publisher-egress`: GitHub API GET 요청 전용.
+- **흐름**:
+  1. Dashboard에서 "Validate / Dry-run"을 누르면 Controller `POST /tasks/:id/publication/dry-run`(admin, headSha 고정)으로 요청함.
+  2. `publications` 테이블(스키마 v5)에 요청이 기록됨. 리뷰당 진행 중인 요청은 하나, 게시 기록도 하나만 허용(unique index).
+  3. Publisher가 `POST /internal/publisher/claim`으로 요청을 가져가 검증함(lease 방식, 3회 실패 시 failed).
+  4. 결과는 `/internal/publisher/publications/:id/result`로 보고하고, 자체 저널에도 남김.
+  - Controller는 검증 도중 승인이 바뀌었으면 Publisher가 보낸 `ready`를 `failed`로 저장함.
+- **아티팩트 전달**:
+  - Worker가 커밋할 때 `git bundle`(base..`<agent>/task-<id>`, base는 필요 커밋)과 manifest를 에이전트별 볼륨에 기록함. Publisher는 이 볼륨을 읽기 전용으로 마운트함.
+  - 신뢰 기준(base)은 repo-sync의 publisher 전용 export(allowCodeChanges 프로젝트만, `personal-ai.upstream` 표시)에서 가져옴.
+  - Worker worktree, clone, 전체 캐시는 Publisher에 마운트하지 않음.
+  - 이전 작업의 아티팩트는 `export-artifact` CLI로 만듦.
+- **검증**: 17개 항목(`services/github-publisher/README.md`). 불완전한 리뷰(잘림, 민감 파일, 바이너리, patch 없음)는 차단하고, 테스트 미보고는 기본적으로 경고만 남김.
+- **Dashboard 상태 표시**: Not approved / Approved / Validation pending / Ready to publish / Validation failed / (Published, PR created는 향후).
+- **함께 진행한 보안 정비**:
+  - Next.js 15.5.28 → 16.4.3. 15.x Maintenance LTS가 2026-10-21에 종료되었고, 10-14 보안 릴리스에 따라 React 19.1.1 → 19.3.1. `middleware` → `proxy`. npm audit 0건.
+  - 로그인 제한: TCP peer 기준으로 IP를 판단하고(신뢰 프록시만 예외), 장치 쿠키로 로컬 잠금 공격을 막음.
+- **검증 근거**:
+  - 테스트: publisher 17/17, controller 99/99, worker 72/72, repo-sync 16/16, dashboard 29/29, dashboard E2E 46/46.
+  - 실제 dry-run: `ff303fe6`, `cbd2ede2` → Ready to publish(17개 항목 통과). 미승인 409, 잘못된 head 409, 중복 409. 아티팩트 손상·누락 → Validation failed, 재생성 → Ready.
+  - 재시작 후 이력과 저널 유지. GitHub 원격 변경 없음.
+- **남은 문제**:
+  - Private 저장소는 자격 증명 없이는 원격 상태를 확인할 수 없어 항상 차단됨(E-2B GitHub App 필요). Private 저장소 실환경 검증은 여전히 미완료.
+  - Worker 볼륨은 해당 Worker 안에서 실행되는 에이전트도 쓸 수 있음. 내용은 승인된 SHA로 고정되어 있어 위조해도 통과하지 못하지만, 볼륨을 가득 채우는 등의 방해는 가능함.
+  - SHA-1 충돌 공격에 대한 방어는 git의 SHA-1 collision detection에 의존함.
+
+## 14-5. Phase E-2B — Publisher 정책 강제와 GitHub App 준비 ✅ (2026-10-26, 실제 게시는 비활성)
+
+- **고정 정책**:
+  - POLICY A: 테스트를 보고하지 않은 작업은 게시를 차단한다.
+  - POLICY B: Worker의 Commit Author를 유지한다.
+  - Publisher는 다른 설정값으로는 시작하지 않는다. Controller도 게시 승인 단계에서 같은 테스트 정책을 강제한다.
+- **Test Validation**:
+  - Controller v6에 `projects.test_commands`(관리자만 설정)와 `test_validations`를 추가했다.
+  - 작업 완료 시 테스트를 자동 요청하고, Dashboard의 Run tests로도 요청할 수 있다.
+  - 실행: 격리된 `test-runner` 컨테이너에서 uid 10001로 실행한다. 인터넷 없는 `test-internal` 네트워크를 쓰고, 결과는 HMAC으로 서명한다.
+  - 판정: 실제 종료 코드 기준이다. 실패, 누락, 시간 초과는 fail-closed로 처리하고, 다른 커밋의 결과는 재사용하지 않는다.
+- **Publisher preflight**: 12단계 순서로 검사하고 사유 코드를 남긴다(TEST_REPORT_MISSING … PUBLISH_APPROVAL_REQUIRED). Worker Author, Committer, 메시지가 바뀌지 않았는지도 확인한다.
+- **게시 승인**(`publish_authorizations`):
+  - 리뷰 승인과 별개의 기록이다.
+  - 연결 정보: 승인자, Task, Review, Repository ID, head SHA, Test Validation ID, Dry-run.
+  - 30분 뒤 만료되고, 한 번만 쓸 수 있으며, 멱등 키로 중복을 처리한다.
+  - Dashboard에서는 확인 단계와 체크박스를 거쳐야 한다.
+  - 실제 게시 요청은 `PUBLISH_DISABLED`로 거부된다.
+- **GitHub App 모듈**:
+  - 기능: JWT, 저장소 하나로 범위를 좁힌 설치 토큰, 캐시와 만료 처리, 허용 목록, 재시도와 rate limit, 감사 로그.
+  - Writer: 기존 커밋 객체를 그대로 push하고 draft PR을 연다.
+  - Mock API와 로컬 smart-HTTP git으로만 검증했다. App은 아직 설정하지 않았다.
+- **보조 정비**:
+  - Worker artifact와 repo-sync export를 0700으로 바꿔 sandbox 사용자가 읽을 수 없게 했다.
+  - `request.txt`를 `.gitignore`에 추가했다.
+- **검증 근거**:
+  - 테스트: controller 108/108, test-runner 6/6(root, uid 전환 실제 수행), publisher 30/30, dashboard 29/29, worker 72/72, repo-sync 16/16, Dashboard E2E 46/46.
+  - 실환경 정상 흐름(`ff303fe6`): 테스트 미보고 → TEST_REPORT_MISSING, 테스트 통과(exit 0/0) → eligible + PUBLISH_APPROVAL_REQUIRED, 게시 승인 → canPublish, 게시 → PUBLISH_DISABLED.
+  - 실환경 실패 흐름:
+    - exit 3 → TEST_FAILED
+    - timeout → TEST_ABORTED
+    - 명령 변경 → TEST_COMMANDS_CHANGED
+    - 미승인 리뷰 → REVIEW_NOT_APPROVED
+  - 테스트 프로세스 격리 probe(exit 0)와 재시작 후 기록 유지를 확인했다. GitHub 원격은 변경되지 않았다.
+  - 배포 중 발견한 버그: 권한이 제한된 root에서 `copyFile`이 EPERM을 냈다. 시스템은 fail-closed로 동작했고(TEST_ABORTED), read+write 방식으로 수정했다.
+- **남은 문제**:
+  - 실제 GitHub App 연동과 실제 push는 하지 않았다.
+  - Private 저장소 종단 검증은 아직 하지 않았다.
+  - `secrets\` ACL이 과도하게 열려 있다.
+  - Dashboard 초기 비밀번호가 평문 파일로 남아 있다.
+  - 소스 대부분이 아직 커밋되지 않았다.
+  - Test Runner는 네트워크가 없어서 의존성 설치(npm install 등)가 필요한 프로젝트 테스트는 아직 실행할 수 없다. 향후 사전 구성 이미지나 캐시가 필요하다.
+
+## 15. Phase E 이후 (GitHub 승인 시스템) ⬜
+
+- **Phase E-2B 실제 게시(설계)**:
+  - 게시 승인을 따로 받음. 저장소, 브랜치, 커밋 SHA, 파일 목록을 다시 보여 주고 명시적으로 승인받음.
+  - 게시 직전에 E-2A 검증 전체를 다시 실행함.
+  - `published` unique index와 Publisher 저널로 중복 게시를 막음.
+  - GitHub App 설치 토큰을 저장소 1개 범위로, 짧은 수명으로 발급하고, 저장·로그·결과에 남기지 않음.
+  - push 대상은 `personal-ai/<task>` 브랜치뿐이며 force push는 하지 않음. PR은 draft로 만들고 merge는 사람이 함.
+
+- **Phase E-2 GitHub Publisher 설계**:
+  - **실행 형태**: 독립 컨테이너. 쓰기 자격(GitHub App 설치 토큰, 저장소 단위, Contents write만)은 Publisher에만 있음.
+  - **입력**: `approved` 리뷰(taskId, projectId, baseSha, headSha, headTree).
+  - **독립 검증 (필수)**:
+    - Dashboard·Controller·Worker 보고서에 표시된 값은 신뢰하지 않음.
+    - Publisher는 신뢰할 수 있는 git 객체를 직접 읽어 확인함. 대상은 자신의 미러, 또는 repo-sync가 원격에서 받은 base와 Worker 브랜치에서 가져온 커밋.
+    - 확인 항목:
+      - `git rev-parse <branch>^{commit}` == 승인된 headSha
+      - `git rev-parse <headSha>^{tree}` == 승인된 headTree
+      - 승인된 baseSha가 원격 기본 브랜치에 실제로 있는 커밋인지
+      - `git merge-base --is-ancestor <baseSha> <headSha>`
+      - push할 커밋 범위(`baseSha..headSha`)의 파일 목록이 승인된 diff 목록과 같은지
+    - 하나라도 다르면 push하지 않고, observed-head로 승인을 무효화함.
+  - **push 전 검증**: Worker export·clone에서 해당 커밋을 받아 head SHA와 tree가 승인값과 같은지 확인. base가 원격 기본 브랜치의 조상인지 확인. 다르면 observed-head로 무효화하고 중단.
+  - **push 방식**: 기본 브랜치에는 push하지 않음. `personal-ai/<task>` 브랜치로만 push하고 force push는 금지.
+  - **PR 생성**: 승인 기록 ID를 본문에 남김. merge는 사람만.
+  - **감사 로그**: 누가 무엇을 언제 push했는지 기록.
+
+- **사용자 Git Commit 스타일 분석**: Registry 프로젝트에 `commitStyle`·`commitAuthor`. 최근 커밋 메시지를 읽기 전용으로 분석.
+- **Code Review / Diff API**: `GET /tasks/:id/diff`(Worker나 repo 서비스가 작업 브랜치와 기준 커밋을 비교해 저장).
+- **`awaiting_approval` 상태**: completed → awaiting_approval → approved/rejected. 승인 전에는 push 불가.
+- **사용자 승인 후 Push**: 쓰기 권한을 가진 별도 서비스(GitHub App 설치 토큰, 저장소 단위)만 수행. Hermes, Worker, 코딩 에이전트에는 쓰기 권한이 없음.
+- **Pull Request 생성**: 같은 서비스에서 수행하며 승인 기록과 연결.
+- **GitHub App 기반 쓰기 권한**: `GitHubCredentials`에 App 구현을 추가하고, 읽기용과 쓰기용 자격을 분리.
+- **Admin Dashboard 승인 화면**: ✅ E-1.5에서 구현(14-3 참조).
+- **Dashboard 후속 모듈**(`src/modules/registry.ts`에 항목과 라우트 폴더를 추가하는 방식, 런타임 플러그인 실행 없음):
+  - Agent 관리, Skill/MCP/Plugin Registry, Memory Knowledge Graph, Personal Assistant, Finance, JARVIS Voice
+  - Server Monitoring: `src/modules/resources.ts`의 provider로 연결하며, Docker 소켓은 쓰지 않음
+  - GitHub Publisher 상태
+
+## 16. 범위 밖 (후속)
+
+Memory Agent, Finance Agent, Personal Assistant Agent, JARVIS TTS 연동, 자동 배포, 다중 Agent 병렬 프로젝트 수정 — ⬜ 미착수.

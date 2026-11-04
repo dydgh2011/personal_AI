@@ -1,0 +1,21 @@
+{
+  "name": "personal-ai-test-runner",
+  "version": "0.1.0",
+  "description": "Runs a project's admin-approved test commands on one exact approved commit in a sandbox user, and signs the process results as evidence",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --test-reporter=spec --test-timeout=60000 \"dist/**/*.test.js\"",
+    "start": "node dist/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~6.0.3"
+  }
+}

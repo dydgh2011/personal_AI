@@ -1,0 +1,21 @@
+{
+  "name": "personal-ai-github-publisher",
+  "version": "0.1.0",
+  "description": "Verifies approved task commits against trusted git objects and plans their GitHub publication (dry-run only in Phase E-2A)",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --test-reporter=spec --test-timeout=60000 \"dist/**/*.test.js\"",
+    "start": "node dist/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~6.0.3"
+  }
+}

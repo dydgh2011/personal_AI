@@ -1,0 +1,26 @@
+# Optional overlay: read-only GitHub credentials for private repositories.
+# Add it only after creating secrets/github-readonly.token (fine-grained PAT:
+# Metadata = Read, Contents = Read-only, selected repositories only):
+#
+#   docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml up -d --no-deps controller
+#
+# The token reaches only the controller (metadata / discovery API calls) and repo-sync
+# (git fetch over HTTPS). Workers, coding agents, the broker and Hermes never get it.
+services:
+  controller:
+    environment:
+      GITHUB_TOKEN_FILE: /run/secrets/github_token
+    secrets:
+      - source: github_readonly_token
+        target: github_token
+
+  repo-sync:
+    environment:
+      REPO_SYNC_TOKEN_FILE: /run/secrets/github_token
+    secrets:
+      - source: github_readonly_token
+        target: github_token
+
+secrets:
+  github_readonly_token:
+    file: ./secrets/github-readonly.token
