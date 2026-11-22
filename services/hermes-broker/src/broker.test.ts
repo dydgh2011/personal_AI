@@ -226,6 +226,54 @@ describe('hermes-broker', () => {
     assert.equal((await call('GET', '/planner/status')).status, 503, 'without a planner configured');
   });
 
+  it('forwards knowledge routes with the knowledge key only, with large bodies and their own rate limit', async () => {
+    const KNOWLEDGE_KEY = 'knowledge-' + 'q'.repeat(40);
+    const got: Array<{ method: string; url: string; auth?: string; key?: string; planner?: string; size: number }> = [];
+    const knowledge = createServer(async (req, res) => {
+      let size = 0;
+      for await (const chunk of req) size += (chunk as Buffer).length;
+      got.push({ method: req.method!, url: req.url!, auth: req.headers.authorization, key: req.headers['x-knowledge-key'] as string, planner: req.headers['x-planner-key'] as string, size });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, echo: KNOWLEDGE_KEY }));
+    });
+    const knowledgeUrl = await listen(knowledge);
+    const broker = createBroker(
+      { controllerUrl: 'http://127.0.0.1:9', token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: null, knowledge: { url: knowledgeUrl, key: KNOWLEDGE_KEY }, knowledgeWritesPerMinute: 2 },
+      { info: () => {}, warn: () => {} },
+      () => clock,
+    );
+    const url = await listen(broker);
+    const send = (method: string, path: string, body?: unknown) =>
+      fetch(url + path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    try {
+      const search = await send('GET', '/knowledge/search?q=%ED%97%AC%EC%8A%A4&kinds=fact&limit=5');
+      assert.equal(search.status, 200);
+      assert.ok(!(await search.text()).includes(KNOWLEDGE_KEY), 'the knowledge key is redacted from responses');
+      const big = 'x'.repeat(200_000); // a document's text: larger than the planner's 64 KB limit
+      assert.equal((await send('POST', '/knowledge/raw/document', { file: 'doc_0123456789ab_a.pdf', text: big })).status, 200);
+      assert.equal((await send('GET', `/knowledge/raw/${TASK_ID}?offset=0&limit=8000`)).status, 200);
+      assert.equal((await send('POST', `/knowledge/facts/${TASK_ID}`, { remove: true })).status, 200);
+      assert.deepEqual(got.map((g) => [g.method, g.url]), [
+        ['GET', '/search?q=%ED%97%AC%EC%8A%A4&kinds=fact&limit=5'],
+        ['POST', '/raw/document'],
+        ['GET', `/raw/${TASK_ID}?offset=0&limit=8000`],
+        ['POST', `/facts/${TASK_ID}`],
+      ]);
+      assert.ok(got[1].size > 200_000);
+      assert.ok(got.every((g) => g.key === KNOWLEDGE_KEY && g.auth === undefined && g.planner === undefined), 'knowledge key only');
+      assert.equal((await send('POST', '/knowledge/pages', { title: 'x', type: 'topic' })).status, 429, 'knowledge writes are rate limited');
+      clock += 61_000;
+      for (const [method, path] of [['GET', '/knowledge/search?q=a&admin=1'], ['POST', '/knowledge/search'], ['GET', '/knowledge/raw/../k.db'], ['POST', '/knowledge/facts/not-a-uuid'], ['GET', '/knowledge/export'], ['GET', '/knowledge/graph?x=1'], ['POST', '/knowledge/raw/file'], ['GET', `/knowledge/raw/by-sha/${'a'.repeat(64)}`]]) {
+        assert.ok([400, 404, 405].includes((await send(method, path)).status), `${method} ${path}`);
+      }
+      assert.equal(got.length, 4);
+    } finally {
+      await new Promise((r) => broker.close(r));
+      await new Promise((r) => knowledge.close(r));
+    }
+    assert.equal((await call('GET', '/knowledge/status')).status, 503, 'without a knowledge store configured');
+  });
+
   it('requires the client key when configured, before forwarding anything', async () => {
     const key = 'k'.repeat(48);
     const keyed = createBroker({ controllerUrl: base, token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: key }, { info: () => {}, warn: () => {} });

@@ -360,6 +360,25 @@ def cmd_read(root: Path, args: dict[str, Any]) -> dict[str, Any]:
 HANDLERS = {"list": cmd_list, "find": cmd_find, "read": cmd_read}
 
 
+def extract(file_name: str, env: dict[str, str]) -> dict[str, Any]:
+    """Full text of one attachment (by its exact file name), for the knowledge store's raw layer.
+
+    Raises DocError. The text is marked per page/part like read: "[p1] ...".
+    """
+    path, st = _resolve(_root(env), file_name)
+    unit, parts = _parts(path, st)
+    label = "p" if unit == "page" else "#"
+    content_type = {"pdf": "application/pdf",
+                    "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"}.get(_kind(path), "text/plain")
+    return {
+        "file": path.name,
+        "name": display_name(path.name),
+        "contentType": content_type,
+        "count": len(parts),
+        "text": "\n\n".join(f"[{label}{n}]\n{part}" for n, part in enumerate(parts, start=1)),
+    }
+
+
 def run(args: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
     """One personal_ai_document call; returns a JSON-able result and never raises."""
     args = args or {}

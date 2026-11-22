@@ -1,0 +1,96 @@
+# Knowledge store: everything about the owner, in four layers (raw originals, activity timeline,
+# wiki pages with sourced facts and links, profile), with keyword + semantic search.
+# Needs compose.controller.yaml (hermes-broker) and compose.yaml (hermes: chat turns, attachments).
+#   node services/knowledge/scripts/init-secrets.mjs      (key; never prints it)
+#   docker compose @F up -d --build --no-deps knowledge hermes-broker
+#
+# - Hermes reaches it only through hermes-broker (fixed /knowledge/* routes, key held by the broker).
+#   No host port.
+# - Reads Hermes's chat attachment folder read-only, to keep a copy of each attached original.
+# - Originals (possibly 20 GB+) live in data/knowledge/blobs on this drive; the database in the
+#   knowledge-data volume (Docker Desktop: Settings > Resources > Advanced > Disk image location on D:).
+# - Bulk import and Claude Code access: compose.knowledge-operator.yaml (add it only while needed).
+# - knowledge-egress: Ollama on this PC (host.docker.internal:11434, bge-m3 embeddings). Without
+#   Ollama the store works with keyword search only.
+
+services:
+  knowledge:
+    build:
+      context: ./services/knowledge
+    image: personal_ai-knowledge:local
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: America/Toronto
+      KNOWLEDGE_TIME_ZONE: America/Toronto
+      KNOWLEDGE_CLIENTS: hermes-broker=/run/secrets/broker_key
+      KNOWLEDGE_DB_FILE: /var/lib/knowledge/knowledge.db
+      KNOWLEDGE_BLOB_DIR: /var/lib/knowledge-blobs
+      KNOWLEDGE_DOCUMENTS_DIR: /imports/hermes-documents
+      OLLAMA_URL: http://host.docker.internal:11434
+      EMBED_MODEL: bge-m3
+    secrets:
+      - source: knowledge_broker_key
+        target: broker_key
+    volumes:
+      - knowledge-data:/var/lib/knowledge                                 # knowledge.db (Docker disk; keep Docker's disk image on D:)
+      - ./data/knowledge/blobs:/var/lib/knowledge-blobs                   # stored originals, <sha256>.<ext>, on D:
+      - ./data/hermes/cache/documents:/imports/hermes-documents:ro        # chat attachments only (no Hermes secrets)
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    networks:
+      - knowledge-internal
+      - knowledge-egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8092/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Overlay: Hermes loads the knowledge store as its memory provider (data/hermes/config.yaml:
+  # memory.provider: personal-ai-knowledge). Read-only from the repository.
+  hermes:
+    volumes:
+      - ./services/hermes-integration/plugins/personal-ai-knowledge:/opt/data/plugins/personal-ai-knowledge:ro
+
+  # Overlay: the broker forwards Hermes' /knowledge/* calls to the knowledge store.
+  hermes-broker:
+    environment:
+      KNOWLEDGE_URL: http://knowledge:8092
+      KNOWLEDGE_KEY_FILE: /run/secrets/knowledge_key
+      BROKER_KNOWLEDGE_WRITES_PER_MINUTE: "120"
+    secrets:
+      - source: knowledge_broker_key
+        target: knowledge_key
+    networks:
+      - knowledge-internal
+
+volumes:
+  knowledge-data:
+
+networks:
+  knowledge-internal:
+    driver: bridge
+    internal: true
+  knowledge-egress:
+    driver: bridge
+
+secrets:
+  knowledge_broker_key:
+    file: ./secrets/knowledge-broker.key        # services/knowledge/scripts/init-secrets.mjs

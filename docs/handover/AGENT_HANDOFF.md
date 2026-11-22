@@ -111,6 +111,7 @@
 | learning | – | 학습 Domain, Idea, Goal, Roadmap 버전 관리 (L1) |
 | notifier | – | Discord 웹훅의 유일한 보유자. 작업 완료/실패·Worker 로그인·일정(계획/리마인더/캘린더 연결) 알림 (typed event만, `compose.notifier.yaml`). hermes-broker의 task watcher가 이벤트를 보냄 |
 | planner | 127.0.0.1:8720 (Google 로그인 복귀 페이지만) | 할 일·하루 계획·Google Calendar 동기화, 23:00/일 23:00 초안, 05:00 오늘 계획, 15분 전 리마인더 (`compose.planner.yaml`, `services/planner/README.md`). Hermes는 broker의 `/planner/*` 고정 경로로만 접근 |
+| knowledge | 없음 | 주인에 대한 지식 저장소: 원본(대화·첨부), 활동 기록, 위키 문서(사실·링크), 프로필. 키워드+의미 검색(Ollama bge-m3). Hermes 메모리 제공자 `personal-ai-knowledge`로 대화 자동 보관·자동 회상 (`compose.knowledge.yaml`, `services/knowledge/README.md`). Hermes는 broker의 `/knowledge/*` 고정 경로로만 접근. 원본은 `data/knowledge/blobs`(D:). 대량 가져오기·Claude Code 정리는 필요할 때만 `compose.knowledge-operator.yaml`(127.0.0.1:8793, `kb.mjs`, `knowledge-importer`). 학습 모델 설계: `docs/knowledge/LEARNING_MODEL.md` |
 
 `repo-sync`는 `tools` profile로, 필요할 때만 실행한다.
 
@@ -190,7 +191,7 @@ D:\personal_ai
 
 **PowerShell**
 ```powershell
-$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml".Split(' ')
+$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml".Split(' ')
 docker compose @F ps
 docker compose @F up -d --build --no-deps <service>    # 해당 서비스만 다시 빌드
 docker compose @F logs --tail 100 <service>            # 로그에 비밀 정보가 없는지도 확인
@@ -198,7 +199,7 @@ docker compose @F logs --tail 100 <service>            # 로그에 비밀 정보
 
 **Bash**
 ```bash
-F="-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml"
+F="-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml"
 docker compose $F up -d --build --no-deps dashboard
 ```
 

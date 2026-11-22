@@ -1,0 +1,4 @@
+name: personal-ai-knowledge
+version: 0.1.0
+description: "Personal AI OS knowledge store as Hermes's memory provider: keeps every chat turn and attachment as a raw original, recalls what is known about the owner, and gives Kelly the personal_ai_knowledge tool (via hermes-broker)."
+author: "dydgh2011, Hermes Agent"

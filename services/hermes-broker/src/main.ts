@@ -31,6 +31,22 @@ function plannerConfig(): { url: string; key: string } | null {
   return { url, key };
 }
 
+/** Optional knowledge upstream (compose.knowledge.yaml): KNOWLEDGE_URL + KNOWLEDGE_KEY_FILE. */
+function knowledgeConfig(): { url: string; key: string } | null {
+  const url = process.env.KNOWLEDGE_URL?.trim().replace(/\/+$/, '');
+  if (!url) return null;
+  if (!/^https?:\/\/[^\s/]+/.test(url)) throw new Error('KNOWLEDGE_URL must be an http(s) URL');
+  const file = process.env.KNOWLEDGE_KEY_FILE || '/run/secrets/knowledge_key';
+  let key: string;
+  try {
+    key = readFileSync(file, 'utf8').trim();
+  } catch {
+    throw new Error(`Cannot read the knowledge key file ${file}`);
+  }
+  if (key.length < 32 || /\s/.test(key)) throw new Error('The knowledge key must be at least 32 characters');
+  return { url, key };
+}
+
 function main(): void {
   const tokenFile = process.env.BROKER_TOKEN_FILE || '/run/secrets/controller_token';
   let token: string;
@@ -63,6 +79,8 @@ function main(): void {
       clientKey,
       planner: plannerConfig(),
       plannerWritesPerMinute: int('BROKER_PLANNER_WRITES_PER_MINUTE', 30, 1, 1000),
+      knowledge: knowledgeConfig(),
+      knowledgeWritesPerMinute: int('BROKER_KNOWLEDGE_WRITES_PER_MINUTE', 120, 1, 10000),
     },
     logger,
   );

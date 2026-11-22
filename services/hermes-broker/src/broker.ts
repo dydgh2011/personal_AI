@@ -18,6 +18,10 @@ export interface BrokerConfig {
   planner?: { url: string; key: string } | null;
   /** Cap on planner write requests per minute (an LLM looping on a tool). */
   plannerWritesPerMinute?: number;
+  /** Knowledge store (compose.knowledge.yaml); null = knowledge routes answer 503. */
+  knowledge?: { url: string; key: string } | null;
+  /** Cap on knowledge writes per minute (chat turns are stored too, so higher than the planner's). */
+  knowledgeWritesPerMinute?: number;
 }
 
 export interface Logger {
@@ -34,14 +38,17 @@ const EVENT_ID = '[A-Za-z0-9_]{3,300}';
 const PROJECT_ID_PATTERN = new RegExp(`^${PROJECT_ID}$`);
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
 const MAX_BODY_BYTES = 64 * 1024;
+/** Knowledge writes carry whole chat turns and the text of attached documents. */
+const MAX_KNOWLEDGE_BODY_BYTES = 4 * 1024 * 1024;
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MAX_INSTRUCTION_CHARS = 20_000;
 
 interface Route {
   method: 'GET' | 'POST';
   pattern: RegExp;
   name: string;
-  /** Upstream service; default the controller. Planner routes get the planner key, never the controller token. */
-  target?: 'planner';
+  /** Upstream service; default the controller. Planner/knowledge routes get their own key, never the controller token. */
+  target?: 'planner' | 'knowledge';
   /** Query parameters forwarded to the controller, each with its validator. Everything else is rejected. */
   query?: Record<string, (value: string) => boolean>;
 }
@@ -84,7 +91,45 @@ const ROUTES: Route[] = [
   // Planner (todos, day plans, Google Calendar). Forwarded without the /planner prefix; the
   // planner validates every body field itself.
   ...plannerRoutes(),
+  // Knowledge store (pages, facts, activities, raw originals, search). Forwarded without the
+  // /knowledge prefix; the knowledge service validates every field itself.
+  ...knowledgeRoutes(),
 ];
+
+function knowledgeRoutes(): Route[] {
+  const date = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const short = (max: number) => (v: string) => v.length >= 1 && v.length <= max;
+  const k = (method: Route['method'], path: string, name: string, query?: Route['query']): Route => ({
+    method,
+    pattern: new RegExp(`^/knowledge${path}$`),
+    name: `knowledge.${name}`,
+    target: 'knowledge',
+    query,
+  });
+  const limit = (v: string) => /^\d{1,3}$/.test(v);
+  return [
+    k('GET', '/status', 'status'),
+    k('POST', '/raw', 'raw.add'),
+    k('POST', '/raw/document', 'raw.document'),
+    k('GET', '/raw', 'raw.list', { source: short(20), from: date, to: date, limit }),
+    k('GET', `/raw/${UUID}`, 'raw.get', { offset: (v) => /^\d{1,8}$/.test(v), limit: (v) => /^\d{1,5}$/.test(v) }),
+    k('GET', '/pages', 'pages.list', { type: short(20) }),
+    k('POST', '/pages', 'pages.save'),
+    k('GET', '/page', 'pages.get', { ref: short(200) }),
+    k('POST', '/facts', 'facts.add'),
+    k('POST', `/facts/${UUID}`, 'facts.change'),
+    k('POST', '/links', 'links.save'),
+    k('POST', '/activities', 'activities.add'),
+    k('POST', `/activities/${UUID}`, 'activities.change'),
+    k('GET', '/timeline', 'timeline', { from: date, to: date, kind: short(20), page: short(200), limit }),
+    k('GET', '/profile', 'profile', { compact: (v) => v === '1' }),
+    k('GET', '/search', 'search', { q: short(300), kinds: short(40), limit }),
+    k('GET', '/recall', 'recall', { q: short(2000) }),
+    k('GET', '/graph', 'graph'),
+    k('GET', '/changes', 'changes', { limit }),
+    k('POST', '/purge', 'purge'),
+  ];
+}
 
 function plannerRoutes(): Route[] {
   const date = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -161,7 +206,7 @@ class HttpError extends Error {
  */
 export function createBroker(config: BrokerConfig, logger: Logger, now: () => number = Date.now): Server {
   const created: number[] = [];
-  const plannerWrites: number[] = [];
+  const writes: Record<'planner' | 'knowledge', number[]> = { planner: [], knowledge: [] };
 
   const rateLimit = () => {
     const t = now();
@@ -203,33 +248,39 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
         }
       }
 
-      if (route.target === 'planner') {
-        if (!config.planner) throw new HttpError(503, 'The planner is not set up');
+      if (route.target) {
+        const target = route.target;
+        const upstreamConfig = config[target];
+        const label = target === 'planner' ? 'planner' : 'knowledge store';
+        if (!upstreamConfig) throw new HttpError(503, `The ${label} is not set up`);
+        const perMinute = (target === 'planner' ? config.plannerWritesPerMinute : config.knowledgeWritesPerMinute) ?? (target === 'planner' ? 30 : 120);
         let body: string | undefined;
         if (route.method === 'POST') {
-          const value = await readJson(req, false, true);
+          const value = await readJson(req, false, true, target === 'knowledge' ? MAX_KNOWLEDGE_BODY_BYTES : MAX_BODY_BYTES);
           if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HttpError(400, 'Body must be a JSON object');
           body = JSON.stringify(value);
           const t = now();
-          while (plannerWrites.length && plannerWrites[0] <= t - 60_000) plannerWrites.shift();
-          if (plannerWrites.length >= (config.plannerWritesPerMinute ?? 30)) {
-            throw new HttpError(429, `Too many planner changes: at most ${config.plannerWritesPerMinute ?? 30} per minute`, { retryAfterSeconds: 60 });
+          const recent = writes[target];
+          while (recent.length && recent[0] <= t - 60_000) recent.shift();
+          if (recent.length >= perMinute) {
+            throw new HttpError(429, `Too many ${label} changes: at most ${perMinute} per minute`, { retryAfterSeconds: 60 });
           }
-          plannerWrites.push(t);
+          recent.push(t);
         }
+        const header = target === 'planner' ? 'X-Planner-Key' : 'X-Knowledge-Key';
         let upstream: Response;
         try {
-          upstream = await fetch(config.planner.url + url.pathname.slice('/planner'.length) + url.search, {
+          upstream = await fetch(upstreamConfig.url + url.pathname.slice(`/${target}`.length) + url.search, {
             method: route.method,
-            headers: { 'X-Planner-Key': config.planner.key, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+            headers: { [header]: upstreamConfig.key, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
             body,
             redirect: 'error',
             signal: AbortSignal.timeout(Math.max(config.upstreamTimeoutMs, 30_000)),
           });
         } catch {
-          throw new HttpError(502, 'Planner unreachable');
+          throw new HttpError(502, `${label[0].toUpperCase()}${label.slice(1)} unreachable`);
         }
-        const text = (await upstream.text()).split(config.planner.key).join('[redacted]');
+        const text = (await upstream.text()).split(upstreamConfig.key).join('[redacted]');
         status = upstream.status;
         res.writeHead(status, { 'Content-Type': upstream.headers.get('content-type') ?? 'application/json' });
         res.end(text);
@@ -325,12 +376,12 @@ function validateTask(value: unknown): { agent: string; projectId: string; instr
   return { agent: body.agent, projectId: body.projectId, instruction: body.instruction };
 }
 
-async function readJson(req: IncomingMessage, mustBeEmpty = false, emptyIsObject = false): Promise<unknown> {
+async function readJson(req: IncomingMessage, mustBeEmpty = false, emptyIsObject = false, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'Request body too large');
+    if (size > maxBytes) throw new HttpError(413, 'Request body too large');
     chunks.push(chunk as Buffer);
   }
   const text = Buffer.concat(chunks).toString('utf8').trim();

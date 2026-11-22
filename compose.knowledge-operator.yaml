@@ -1,0 +1,53 @@
+# Operator access to the knowledge store, for bulk import and structuring with Claude Code.
+# Add this file to the compose files ONLY while you need it; leave it out to close the access again.
+#   node services/knowledge/scripts/init-secrets.mjs            (creates secrets/knowledge-operator.key)
+#   docker compose @F -f compose.knowledge-operator.yaml up -d --no-deps knowledge
+#   node services/knowledge/scripts/kb.mjs status                (CLI on this PC -> 127.0.0.1:8793)
+#   docker compose @F -f compose.knowledge-operator.yaml run --rm knowledge-importer scan [SUBPATH]
+#
+# - The knowledge API is published on 127.0.0.1:8793 only (this PC), and accepts the operator key there.
+#   Operator-only routes: /raw/file, /raw/by-sha (imports). Everything is logged with actor "operator".
+# - The importer reads data/knowledge-inbox (read-only) and writes originals to data/knowledge/blobs.
+
+services:
+  knowledge:
+    environment:
+      KNOWLEDGE_CLIENTS: hermes-broker=/run/secrets/broker_key,operator=/run/secrets/operator_key
+    secrets:
+      - source: knowledge_operator_key
+        target: operator_key
+    ports:
+      - "127.0.0.1:8793:8092"
+
+  knowledge-importer:
+    profiles: ["tools"]
+    build:
+      context: ./services/knowledge-importer
+    image: personal_ai-knowledge-importer:local
+    environment:
+      KB_URL: http://knowledge:8092
+      KB_KEY_FILE: /run/secrets/operator_key
+      KB_INBOX: /inbox
+      KB_BLOBS: /blobs
+    secrets:
+      - source: knowledge_operator_key
+        target: operator_key
+    volumes:
+      - ./data/knowledge-inbox:/inbox:ro
+      - ./data/knowledge/blobs:/blobs
+    networks:
+      - knowledge-internal
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 3g
+    cpus: 2.0
+    pids_limit: 64
+
+secrets:
+  knowledge_operator_key:
+    file: ./secrets/knowledge-operator.key        # services/knowledge/scripts/init-secrets.mjs

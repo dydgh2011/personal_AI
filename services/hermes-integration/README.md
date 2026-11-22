@@ -28,12 +28,14 @@ services/hermes-integration/
 │   ├── planner_client.py                planner 도구 (브로커 경유)
 │   ├── document_client.py               첨부 문서 읽기 (첨부 폴더만, 네트워크 없음)
 │   └── guard.py                         Controller 우회·인증 파일 접근 도구 호출 차단
+├── plugins/personal-ai-knowledge/       메모리 제공자: 대화·첨부 자동 보관, 자동 회상, 도구 personal_ai_knowledge (services/knowledge)
 ├── image/Dockerfile                     공식 Hermes 이미지 + pypdf (personal_ai-hermes:local)
 ├── skills/personal-ai-controller/SKILL.md   사용 절차·보고 템플릿 (읽기 전용 마운트, skills.external_dirs)
 ├── skills/personal-ai-planner/SKILL.md      일정·시안·강의계획서 절차
+├── skills/personal-ai-knowledge/SKILL.md    무엇을 언제 저장하고 찾는지
 ├── hermes-config/SOUL.personal-ai.md    SOUL.md에 들어가는 역할 규칙
 ├── scripts/configure-hermes.mjs         data/hermes 설정 적용/점검 (멱등, 백업)
-└── tests/                               test_controller.py, test_plugin.py, test_document.py — 52개
+└── tests/                               test_controller.py, test_plugin.py, test_document.py, test_knowledge.py — 64개
 ```
 
 ## 보안 구조 (Phase A)
