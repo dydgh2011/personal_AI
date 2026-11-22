@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { createBroker, type Logger } from './broker.js';
+import { createWatcher, type Watcher } from './watcher.js';
 
 const logger: Logger = {
   info: (msg, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg, ...fields })),
@@ -12,6 +13,22 @@ function int(name: string, fallback: number, min: number, max: number): number {
   const value = /^\d+$/.test(raw) ? Number(raw) : NaN;
   if (!(value >= min && value <= max)) throw new Error(`${name} must be an integer between ${min} and ${max}`);
   return value;
+}
+
+/** Optional planner upstream (compose.planner.yaml): PLANNER_URL + PLANNER_KEY_FILE. */
+function plannerConfig(): { url: string; key: string } | null {
+  const url = process.env.PLANNER_URL?.trim().replace(/\/+$/, '');
+  if (!url) return null;
+  if (!/^https?:\/\/[^\s/]+/.test(url)) throw new Error('PLANNER_URL must be an http(s) URL');
+  const file = process.env.PLANNER_KEY_FILE || '/run/secrets/planner_key';
+  let key: string;
+  try {
+    key = readFileSync(file, 'utf8').trim();
+  } catch {
+    throw new Error(`Cannot read the planner key file ${file}`);
+  }
+  if (key.length < 32 || /\s/.test(key)) throw new Error('The planner key must be at least 32 characters');
+  return { url, key };
 }
 
 function main(): void {
@@ -44,12 +61,47 @@ function main(): void {
       submitPerHour: int('BROKER_SUBMIT_PER_HOUR', 30, 1, 10000),
       upstreamTimeoutMs: int('BROKER_UPSTREAM_TIMEOUT_SECONDS', 15, 1, 120) * 1000,
       clientKey,
+      planner: plannerConfig(),
+      plannerWritesPerMinute: int('BROKER_PLANNER_WRITES_PER_MINUTE', 30, 1, 1000),
     },
     logger,
   );
   server.listen(port, '0.0.0.0', () => logger.info('Broker listening', { port, controller: controllerUrl, clientKey: clientKey !== null }));
+
+  // Optional: report finished Hermes tasks to the notifier (compose.notifier.yaml).
+  let watcher: Watcher | null = null;
+  const notifierUrl = process.env.NOTIFIER_URL?.trim().replace(/\/+$/, '');
+  if (notifierUrl) {
+    if (!/^https?:\/\/[^\s/]+/.test(notifierUrl)) throw new Error('NOTIFIER_URL must be an http(s) URL');
+    const keyFile = process.env.NOTIFIER_KEY_FILE || '/run/secrets/notifier_key';
+    let notifierKey: string;
+    try {
+      notifierKey = readFileSync(keyFile, 'utf8').trim();
+    } catch {
+      throw new Error(`Cannot read the notifier key file ${keyFile}`);
+    }
+    if (notifierKey.length < 32 || /\s/.test(notifierKey)) throw new Error('The notifier key must be at least 32 characters');
+    watcher = createWatcher(
+      {
+        controllerUrl,
+        token,
+        notifierUrl,
+        notifierKey,
+        intervalMs: int('WATCH_INTERVAL_SECONDS', 15, 5, 3600) * 1000,
+        lookbackMs: int('WATCH_LOOKBACK_MINUTES', 120, 1, 10080) * 60_000,
+        hostWorkspaces: (process.env.BROKER_HOST_WORKSPACES ?? '').trim().replace(/[\\/]+$/, ''),
+        timeoutMs: int('BROKER_UPSTREAM_TIMEOUT_SECONDS', 15, 1, 120) * 1000,
+      },
+      logger,
+    );
+    logger.info('Task watcher started', { notifier: notifierUrl });
+  }
+
   for (const signal of ['SIGTERM', 'SIGINT'] as const) {
-    process.once(signal, () => server.close(() => process.exit(0)));
+    process.once(signal, () => {
+      watcher?.stop();
+      server.close(() => process.exit(0));
+    });
   }
 }
 

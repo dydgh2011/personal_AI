@@ -5,6 +5,7 @@ import { CLAIMED_STATUSES } from '../tasks/task-state.js';
 import { TASK_STATUSES, type AgentType, type TaskStatus } from '../tasks/task.model.js';
 import { TaskRepository } from '../tasks/task.repository.js';
 import { ProjectsService } from '../projects/projects.service.js';
+import { WorkerAuthService, type AuthSessionStatus } from '../worker-auth/worker-auth.service.js';
 import { WorkerPresence } from '../workers/worker-presence.js';
 
 export const CONTROLLER_VERSION = '0.1.0';
@@ -34,6 +35,8 @@ export interface SystemStatus {
     lastSeenAt: string | null;
     queuedTasks: number;
     activeTasks: number;
+    /** CLI login state as last reported by the worker (loggedIn null: not reported since the controller started). */
+    login: { loggedIn: boolean | null; sessionStatus: AuthSessionStatus | null; requested: boolean };
   }>;
   projects: string[];
   services: ServiceProbeResult[];
@@ -47,6 +50,7 @@ export class SystemStatusService {
     private readonly repository: TaskRepository,
     private readonly presence: WorkerPresence,
     private readonly projects: ProjectsService,
+    private readonly workerAuth: WorkerAuthService,
     private readonly clock: Clock,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
   ) {
@@ -76,6 +80,7 @@ export class SystemStatusService {
         .filter((row) => row.agent === agent && statuses.includes(row.status))
         .reduce((sum, row) => sum + row.count, 0);
 
+    const logins = new Map(this.workerAuth.list().map((view) => [view.agent, view]));
     const now = this.clock.now();
     return {
       controller: {
@@ -93,6 +98,11 @@ export class SystemStatusService {
         lastSeenAt: this.presence.lastSeenAt(workerId),
         queuedTasks: countFor(agent, ['queued']),
         activeTasks: countFor(agent, CLAIMED_STATUSES),
+        login: {
+          loggedIn: logins.get(agent)?.loggedIn ?? null,
+          sessionStatus: logins.get(agent)?.session?.status ?? null,
+          requested: logins.get(agent)?.requested ?? false,
+        },
       })),
       projects: this.projects.enabledIds(),
       services,

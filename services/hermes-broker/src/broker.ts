@@ -14,6 +14,10 @@ export interface BrokerConfig {
    * LLM's remaining tools such as the browser) can use the broker. null = not required.
    */
   clientKey: string | null;
+  /** Planner service (compose.planner.yaml); null = planner routes answer 503. */
+  planner?: { url: string; key: string } | null;
+  /** Cap on planner write requests per minute (an LLM looping on a tool). */
+  plannerWritesPerMinute?: number;
 }
 
 export interface Logger {
@@ -25,6 +29,8 @@ const AGENTS = ['claude', 'codex'];
 const STATUSES = ['queued', 'running', 'completed', 'failed', 'cancel_requested', 'canceled'];
 const TASK_ID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const PROJECT_ID = '[a-z0-9][a-z0-9_-]{0,63}';
+/** Google Calendar event id (instances of a repeating event carry a _<time> suffix). */
+const EVENT_ID = '[A-Za-z0-9_]{3,300}';
 const PROJECT_ID_PATTERN = new RegExp(`^${PROJECT_ID}$`);
 const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
 const MAX_BODY_BYTES = 64 * 1024;
@@ -34,6 +40,8 @@ interface Route {
   method: 'GET' | 'POST';
   pattern: RegExp;
   name: string;
+  /** Upstream service; default the controller. Planner routes get the planner key, never the controller token. */
+  target?: 'planner';
   /** Query parameters forwarded to the controller, each with its validator. Everything else is rejected. */
   query?: Record<string, (value: string) => boolean>;
 }
@@ -69,7 +77,71 @@ const ROUTES: Route[] = [
   { method: 'GET', pattern: new RegExp(`^/tasks/${TASK_ID}/review$`), name: 'tasks.review' },
   { method: 'POST', pattern: /^\/tasks$/, name: 'tasks.create' },
   { method: 'POST', pattern: new RegExp(`^/tasks/${TASK_ID}/cancel$`), name: 'tasks.cancel' },
+  // Worker CLI logins: see the state, ask for a new login, pass on the code the owner got after signing in.
+  { method: 'GET', pattern: /^\/workers\/auth$/, name: 'auth.list' },
+  { method: 'POST', pattern: /^\/workers\/(claude|codex)\/auth\/start$/, name: 'auth.start' },
+  { method: 'POST', pattern: /^\/workers\/(claude|codex)\/auth\/code$/, name: 'auth.code' },
+  // Planner (todos, day plans, Google Calendar). Forwarded without the /planner prefix; the
+  // planner validates every body field itself.
+  ...plannerRoutes(),
 ];
+
+function plannerRoutes(): Route[] {
+  const date = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
+  const p = (method: Route['method'], path: string, name: string, query?: Route['query']): Route => ({
+    method,
+    pattern: new RegExp(`^/planner${path}$`),
+    name: `planner.${name}`,
+    target: 'planner',
+    query,
+  });
+  return [
+    p('GET', '/status', 'status'),
+    p('GET', '/day', 'day', { date }),
+    p('GET', '/week', 'week', { start: date }),
+    p('POST', '/plans/generate', 'generate'),
+    p('POST', '/plans/confirm', 'confirm'),
+    p('POST', '/blocks', 'blocks.add'),
+    p('POST', `/blocks/${TASK_ID}/update`, 'blocks.update'),
+    p('POST', `/blocks/${TASK_ID}/remove`, 'blocks.remove'),
+    p('GET', '/todos', 'todos.list', { status: (v) => ['open', 'done', 'all'].includes(v) }),
+    p('POST', '/todos', 'todos.add'),
+    p('POST', `/todos/${TASK_ID}/update`, 'todos.update'),
+    p('POST', `/todos/${TASK_ID}/progress`, 'todos.progress'),
+    p('GET', '/settings', 'settings.get'),
+    p('POST', '/settings', 'settings.update'),
+    p('GET', '/changes', 'changes', { limit: (v) => /^\d{1,3}$/.test(v) }),
+    p('POST', '/calendar/connect', 'calendar.connect'),
+    p('GET', '/calendars', 'calendars'),
+    p('POST', '/events', 'events.add'),
+    p('POST', `/events/${EVENT_ID}/update`, 'events.update'),
+    p('POST', `/events/${EVENT_ID}/remove`, 'events.remove'),
+    p('POST', '/reference/sync', 'reference.sync'),
+    p('POST', '/reference/search', 'reference.search'),
+    p('GET', '/proposals', 'proposals.list', { status: (v) => v === 'draft' || v === 'all' }),
+    p('POST', '/proposals', 'proposals.create'),
+    p('GET', '/proposals/[A-Z]{1,3}', 'proposals.get'),
+    p('POST', '/proposals/[A-Z]{1,3}/edit', 'proposals.edit'),
+    p('POST', '/proposals/[A-Z]{1,3}/apply', 'proposals.apply'),
+    p('POST', '/proposals/[A-Z]{1,3}/discard', 'proposals.discard'),
+  ];
+}
+
+const AUTH_CODE_PATTERN = /^[A-Za-z0-9#._~-]{8,512}$/;
+const UUID_PATTERN = new RegExp(`^${TASK_ID}$`);
+
+function validateAuthCode(value: unknown): { code: string; sessionId?: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HttpError(400, 'Body must be a JSON object');
+  const body = value as Record<string, unknown>;
+  const extra = Object.keys(body).filter((k) => !['code', 'sessionId'].includes(k));
+  if (extra.length) throw new HttpError(400, `Unexpected fields: ${extra.join(', ')}`);
+  const code = typeof body.code === 'string' ? body.code.trim() : '';
+  if (!AUTH_CODE_PATTERN.test(code)) throw new HttpError(400, 'code must be the code shown after signing in (letters, digits, # . _ ~ -)');
+  if (body.sessionId !== undefined && (typeof body.sessionId !== 'string' || !UUID_PATTERN.test(body.sessionId))) {
+    throw new HttpError(400, 'sessionId must be a session UUID');
+  }
+  return body.sessionId === undefined ? { code } : { code, sessionId: body.sessionId as string };
+}
 
 class HttpError extends Error {
   constructor(
@@ -89,6 +161,7 @@ class HttpError extends Error {
  */
 export function createBroker(config: BrokerConfig, logger: Logger, now: () => number = Date.now): Server {
   const created: number[] = [];
+  const plannerWrites: number[] = [];
 
   const rateLimit = () => {
     const t = now();
@@ -130,6 +203,39 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
         }
       }
 
+      if (route.target === 'planner') {
+        if (!config.planner) throw new HttpError(503, 'The planner is not set up');
+        let body: string | undefined;
+        if (route.method === 'POST') {
+          const value = await readJson(req, false, true);
+          if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HttpError(400, 'Body must be a JSON object');
+          body = JSON.stringify(value);
+          const t = now();
+          while (plannerWrites.length && plannerWrites[0] <= t - 60_000) plannerWrites.shift();
+          if (plannerWrites.length >= (config.plannerWritesPerMinute ?? 30)) {
+            throw new HttpError(429, `Too many planner changes: at most ${config.plannerWritesPerMinute ?? 30} per minute`, { retryAfterSeconds: 60 });
+          }
+          plannerWrites.push(t);
+        }
+        let upstream: Response;
+        try {
+          upstream = await fetch(config.planner.url + url.pathname.slice('/planner'.length) + url.search, {
+            method: route.method,
+            headers: { 'X-Planner-Key': config.planner.key, Accept: 'application/json', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+            body,
+            redirect: 'error',
+            signal: AbortSignal.timeout(Math.max(config.upstreamTimeoutMs, 30_000)),
+          });
+        } catch {
+          throw new HttpError(502, 'Planner unreachable');
+        }
+        const text = (await upstream.text()).split(config.planner.key).join('[redacted]');
+        status = upstream.status;
+        res.writeHead(status, { 'Content-Type': upstream.headers.get('content-type') ?? 'application/json' });
+        res.end(text);
+        return;
+      }
+
       const headers: Record<string, string> = { Authorization: `Bearer ${config.token}`, Accept: 'application/json' };
       let body: string | undefined;
       if (route.name === 'tasks.create') {
@@ -147,6 +253,11 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
         body = JSON.stringify(task);
         Object.assign(audit, { agent: task.agent, projectId: task.projectId, instructionChars: task.instruction.length });
         rateLimit();
+      } else if (route.name === 'auth.code') {
+        // The code is a one-time authorization code; it is forwarded, never logged.
+        headers['Content-Type'] = 'application/json';
+        body = JSON.stringify(validateAuthCode(await readJson(req)));
+        audit.agent = url.pathname.split('/')[2];
       } else if (req.method === 'POST') {
         await readJson(req, true);
       }
@@ -214,7 +325,7 @@ function validateTask(value: unknown): { agent: string; projectId: string; instr
   return { agent: body.agent, projectId: body.projectId, instruction: body.instruction };
 }
 
-async function readJson(req: IncomingMessage, mustBeEmpty = false): Promise<unknown> {
+async function readJson(req: IncomingMessage, mustBeEmpty = false, emptyIsObject = false): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
@@ -227,6 +338,7 @@ async function readJson(req: IncomingMessage, mustBeEmpty = false): Promise<unkn
     if (text && text !== '{}') throw new HttpError(400, 'This request takes no body');
     return null;
   }
+  if (!text && emptyIsObject) return {};
   try {
     return JSON.parse(text);
   } catch {

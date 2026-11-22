@@ -1,7 +1,7 @@
 ---
 name: personal-ai-controller
 description: Delegate, track and cancel Claude/Codex worker coding tasks.
-version: 0.2.0
+version: 0.3.0
 author: dydgh2011, Hermes Agent
 license: MIT
 platforms: [linux]
@@ -42,6 +42,9 @@ personal_ai_task(action="result", task_id="<id>")
 personal_ai_task(action="list", limit=10)            # optional list_agent, status
 personal_ai_task(action="cancel", task_id="<id>")
 personal_ai_task(action="system_status")
+personal_ai_worker_login(action="start", agent="codex")   # new login link to Discord
+personal_ai_worker_login(action="code", agent="claude", code="...")
+personal_ai_worker_login(action="status")
 ```
 
 `"ok": false` results carry `error.code` (`invalid_request`, `not_found`, `conflict`, `rate_limited`, `connection_error`, `auth_error`, `server_error`, `usage_error`) and `error.message`; tell the user the message.
@@ -50,8 +53,8 @@ personal_ai_task(action="system_status")
 
 1. Write a self-contained task description for the worker (what to create or change, file names, constraints, "Do not modify files outside the assigned workspace"). Keep the user's requirements; add nothing they did not ask for.
 2. `personal_ai_task(action="submit", agent=..., project_id=..., instruction=...)`.
-3. Tell the user: Task ID (`task.id`), agent, project, status. If `duplicate` is true, it is the task already submitted moments ago, not a new one; use `new=true` only if the user explicitly wants it run again.
-4. If the user wants the result: `wait` (repeat while `report` is null; small tasks take 10-60 s). After about 10 minutes, give the user the Task ID and stop.
+3. Tell the user: Task ID (`task.id`), agent, project, status, and that a Discord message will arrive automatically when the task completes or fails (the system sends it; you do not need to wait or poll). If `duplicate` is true, it is the task already submitted moments ago, not a new one; use `new=true` only if the user explicitly wants it run again.
+4. Only if the user explicitly asks you to wait for the result now: `wait` (repeat while `report` is null; small tasks take 10-60 s). After about 10 minutes, give the user the Task ID and stop.
 5. When `task.finished` is true, report the result (next procedure).
 
 ## Procedure: report a result
@@ -73,6 +76,16 @@ PC 경로: <report.hostPath>
 
 For failures add `오류:` with `report.message`, `report.workspaceError`, `report.agentErrors`, `report.timedOut`, and the last lines of `report.stderrTail`. A `format: "text"` report starting with `lease_expired:` means the worker stopped responding; it was not retried.
 
+## Procedure: worker login
+
+Worker logins use the separate `personal_ai_worker_login` tool. Hermes can do this; never tell the user it needs an administrator, and never use `manage_connections` for it. When a worker CLI (Claude Code / Codex subscription) is logged out, its tasks wait in the queue and the system posts a login message with the link to Discord by itself.
+
+- "codex 로그인 다시 시도해줘" / "로그인 다시 시작해줘" / the link expired → `personal_ai_worker_login(action="start", agent="codex")` (or `claude`). Then tell the user a new login link arrives on Discord within about a minute.
+- The user sends something like "claude 로그인 코드: XXXX" → `personal_ai_worker_login(action="code", agent="claude", code="XXXX")` with the code copied exactly (no spaces added or removed inside it). Then say the code was passed on and that a Discord message confirms the result.
+- "로그인 상태 알려줘" → `personal_ai_worker_login(action="status")`.
+- `system_status` shows `state: "login_required"` for a logged-out worker and an `attention` line saying what to call; that worker is running, only its login is missing.
+- Codex uses a one-time code typed on the website: nothing needs to be sent back. Never ask for passwords, and never try to log in yourself.
+
 ## Procedure: cancel
 
 `cancel`. If `stopped` is true, it is canceled. If `outcome` is `cancel_requested`, say the request was sent but not yet confirmed, check `status` again after ~20 s (`wait` with a short timeout also works), and say canceled only when the status is `canceled`.
@@ -86,4 +99,4 @@ For failures add `오류:` with `report.message`, `report.workspaceError`, `repo
 
 ## Verification
 
-`personal_ai_task(action="system_status")` returns `"ok": true`, `projects` lists the registered projects, and both workers show `"online": true`.
+`personal_ai_task(action="system_status")` returns `"ok": true`, `projects` lists the registered projects, and both workers show `"online": true` (`state` is `ready`, or `login_required` while a worker waits for its login).

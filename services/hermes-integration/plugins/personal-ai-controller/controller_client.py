@@ -574,15 +574,33 @@ def cmd_system_status(client: Client, config: Config, args: argparse.Namespace) 
     for w in status.get("workers", []):
         seen = _parse_time(w.get("lastSeenAt"))
         age = round((now - seen).total_seconds()) if seen else None
+        online = age is not None and age < 60
+        login = w.get("login") or {}
+        logged_in = login.get("loggedIn")
+        if not online:
+            state = "offline"
+        elif logged_in is False:
+            state = "login_required"
+        else:
+            state = "ready"
         workers.append({
             "workerId": w.get("workerId"),
             "agent": w.get("agent"),
             "lastSeenSecondsAgo": age,
-            "online": age is not None and age < 60,
+            "online": online,
+            "state": state,
+            "loggedIn": logged_in,
+            "loginSession": login.get("sessionStatus"),
             "queuedTasks": w.get("queuedTasks"),
             "activeTasks": w.get("activeTasks"),
         })
-    return {
+    attention = [
+        f"The {w['agent']} worker is logged out; its tasks wait in the queue. To send the user a new login link, "
+        f"call personal_ai_worker_login(action=\"start\", agent=\"{w['agent']}\")."
+        for w in workers
+        if w["state"] == "login_required" and w["loginSession"] not in ("waiting_user", "code_submitted", "verifying")
+    ]
+    result: dict[str, Any] = {
         "ok": True,
         "controller": {k: status.get("controller", {}).get(k) for k in ("status", "version", "uptimeSeconds")},
         "database": status.get("database"),
@@ -591,9 +609,58 @@ def cmd_system_status(client: Client, config: Config, args: argparse.Namespace) 
         "projects": status.get("projects"),
         "services": status.get("services"),
     }
+    if attention:
+        result["attention"] = attention
+    return result
+
+
+def _login_view(item: dict[str, Any]) -> dict[str, Any]:
+    session = item.get("session") or None
+    view: dict[str, Any] = {"agent": item.get("agent"), "loggedIn": item.get("loggedIn"), "loginRequested": item.get("requested")}
+    if session:
+        view["session"] = {k: session.get(k) for k in ("id", "status", "loginUrl", "userCode", "needsCode", "expiresAt", "message")}
+    return view
+
+
+def cmd_login_status(client: Client, config: Config, args: argparse.Namespace) -> dict[str, Any]:
+    """Login state of the worker CLIs. The login link itself is also sent to Discord automatically."""
+    _, _, page = client.request("GET", "/workers/auth")
+    return {"ok": True, "workers": [_login_view(i) for i in page.get("items", [])]}
+
+
+def cmd_login_start(client: Client, config: Config, args: argparse.Namespace) -> dict[str, Any]:
+    if args.agent not in AGENTS:
+        raise CliError("invalid_request", f"agent must be one of {', '.join(AGENTS)}")
+    try:
+        _, _, item = client.request("POST", f"/workers/{args.agent}/auth/start")
+    except CliError as err:
+        if err.code != "conflict":
+            raise
+        # A login is already under way: its link is on Discord. Say so instead of reporting an error.
+        _, _, page = client.request("GET", "/workers/auth")
+        current = next((i for i in page.get("items", []) if i.get("agent") == args.agent), {})
+        return {"ok": True, "alreadyWaiting": True, "worker": _login_view(current),
+                "note": "A login link for this worker is already on Discord and still valid until session.expiresAt "
+                        "(UTC). Tell the user to use that message; no new link is needed."}
+    return {"ok": True, "worker": _login_view(item),
+            "note": "The worker starts a login on its next poll; the login link arrives on Discord within about a minute."}
+
+
+def cmd_login_code(client: Client, config: Config, args: argparse.Namespace) -> dict[str, Any]:
+    if args.agent not in AGENTS:
+        raise CliError("invalid_request", f"agent must be one of {', '.join(AGENTS)}")
+    code = (args.code or "").strip()
+    if not code:
+        raise CliError("invalid_request", "code is required: the code shown after signing in at the login link")
+    _, _, item = client.request("POST", f"/workers/{args.agent}/auth/code", {"code": code})
+    return {"ok": True, "worker": _login_view(item),
+            "note": "Code handed to the worker. A Discord message confirms when the login is complete (usually within seconds)."}
 
 
 COMMANDS = {
+    "login-status": cmd_login_status,
+    "login-start": cmd_login_start,
+    "login-code": cmd_login_code,
     "submit": cmd_submit,
     "status": cmd_status,
     "result": cmd_result,
@@ -631,6 +698,11 @@ def build_parser() -> argparse.ArgumentParser:
     lst.add_argument("--limit", type=int, default=20)
     sub.add_parser("system-status")
     sub.add_parser("projects")
+    sub.add_parser("login-status")
+    sub.add_parser("login-start").add_argument("--agent", required=True, choices=AGENTS)
+    login_code = sub.add_parser("login-code")
+    login_code.add_argument("--agent", required=True, choices=AGENTS)
+    login_code.add_argument("--code", required=True)
     return parser
 
 

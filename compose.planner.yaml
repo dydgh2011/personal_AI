@@ -1,0 +1,106 @@
+# Planner: todos, day plans, Google Calendar sync, 23:00/05:00 briefings and reminders.
+# Needs compose.notifier.yaml (notify-internal, notifier) and compose.controller.yaml (hermes-broker).
+#   node services/planner/scripts/init-secrets.mjs      (keys; never prints them)
+#   secrets/google-oauth-client.json                    (Google "Desktop app" OAuth client, from the owner)
+#   docker compose @F up -d --build --no-deps planner notifier hermes-broker
+#
+# - Hermes reaches the planner only through hermes-broker (fixed /planner/* routes, planner key held
+#   by the broker). The planner API (8091) has no host port.
+# - Published on the host: 127.0.0.1:8720 only, for Google's redirect after the owner signs in
+#   (loopback redirect of a desktop OAuth client). It serves /oauth/callback and nothing else.
+# - planner-egress: Google (oauth2.googleapis.com, www.googleapis.com). notify-internal: the notifier.
+# - Google tokens live only in the planner-data volume (SQLite), never in logs or API answers.
+
+services:
+  planner:
+    build:
+      context: ./services/planner
+    image: personal_ai-planner:local
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: America/Toronto
+      PLANNER_TIME_ZONE: America/Toronto
+      PLANNER_CLIENTS: hermes-broker=/run/secrets/broker_key
+      PLANNER_DB_FILE: /var/lib/planner/planner.db
+      GOOGLE_OAUTH_CLIENT_FILE: /run/secrets/google_oauth_client
+      PLANNER_REDIRECT_URI: http://127.0.0.1:8720/oauth/callback
+      NOTIFIER_URL: http://notifier:8090
+      NOTIFIER_KEY_FILE: /run/secrets/notifier_key
+      JOBS_INTERVAL_SECONDS: "30"
+    secrets:
+      - source: planner_broker_key
+        target: broker_key
+      - source: notifier_planner_key
+        target: notifier_key
+      - source: google_oauth_client
+        target: google_oauth_client
+    volumes:
+      - planner-data:/var/lib/planner      # planner.db: todos, plans, change log, Google tokens
+    ports:
+      - "127.0.0.1:8720:8720"              # Google sign-in redirect only (host-local)
+    networks:
+      - planner-internal
+      - notify-internal
+      - planner-egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 192m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8091/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Overlay: the notifier accepts planner events (plan, reminder, calendar) with the planner's own key.
+  notifier:
+    environment:
+      NOTIFIER_CLIENTS: hermes-broker=/run/secrets/broker_key,planner=/run/secrets/planner_key
+    secrets:
+      - source: notifier_planner_key
+        target: planner_key
+
+  # Overlay: the broker forwards Hermes' /planner/* calls to the planner.
+  hermes-broker:
+    environment:
+      PLANNER_URL: http://planner:8091
+      PLANNER_KEY_FILE: /run/secrets/planner_key
+      BROKER_PLANNER_WRITES_PER_MINUTE: "30"
+    secrets:
+      - source: planner_broker_key
+        target: planner_key
+    networks:
+      - ai-internal
+      - notify-internal
+      - planner-internal
+
+volumes:
+  planner-data:
+
+networks:
+  planner-internal:
+    driver: bridge
+    internal: true
+  planner-egress:
+    driver: bridge
+
+secrets:
+  planner_broker_key:
+    file: ./secrets/planner-broker.key        # services/planner/scripts/init-secrets.mjs
+  notifier_planner_key:
+    file: ./secrets/notifier-planner.key      # services/planner/scripts/init-secrets.mjs
+  google_oauth_client:
+    file: ./secrets/google-oauth-client.json  # the owner's Google "Desktop app" OAuth client

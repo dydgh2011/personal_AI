@@ -8,6 +8,7 @@ import { HealthModule } from './health/health.module.js';
 import { PublicationsModule } from './publications/publications.module.js';
 import { TestValidationsModule } from './test-validations/test-validations.module.js';
 import { TasksModule } from './tasks/tasks.module.js';
+import { WorkerAuthModule } from './worker-auth/worker-auth.module.js';
 import { WorkersModule } from './workers/workers.module.js';
 
 @Module({})
@@ -23,6 +24,7 @@ export class AppModule {
         AuthModule,
         TasksModule,
         WorkersModule,
+        WorkerAuthModule,
         HealthModule,
         PublicationsModule,
         TestValidationsModule,

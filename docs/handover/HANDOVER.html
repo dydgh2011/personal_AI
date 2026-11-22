@@ -1,0 +1,470 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Personal AI OS 인수인계 문서</title>
+<style>
+:root{--bg:#ffffff;--panel:#f6f7f9;--border:#d9dee5;--text:#1c232c;--muted:#5b6676;--accent:#2457c5;--ok:#177245;--warn:#9a6700;--bad:#b42318;--code:#eef1f5}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#0f1218;--panel:#161b22;--border:#2b333f;--text:#d9dfe8;--muted:#8d98a8;--accent:#76a7ff;--ok:#56c28b;--warn:#e1b44f;--bad:#f07a70;--code:#1c232d}}
+:root[data-theme="dark"]{--bg:#0f1218;--panel:#161b22;--border:#2b333f;--text:#d9dfe8;--muted:#8d98a8;--accent:#76a7ff;--ok:#56c28b;--warn:#e1b44f;--bad:#f07a70;--code:#1c232d}
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.65 system-ui,-apple-system,"Segoe UI","Malgun Gothic","Apple SD Gothic Neo",sans-serif}
+.layout{display:grid;grid-template-columns:260px minmax(0,1fr);max-width:1280px;margin:0 auto}
+nav.toc{position:sticky;top:0;height:100vh;overflow:auto;padding:24px 16px;border-right:1px solid var(--border);font-size:13.5px}
+nav.toc a{display:block;color:var(--muted);text-decoration:none;padding:3px 6px;border-radius:4px}
+nav.toc a:hover{color:var(--text);background:var(--panel)}
+nav.toc .h{font-weight:700;color:var(--text);margin:14px 0 4px}
+main{padding:28px 40px 80px;min-width:0}
+h1{font-size:28px;margin:0 0 6px}
+h2{font-size:21px;margin:44px 0 10px;padding-top:8px;border-top:1px solid var(--border)}
+h3{font-size:17px;margin:26px 0 8px}
+h4{font-size:15px;margin:18px 0 6px}
+p,li{max-width:82ch}
+a{color:var(--accent)}
+code{font-family:ui-monospace,"Cascadia Mono",Consolas,monospace;font-size:.88em;background:var(--code);padding:1px 5px;border-radius:4px}
+pre{background:var(--code);border:1px solid var(--border);border-radius:8px;padding:14px;overflow:auto;font:12.5px/1.5 ui-monospace,"Cascadia Mono",Consolas,monospace}
+pre code{background:none;padding:0}
+.table-wrap{overflow-x:auto;margin:10px 0 16px;border:1px solid var(--border);border-radius:8px}
+table{border-collapse:collapse;width:100%;font-size:13.5px}
+th,td{text-align:left;padding:7px 10px;border-bottom:1px solid var(--border);vertical-align:top}
+th{background:var(--panel);white-space:nowrap}
+tr:last-child td{border-bottom:0}
+.meta{color:var(--muted);font-size:13.5px}
+.callout{border:1px solid var(--border);border-left:4px solid var(--accent);background:var(--panel);border-radius:6px;padding:10px 14px;margin:14px 0}
+.callout.warn{border-left-color:var(--warn)}
+.callout.bad{border-left-color:var(--bad)}
+.callout.ok{border-left-color:var(--ok)}
+.badge{display:inline-block;font-size:12px;padding:0 8px;border-radius:10px;border:1px solid currentColor;white-space:nowrap}
+.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}.muted{color:var(--muted)}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:12px;margin:12px 0}
+.card{border:1px solid var(--border);border-radius:8px;padding:12px 14px;background:var(--panel)}
+.card b{display:block;margin-bottom:4px}
+.theme{position:fixed;right:16px;bottom:16px;border:1px solid var(--border);background:var(--panel);color:var(--text);border-radius:6px;padding:6px 10px;cursor:pointer;font:inherit;font-size:13px}
+@media (max-width:860px){.layout{display:block}nav.toc{position:static;height:auto;border-right:0;border-bottom:1px solid var(--border);padding:16px}main{padding:16px 16px 60px}h1{font-size:23px}}
+@media print{nav.toc,.theme{display:none}.layout{display:block}main{padding:0}}
+</style>
+</head>
+<body>
+<div class="layout">
+<nav class="toc" aria-label="목차">
+  <div class="h">Personal AI OS 인수인계</div>
+  <a href="#overview">1. 개요와 현재 상태</a>
+  <a href="#architecture">2. 전체 구조</a>
+  <a href="#security">3. 신뢰 경계와 보안 원칙</a>
+  <div class="h">서비스 상세</div>
+  <a href="#hermes">4.1 Hermes · 통합</a>
+  <a href="#broker">4.2 hermes-broker</a>
+  <a href="#controller">4.3 Controller</a>
+  <a href="#workers">4.4 Claude/Codex Worker</a>
+  <a href="#reposync">4.5 repo-sync</a>
+  <a href="#dashboard">4.6 Admin Dashboard</a>
+  <a href="#testrunner">4.7 Test Runner</a>
+  <a href="#publisher">4.8 GitHub Publisher</a>
+  <a href="#learning">4.9 Learning Service</a>
+  <div class="h">흐름 · 운영</div>
+  <a href="#flows">5. 핵심 흐름</a>
+  <a href="#data">6. 데이터 · 볼륨 · 비밀</a>
+  <a href="#networks">7. 네트워크</a>
+  <a href="#api">8. API 요약</a>
+  <a href="#runbook">9. 운영 Runbook</a>
+  <a href="#tests">10. 테스트</a>
+  <a href="#repo">11. 저장소 구조</a>
+  <a href="#risks">12. 제한 · 남은 위험</a>
+  <a href="#next">13. 다음 단계</a>
+  <a href="#glossary">14. 용어집</a>
+</nav>
+<main>
+<h1>Personal AI OS — 인수인계 문서</h1>
+<p class="meta">대상: 이 프로젝트를 처음 맡는 개발자·운영자 · 기준일: 2026-11-04 · 기준 커밋: <code>main bf37071</code>(기준선), <code>learning-os/l1 3a7a8ae</code>(Learning L1) · 위치: <code>D:\personal_ai</code></p>
+<div class="callout">이 문서는 실제 소스와 실행 중인 Docker 스택을 기준으로 작성했습니다. 비밀 값(토큰·키·비밀번호)은 들어 있지 않고 <b>파일 이름과 역할만</b> 적었습니다. 더 자세한 단계별 기록은 <code>docs/ROADMAP.md</code>와 각 <code>services/*/README.md</code>에 있습니다.</div>
+
+<!-- 1 -->
+<h2 id="overview">1. 개요와 현재 상태</h2>
+<p><b>Personal AI OS</b>는 한 사람(소유자)을 위한 개인용 AI 시스템이다. 모든 구성요소는 Windows PC의 Docker Desktop(WSL2) 위에서 컨테이너로 실행되고, 외부로 열린 포트 없이 <code>127.0.0.1</code>에만 바인딩된다.</p>
+<ul>
+  <li><b>대화 창구</b>: Hermes Agent(오픈소스 에이전트, Gemini 모델). Telegram 등에서 소유자의 요청을 받아 <b>작업을 위임</b>하는 관리자 역할만 한다. 직접 코딩하거나 셸을 쓰지 않는다.</li>
+  <li><b>작업 실행</b>: Claude Code Worker와 Codex Worker가 Controller에서 작업을 가져가 격리된 Git worktree에서 코드를 수정하고 커밋한다.</li>
+  <li><b>검토·승인</b>: 소유자가 Admin Dashboard에서 diff를 보고 커밋을 승인·거부한다.</li>
+  <li><b>게시 준비</b>: Test Runner가 승인 대상 커밋에 대해 테스트를 실제로 실행하고, GitHub Publisher가 Git 객체·테스트 증거·별도 게시 승인을 독립 검증한다. <b>실제 GitHub Push/PR은 현재 비활성</b>이다.</li>
+  <li><b>학습</b>: AI Learning OS(L1) — 학습 분야·아이디어·목표·버전이 있는 학습 로드맵·AI 초안(소유자 승인 필수).</li>
+</ul>
+
+<h3>단계별 상태</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>단계</th><th>내용</th><th>상태</th></tr></thead>
+<tbody>
+<tr><td>1–3</td><td>Task Controller, Claude Worker, Codex Worker</td><td><span class="badge ok">완료</span></td></tr>
+<tr><td>4 / A</td><td>Hermes ↔ Controller 연동, 위임 보안(broker, toolset 축소, guard)</td><td><span class="badge ok">완료</span> (A는 최소 개선안)</td></tr>
+<tr><td>B / C</td><td>GitHub Repository Registry, Registry ↔ Worker 연결</td><td><span class="badge ok">완료</span></td></tr>
+<tr><td>D</td><td>Private Repository 읽기 전용 연동</td><td><span class="badge warn">부분</span> 구현·Mock 검증, <b>실제 Private 저장소 미검증</b></td></tr>
+<tr><td>E-1 / E-1.5</td><td>Diff 검토·승인 기록, Admin Dashboard</td><td><span class="badge ok">완료</span></td></tr>
+<tr><td>E-2A / E-2B</td><td>Publisher dry-run, 정책 게이트(테스트 필수·Author 보존), 게시 승인, GitHub App 모듈</td><td><span class="badge ok">완료</span> · 실제 게시는 <b>비활성</b>, GitHub App 미설정</td></tr>
+<tr><td>Learning L0 / L1</td><td>조사·설계, Learning Service + Dashboard /learning</td><td><span class="badge ok">완료</span> · AI 실제 호출은 키 미설정으로 미검증</td></tr>
+<tr><td>Learning L2–L4</td><td>과제·평가·숙련도, 일정, Hermes/Graph 연동</td><td><span class="badge muted">미착수</span></td></tr>
+</tbody></table></div>
+
+<!-- 2 -->
+<h2 id="architecture">2. 전체 구조</h2>
+<pre><code>                 소유자 (Telegram · 브라우저 http://127.0.0.1:8710)
+                    │                                   │
+                    ▼                                   ▼
+   ┌──────────────────────────┐            ┌────────────────────────────┐
+   │ hermes (Gemini, 3rd-party)│            │ dashboard (Next.js BFF)     │
+   │  plugin personal_ai_task  │            │  로그인 · CSRF · 승인 화면   │
+   └────────────┬─────────────┘            └───┬───────────────┬────────┘
+     ai-internal│ X-Broker-Key       admin-internal│      learning-internal│
+                ▼                               │                       ▼
+   ┌──────────────────────────┐                 │          ┌────────────────────────┐
+   │ hermes-broker            │──ai-internal──┐ │          │ learning (L1)          │
+   │  delegator 토큰 보유      │               ▼ ▼          │  learning-data 볼륨     │
+   └──────────────────────────┘     ┌─────────────────────┐ └──────────┬─────────────┘
+                                    │ controller (NestJS)  │            │ learning-egress
+         default 네트워크 ◀──────────│  SQLite (v6)        │            ▼ (AI 제공자, 설정 시)
+   ┌───────────────┐ ┌──────────────┐│  작업·프로젝트·리뷰  │
+   │ claude-worker │ │ codex-worker ││  테스트·게시 기록     │◀── GitHub API (읽기, PAT 선택)
+   └──────┬────────┘ └──────┬───────┘└──┬─────────────┬────┘
+          │ bundle 기록       │          │publisher-    │test-internal (인터넷 없음)
+          ▼                   ▼          │internal       ▼
+   publisher-artifacts-{claude,codex}    │       ┌──────────────┐
+          │ (읽기 전용)                    ▼       │ test-runner  │ 테스트를 uid 10001로 실행,
+          ├───────────────────────▶ ┌──────────────────┐ 결과 HMAC 서명
+          │                          │ github-publisher │──publisher-egress──▶ api.github.com (GET)
+   repo-sync (도구, 필요 시 실행) ──▶ │  사전검증 12단계   │
+     repo-cache → export 볼륨         └──────────────────┘</code></pre>
+
+<h3>구성요소 한눈에 보기</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>컨테이너</th><th>소스</th><th>기술</th><th>역할</th><th>호스트 포트</th></tr></thead>
+<tbody>
+<tr><td><code>hermes</code></td><td><code>compose.yaml</code>, <code>services/hermes-integration</code></td><td>nousresearch/hermes-agent:stable, Gemini</td><td>대화형 관리자. 작업 위임·상태 보고</td><td>127.0.0.1:8642(API), 9119(웹 UI)</td></tr>
+<tr><td><code>hermes-broker</code></td><td><code>services/hermes-broker</code></td><td>Node/TS</td><td>Hermes 대신 Controller 토큰을 보유하고 허용된 경로만 중계</td><td>없음</td></tr>
+<tr><td><code>controller</code></td><td><code>services/controller</code></td><td>NestJS 12, better-sqlite3</td><td>작업 큐·상태, 프로젝트 Registry, 리뷰, 테스트 기록, 게시 기록</td><td>127.0.0.1:8700</td></tr>
+<tr><td><code>claude-worker</code> / <code>codex-worker</code></td><td><code>services/worker</code>, <code>images/coding-worker</code></td><td>Node/TS + Claude Code / Codex CLI</td><td>작업을 가져가 worktree에서 실행·커밋·diff·bundle 기록</td><td>없음</td></tr>
+<tr><td><code>repo-sync</code> (tools 프로필)</td><td><code>services/repo-sync</code></td><td>Node/TS + git</td><td>GitHub 저장소 읽기 전용 미러, 에이전트별 export</td><td>없음 (필요 시 1회 실행)</td></tr>
+<tr><td><code>dashboard</code></td><td><code>services/dashboard</code></td><td>Next.js 16.4.3, React 19.3.1</td><td>소유자용 관리 화면(BFF). 토큰은 서버에만</td><td>127.0.0.1:8710</td></tr>
+<tr><td><code>test-runner</code></td><td><code>services/test-runner</code></td><td>Node/TS</td><td>승인된 테스트 명령을 정확한 커밋에 대해 샌드박스 실행, 증거 서명</td><td>없음</td></tr>
+<tr><td><code>github-publisher</code></td><td><code>services/github-publisher</code></td><td>Node/TS + git</td><td>게시 사전검증(dry-run), 게시 계획. 실제 게시 비활성</td><td>없음</td></tr>
+<tr><td><code>learning</code></td><td><code>services/learning</code></td><td>NestJS 12, better-sqlite3</td><td>학습 분야·아이디어·목표·로드맵 버전·AI 초안</td><td>없음 (Dashboard 경유)</td></tr>
+</tbody></table></div>
+<p>모든 서비스는 비root(대부분 uid 1000), <code>cap_drop: ALL</code>, <code>no-new-privileges</code>, 가능한 곳은 read-only 루트 파일시스템, 메모리/CPU/PID 제한, 로그 로테이션(10MB×3)을 사용한다. <b>어떤 컨테이너에도 Docker 소켓을 마운트하지 않는다.</b></p>
+
+<!-- 3 -->
+<h2 id="security">3. 신뢰 경계와 보안 원칙</h2>
+<h3>누가 어떤 자격 증명을 갖는가</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>주체</th><th>가진 것</th><th>할 수 있는 것</th><th>할 수 없는 것</th></tr></thead>
+<tbody>
+<tr><td>Hermes(LLM)</td><td>broker 호출 키(<code>X-Broker-Key</code>)만. Controller 토큰 없음</td><td>broker를 통해 작업 생성·조회·취소, 프로젝트 조회, diff/review 조회(자기 작업만)</td><td>승인, 게시, 터미널/코드 실행(toolset 제거), GitHub 토큰 사용, Learning 접근</td></tr>
+<tr><td>hermes-broker</td><td>Controller <b>delegator</b> 토큰</td><td>고정된 허용 경로만 중계(호출량 제한)</td><td>approve/reject, 게시, 관리자 API</td></tr>
+<tr><td>Worker</td><td>Controller <b>worker</b> 토큰(에이전트별)</td><td>자기 에이전트 작업 claim·보고, 자기 export만 읽기</td><td>GitHub 토큰, 다른 에이전트 작업, 관리자 API, Publisher 키</td></tr>
+<tr><td>Dashboard 서버</td><td>Controller <b>admin</b>(name=dashboard) 토큰, Learning 토큰, 관리자 비밀번호 해시</td><td>모든 관리 기능(소유자 로그인 후)</td><td>브라우저로 토큰 전달(하지 않음)</td></tr>
+<tr><td>Test Runner</td><td><b>test-runner</b> 토큰, 증거 서명 키(root 프로세스 환경 변수)</td><td>테스트 실행 claim·결과 보고</td><td>그 외 모든 API. 테스트 프로세스(uid 10001)는 토큰·키·다른 저장소 접근 불가</td></tr>
+<tr><td>Publisher</td><td><b>publisher</b> 토큰, 증거 검증 키. (GitHub App 키는 미설정)</td><td>게시 요청 claim·결과 보고, GitHub 읽기(GET)</td><td>승인, 작업 생성. 현재 쓰기 백엔드는 <code>disabled</code></td></tr>
+<tr><td>repo-sync</td><td>읽기 전용 PAT(선택, <code>compose.github.yaml</code>)</td><td>git fetch(미러)</td><td>Controller 접근</td></tr>
+<tr><td>Learning</td><td>Dashboard 토큰(검증용), AI 키 파일(비어 있음)</td><td>자체 DB</td><td>다른 서비스 접근(네트워크상 Dashboard만 보임)</td></tr>
+</tbody></table></div>
+
+<h3>반드시 지켜야 할 정책</h3>
+<ul>
+  <li><b>POLICY A — 테스트 필수</b>: 승인 대상 커밋에 대해 Test Runner가 실행·서명한 통과 기록이 없으면 게시 불가. Publisher는 설정값이 <code>PUBLISHER_REQUIRE_REPORTED_TESTS=true</code>가 아니면 시작하지 않는다.</li>
+  <li><b>POLICY B — Worker Author 보존</b>: 승인된 커밋 SHA를 그대로 게시. author/committer/메시지 재작성 금지. <code>PUBLISHER_COMMIT_AUTHOR_POLICY=preserve_worker</code> 고정.</li>
+  <li><b>승인 분리</b>: 코드 리뷰 승인 ≠ 게시 승인 ≠ 게시 요청. 각각 별도 확인 단계와 CSRF 검사.</li>
+  <li><b>실제 GitHub Push/PR/Merge는 현재 비활성</b>(Controller <code>CONTROLLER_PUBLISH_ENABLED=false</code>, Publisher <code>PUBLISHER_PUBLISH_BACKEND=disabled</code>).</li>
+  <li><b>AI 출력은 제안일 뿐</b>: Learning 로드맵은 소유자가 차이를 보고 승인해야 바뀐다. 사용자 고정 Deadline은 AI가 바꾸지 않는다.</li>
+  <li>비밀 값은 로그·응답·커밋에 남기지 않는다. 모든 포트는 127.0.0.1. Docker 소켓 마운트 금지.</li>
+</ul>
+
+<!-- 4 -->
+<h2 id="hermes">4.1 Hermes와 통합 (<code>services/hermes-integration</code>)</h2>
+<p>Hermes는 외부 프로젝트(<code>nousresearch/hermes-agent:stable</code>)이며 설정·데이터는 <code>data/hermes/</code>(bind mount)에 있다. 기본 모델은 Gemini(<code>gemini-3.5-flash-lite</code>), 키는 <code>secrets/hermes.env</code>.</p>
+<ul>
+  <li><b>플러그인 <code>personal_ai_task</code></b> (<code>plugins/personal-ai-controller/</code>): 동작 <code>submit, status, result, wait, list, cancel, projects, system_status, review</code>. broker URL과 클라이언트 키 파일만 사용한다.</li>
+  <li><b>Skill</b>: <code>skills/personal-ai-controller/SKILL.md</code> — 언제 어떻게 작업을 위임하는지.</li>
+  <li><b>SOUL 규칙</b>: <code>hermes-config/SOUL.personal-ai.md</code> — 관리자 역할, 승인 요청 거절 등.</li>
+  <li><b>toolset 축소</b>: telegram/cli/cron 플랫폼에서 <code>terminal, code_execution, file, computer_use, delegation</code> 제거. <code>scripts/configure-hermes.mjs</code>가 적용하고, 원본은 <code>data/hermes/backups/</code>에 보관.</li>
+  <li><b>pre_tool_call guard</b>(<code>guard.py</code>): browser 도구의 <code>file:</code>·내부 서비스 접근 차단(패턴 기반 보조 수단).</li>
+  <li>참고: Hermes에는 자체 memory(에이전트 메모/사용자 프로필)와 kanban 기능이 있다. 이는 Hermes 내부 기능이며 Personal AI의 지식 그래프가 아니다. 학습 데이터의 원본은 Learning DB다.</li>
+</ul>
+
+<h2 id="broker">4.2 hermes-broker (<code>services/hermes-broker</code>)</h2>
+<p>Hermes가 Controller 토큰을 갖지 않도록 하는 자격 증명 중계기. 호출자는 <code>X-Broker-Key</code>를 보내야 하며(없으면 401), 허용 경로만 Controller로 전달한다: <code>GET /system/status, /projects, /projects/:id, /tasks, /tasks/:id, /tasks/:id/diff, /tasks/:id/review</code>, <code>POST /tasks, /tasks/:id/cancel</code>. 작업 생성은 분/시간당 제한이 있다. 그 외(approve, publication 등)는 404.</p>
+
+<h2 id="controller">4.3 Controller (<code>services/controller</code>)</h2>
+<p>NestJS 12 + better-sqlite3. 단일 진실 공급원(작업·프로젝트·리뷰·테스트·게시). DB는 <code>controller-data</code> 볼륨의 <code>/var/lib/controller/controller.db</code>(WAL, synchronous=FULL).</p>
+<h4>역할(토큰 → principal)</h4>
+<p><code>admin</code>(name=admin 운영자 / name=dashboard), <code>worker</code>(claude/codex), <code>delegator</code>(hermes), <code>publisher</code>, <code>test-runner</code>. 토큰은 <code>secrets/controller.env</code>에서 읽고 메모리에는 SHA-256 digest만 둔다. 모든 핸들러는 기본적으로 admin을 요구하며 <code>@RequireRole</code>로 완화한다.</p>
+<h4>스키마 (마이그레이션 v1–v6)</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>버전</th><th>테이블</th><th>핵심</th></tr></thead>
+<tbody>
+<tr><td>v1–v2</td><td><code>tasks</code></td><td>상태 queued → running → completed/failed, cancel_requested → canceled. lease·heartbeat, created_by, idempotency key</td></tr>
+<tr><td>v3</td><td><code>projects</code></td><td>local/github, 허용 에이전트, enabled, allowCodeChanges, 동기화 상태, cachedHeadSha. v6에서 <code>test_commands</code> 추가</td></tr>
+<tr><td>v4</td><td><code>reviews</code></td><td>(task, head SHA)당 1행. awaiting_approval → approved/rejected, invalidated. 조건부 UPDATE로 원자적 결정</td></tr>
+<tr><td>v5</td><td><code>publications</code></td><td>dry-run/publish 요청. 리뷰당 진행 중 1개, 게시 1회(unique index)</td></tr>
+<tr><td>v6</td><td><code>test_validations</code>, <code>publish_authorizations</code></td><td>테스트 실행 기록(서명된 증거), 별도 게시 승인(30분 만료, 1회용, 멱등 키)</td></tr>
+</tbody></table></div>
+<h4>모듈</h4>
+<p>Tasks, Workers(내부 API), Projects(+GitHub client), Reviews, TestValidations, Publications, Health. 리뷰 diff는 Worker 보고서의 diff가 해당 커밋을 정확히 설명할 때만 신뢰한다. Private 프로젝트의 patch는 delegator(Hermes)에게 주지 않는다.</p>
+
+<h2 id="workers">4.4 Claude / Codex Worker (<code>services/worker</code>)</h2>
+<ul>
+  <li>폴링(5초)으로 자기 에이전트 작업을 claim → 작업 공간 준비 → CLI 실행(heartbeat, 타임아웃 30분) → 커밋 → 결과 보고.</li>
+  <li><b>작업 공간</b>(<code>workspaces/&lt;agent&gt;</code> bind mount): local 프로젝트(<code>sandbox</code>), GitHub 프로젝트는 export 볼륨(<code>/repo-cache</code>, 읽기 전용)에서 만든 자체 bare clone <code>repos/&lt;id&gt;.git</code>, 작업마다 worktree <code>.worktrees/&lt;taskId&gt;</code>, 브랜치 <code>&lt;agent&gt;/task-&lt;taskId&gt;</code>.</li>
+  <li>신뢰하지 않는 저장소 설정: hooks 비활성, symlink를 일반 파일로, fsck, 서브모듈 미초기화, file 프로토콜만.</li>
+  <li>커밋 후 <b>diff 기록</b>(파일별 ±, 바이너리/민감 파일 표시, 200KB 이하 patch)과 GitHub 프로젝트는 <b>git bundle + manifest</b>를 <code>/artifacts</code>(owner-only 0700)에 기록 → Test Runner·Publisher가 읽음. 이전 작업은 <code>export-artifact</code> CLI로 생성.</li>
+  <li>로그인 정보: <code>data/claude-home</code>, <code>data/codex-home</code>(구독 로그인, API 키 과금 아님). Codex는 bubblewrap용 seccomp 프로필(<code>images/coding-worker/seccomp/</code>)을 사용 — <b>임의로 완화하지 말 것</b>.</li>
+</ul>
+
+<h2 id="reposync">4.5 repo-sync (<code>services/repo-sync</code>)</h2>
+<p>평소에는 실행되지 않는 도구 컨테이너(<code>profiles: tools</code>). <code>sync</code>: GitHub 저장소를 <code>repo-cache</code>에 bare 미러로 가져옴(체크아웃 없음, 크기 제한 2GiB/전체 20GiB/파일 100MB, Private는 PAT extraHeader). <code>export</code>: 에이전트별(<code>repo-export-claude/-codex</code>) 및 publisher용(<code>repo-export-publisher</code>) 볼륨에 허용된 프로젝트만 독립 복사본으로 둔다. 권한을 회수하면 export에서 사라진다. 실행은 <code>sync-project.ps1</code>, <code>provision-exports.ps1</code>.</p>
+
+<h2 id="dashboard">4.6 Admin Dashboard (<code>services/dashboard</code>)</h2>
+<ul>
+  <li><b>BFF</b>: 브라우저는 Dashboard 서버와만 통신. 서버가 Controller/Learning을 토큰으로 호출(<code>src/lib/controller.ts</code>, <code>src/lib/learning.ts</code>, <code>server-only</code>).</li>
+  <li><b>인증</b>: 단일 관리자(<code>owner</code>), scrypt 해시(<code>secrets/dashboard-admin.hash</code>). 서버 메모리 세션(유휴 30분, 최대 8시간), HttpOnly+SameSite=Strict 쿠키.</li>
+  <li><b>CSRF</b>: 세션별 토큰 + Origin/Sec-Fetch-Site 검사. <code>Referrer-Policy: same-origin</code>(no-referrer는 Origin: null 문제를 일으켰음). 실패 시 원래 화면으로 돌아가 메시지 표시.</li>
+  <li><b>로그인 제한</b>: IP·사용자별 15분 5회. 서명된 장치 쿠키로 로컬 공격자가 소유자를 잠그지 못하게 함. <code>server-entry.cjs</code>가 TCP peer로 클라이언트 IP를 결정(위조된 X-Forwarded-For 무시, <code>DASHBOARD_TRUSTED_PROXIES</code>만 예외).</li>
+  <li><b>화면</b>: Overview, Tasks, Projects, Code Reviews(+Publishing 패널), Learning(Overview/Ideas/Roadmap Explorer). 메뉴는 <code>src/modules/registry.ts</code>의 정적 배열(런타임 플러그인 아님).</li>
+  <li>보안 헤더: CSP, X-Frame-Options DENY, nosniff, no-store. diff·사용자 입력은 React 텍스트로만 렌더링.</li>
+</ul>
+
+<h2 id="testrunner">4.7 Test Runner (<code>services/test-runner</code>)</h2>
+<ul>
+  <li>Controller의 <code>test_validations</code>를 claim → Worker bundle과 publisher export로 <b>정확한 커밋</b>을 checkout(검증 후 객체 복사, alternates 제거) → 프로젝트에 관리자가 등록한 <code>testCommands</code>를 실행.</li>
+  <li>오케스트레이터는 root지만 capability는 CHOWN, SETUID, SETGID, KILL, DAC_READ_SEARCH만. 테스트는 <b>uid 10001</b>, 깨끗한 환경 변수(BASE_SHA, HEAD_SHA 등만), <code>test-internal</code> 네트워크(인터넷 없음). 남은 프로세스는 종료.</li>
+  <li>결과(종료 코드·시간·출력 hash)를 evidence JSON으로 만들고 HMAC-SHA256으로 서명. Controller는 키가 없고 상태를 다시 계산해 "passed"를 함부로 올리지 못함.</li>
+</ul>
+
+<h2 id="publisher">4.8 GitHub Publisher (<code>services/github-publisher</code>)</h2>
+<p>요청(dry-run/publish)을 claim해 아래 순서로 검사하고, 처음 실패한 사유 코드를 <code>reason</code>으로 보고한다. 결과 필드: <code>eligible</code>(게시 승인 제외 모두 통과), <code>canPublish</code>(+유효한 게시 승인).</p>
+<div class="table-wrap"><table>
+<thead><tr><th>#</th><th>검사</th><th>사유 코드</th></tr></thead>
+<tbody>
+<tr><td>1–2</td><td>작업 완료, 리뷰 승인(최신 리뷰)</td><td>TASK_NOT_COMPLETED, REVIEW_NOT_APPROVED</td></tr>
+<tr><td>3–4</td><td>bundle 무결성, head SHA, tree SHA</td><td>ARTIFACT_INVALID, COMMIT_MISMATCH, TREE_MISMATCH</td></tr>
+<tr><td>5</td><td>신뢰 사본 정체성, base가 기본 브랜치 이력·head 조상, 선형 이력</td><td>BASE_INVALID</td></tr>
+<tr><td>6</td><td>변경 파일 = 승인 시 표시 목록, 리뷰 완전성, Author/Committer/메시지 보존</td><td>FILES_MISMATCH, REVIEW_INCOMPLETE, AUTHOR_CHANGED</td></tr>
+<tr><td>7–9</td><td>서명된 테스트 증거, 전부 exit 0, 같은 커밋·tree·명령</td><td>TEST_REPORT_MISSING, TEST_EVIDENCE_INVALID, TEST_FAILED, TEST_ABORTED, TEST_SKIPPED, TEST_COMMANDS_CHANGED, TEST_COMMIT_MISMATCH</td></tr>
+<tr><td>10</td><td>허용 저장소(<code>PUBLISHER_ALLOWED_REPOSITORIES</code>), 원격 저장소 id/기본 브랜치</td><td>REPOSITORY_NOT_ALLOWED, REMOTE_REPOSITORY_MISMATCH</td></tr>
+<tr><td>11</td><td>원격 기본 브랜치가 승인 base 그대로, 대상 브랜치 미존재</td><td>REMOTE_BASE_CHANGED, TARGET_BRANCH_EXISTS</td></tr>
+<tr><td>12</td><td>별도 게시 승인</td><td>PUBLISH_APPROVAL_REQUIRED</td></tr>
+</tbody></table></div>
+<p>GitHub App 모듈(<code>src/github-app.ts</code>): App JWT, 저장소 1개로 좁힌 설치 토큰(캐시·만료 5분 전 갱신), 허용 목록, 재시도·rate limit, 감사 로그(<code>github-audit.jsonl</code>, 토큰 값 없음), 기존 커밋 객체를 그대로 push하는 writer. <b>Mock으로만 검증</b>했고 설정은 <code>disabled|mock</code>만 허용한다. 실행 기록은 <code>publisher-data</code> 볼륨의 저널(<code>publications.jsonl</code>)에도 남는다.</p>
+
+<h2 id="learning">4.9 Learning Service (<code>services/learning</code>, L1)</h2>
+<ul>
+  <li>NestJS + SQLite(<code>learning-data</code> 볼륨, 스키마 v1): domains(6 상태, 계층, 보관만), ideas(Inbox, 자동 일정 편성 없음), goals(사용자 고정 Deadline), roadmaps / roadmap_versions(불변) / roadmap_nodes / prerequisite_edges(DAG) / skills(공유, canonical 이름) / ai_proposals / ai_calls(비용) / audit_events.</li>
+  <li><b>모든 변경은 제안 → 승인</b>: 수동 편집, AI 초안, 복원, 가져오기. 적용은 base version 조건부 UPDATE(충돌 409 <code>VERSION_CONFLICT</code>). 순환 422 <code>PREREQUISITE_CYCLE</code>(경로 포함). 복원은 새 버전.</li>
+  <li><b>AI Provider</b>(<code>src/provider/provider.ts</code>): Gemini REST, JSON schema 출력 + 서버 재검증, 월 상한(호출 전 최악 비용 검사), 타임아웃·재시도 1회, 호출/비용 기록. 설정 전에는 <code>PROVIDER_NOT_CONFIGURED</code>. 키는 헤더로만.</li>
+  <li>JSON export/import(빈 DB에만, 버전 hash 재검증), 백업/복원 스크립트(볼륨 밖 <code>data/backups/learning/</code>, 최근 14개).</li>
+  <li>네트워크: <code>learning-internal</code>(Dashboard만), <code>learning-egress</code>(AI 제공자용). Hermes 연동은 L4 예정.</li>
+</ul>
+
+<!-- 5 -->
+<h2 id="flows">5. 핵심 흐름</h2>
+<h3>5.1 코딩 작업 → 리뷰 → 게시 준비</h3>
+<ol>
+  <li>소유자가 Telegram으로 Hermes에 요청 → Hermes가 <code>personal_ai_task submit</code> → broker → Controller <code>POST /tasks</code>(프로젝트·에이전트 지정).</li>
+  <li>해당 Worker가 claim → worktree에서 CLI 실행 → 커밋 → diff·bundle 기록 → <code>complete</code>.</li>
+  <li>Controller가 리뷰(awaiting_approval)를 만들고, 프로젝트에 테스트 명령이 있으면 <b>테스트 실행을 자동 요청</b>.</li>
+  <li>Test Runner가 실행·서명 → 결과 저장.</li>
+  <li>소유자가 Dashboard Code Review에서 diff 확인 → <b>Approve commit</b>(체크박스 확인).</li>
+  <li>Publishing 패널에서 <b>Validate / Dry-run</b> → Publisher가 12단계 검사 → <code>eligible</code>.</li>
+  <li><b>Authorize publishing…</b>(별도 확인) → 게시 승인(30분) → Dry-run 다시 실행 시 <code>canPublish=true</code>.</li>
+  <li>Publish는 현재 비활성(<code>PUBLISH_DISABLED</code>). 활성화 시 Publisher가 승인된 커밋을 그대로 <code>personal-ai/&lt;task&gt;</code> 브랜치로 push하고 draft PR을 만든다(E-2B 이후 단계).</li>
+</ol>
+<h3>5.2 학습 로드맵</h3>
+<ol>
+  <li>Learning Overview에서 분야 → 목표(주간 시간, Deadline) → 로드맵 생성.</li>
+  <li>Explorer에서 수동 편집(JSON) 또는 AI 초안 → 제안 저장(검증 실패 시 invalid).</li>
+  <li>차이 확인 → 체크박스 → 승인 → 새 버전. 이전 버전 복원은 새 버전으로.</li>
+</ol>
+
+<!-- 6 -->
+<h2 id="data">6. 데이터 · 볼륨 · 비밀</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>저장 위치</th><th>종류</th><th>내용</th></tr></thead>
+<tbody>
+<tr><td><code>controller-data</code></td><td>볼륨</td><td>controller.db (+ 마이그레이션 전 수동 백업 <code>.bak-*</code>)</td></tr>
+<tr><td><code>learning-data</code></td><td>볼륨</td><td>learning.db</td></tr>
+<tr><td><code>dashboard-data</code></td><td>볼륨</td><td>감사 로그 audit.log (JSONL)</td></tr>
+<tr><td><code>publisher-data</code></td><td>볼륨</td><td>publications.jsonl(저널), github-audit.jsonl</td></tr>
+<tr><td><code>repo-cache</code></td><td>볼륨</td><td>GitHub bare 미러 (repo-sync만 접근)</td></tr>
+<tr><td><code>repo-export-claude/-codex/-publisher</code></td><td>볼륨</td><td>허용된 프로젝트만 독립 복사(0700)</td></tr>
+<tr><td><code>publisher-artifacts-claude/-codex</code></td><td>볼륨</td><td>작업별 git bundle + manifest(0700)</td></tr>
+<tr><td><code>data/hermes</code>, <code>data/claude-home</code>, <code>data/codex-home</code></td><td>bind</td><td>Hermes 설정·기억, CLI 로그인 정보·worker 상태</td></tr>
+<tr><td><code>workspaces/claude</code>, <code>workspaces/codex</code></td><td>bind</td><td>sandbox, 자체 clone, 작업 worktree</td></tr>
+<tr><td><code>data/backups/learning</code></td><td>호스트</td><td>Learning DB 백업</td></tr>
+</tbody></table></div>
+<h4>비밀 파일 (<code>secrets/</code>, Git 제외 — 값은 절대 출력·커밋 금지)</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>파일</th><th>사용처</th><th>생성 스크립트</th></tr></thead>
+<tbody>
+<tr><td><code>controller.env</code></td><td>controller: admin/worker/hermes/dashboard/publisher/test-runner 토큰</td><td>controller <code>init-secrets</code> + 각 서비스 init 스크립트(추가만)</td></tr>
+<tr><td><code>claude-worker.controller.env</code>, <code>codex-worker.controller.env</code></td><td>각 worker 토큰</td><td>controller <code>init-secrets</code></td></tr>
+<tr><td><code>hermes.env</code></td><td>Hermes: Gemini 키, Telegram 봇 토큰, 웹 UI basic auth</td><td>수동</td></tr>
+<tr><td><code>hermes-controller.token</code>, <code>hermes-broker-client.key</code></td><td>broker의 delegator 토큰, Hermes→broker 키</td><td><code>add-hermes-token</code>, <code>add-client-key</code></td></tr>
+<tr><td><code>github-readonly.token</code></td><td>읽기 전용 PAT(controller·repo-sync, overlay)</td><td>수동</td></tr>
+<tr><td><code>dashboard-controller.token</code>, <code>dashboard-admin.hash</code>, <code>dashboard-admin.password</code></td><td>Dashboard → Controller 토큰, 로그인 해시, 초기 비밀번호 평문(삭제 권장)</td><td>dashboard <code>init-secrets</code></td></tr>
+<tr><td><code>publisher-controller.token</code></td><td>Publisher 토큰</td><td>publisher <code>init-secrets</code></td></tr>
+<tr><td><code>test-runner.env</code>, <code>test-evidence.key</code></td><td>Runner 토큰+서명 키, Publisher 검증 키</td><td>test-runner <code>init-secrets</code></td></tr>
+<tr><td><code>learning.env</code>, <code>learning-dashboard.token</code>, <code>learning-ai.key</code></td><td>Learning 토큰·AI 설정, Dashboard용 토큰, AI 키(비어 있음)</td><td>learning <code>init-secrets</code></td></tr>
+<tr><td><code>hermes.controller.env</code></td><td>무효화된 예전 admin 사본(401)</td><td>—</td></tr>
+</tbody></table></div>
+
+<!-- 7 -->
+<h2 id="networks">7. 네트워크</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>네트워크</th><th>참여 서비스</th><th>목적</th></tr></thead>
+<tbody>
+<tr><td><code>ai-internal</code></td><td>hermes, hermes-broker, controller</td><td>Hermes → broker → controller</td></tr>
+<tr><td><code>default</code></td><td>controller, claude-worker, codex-worker</td><td>Worker ↔ controller</td></tr>
+<tr><td><code>admin-internal</code></td><td>dashboard, controller</td><td>BFF</td></tr>
+<tr><td><code>learning-internal</code></td><td>dashboard, learning</td><td>BFF</td></tr>
+<tr><td><code>publisher-internal</code></td><td>github-publisher, controller</td><td>claim/결과</td></tr>
+<tr><td><code>publisher-egress</code></td><td>github-publisher</td><td>api.github.com (GET)</td></tr>
+<tr><td><code>test-internal</code> (internal)</td><td>test-runner, controller</td><td>인터넷 없음</td></tr>
+<tr><td><code>repo-egress</code></td><td>repo-sync</td><td>git fetch</td></tr>
+<tr><td><code>learning-egress</code></td><td>learning</td><td>AI 제공자(설정 시)</td></tr>
+</tbody></table></div>
+
+<!-- 8 -->
+<h2 id="api">8. API 요약</h2>
+<h3>Controller (<code>http://127.0.0.1:8700</code>, Bearer 토큰)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>경로</th><th>역할</th></tr></thead>
+<tbody>
+<tr><td><code>GET /health</code></td><td>공개</td></tr>
+<tr><td><code>GET /system/status</code></td><td>admin, delegator</td></tr>
+<tr><td><code>GET/POST /tasks</code>, <code>GET /tasks/:id</code>, <code>POST /tasks/:id/cancel</code></td><td>admin, delegator(자기 작업)</td></tr>
+<tr><td><code>GET/POST /projects</code>, <code>GET/PATCH /projects/:id</code>, <code>GET /projects/:id/status</code>, <code>GET /github/repositories</code></td><td>admin(조회 일부 delegator)</td></tr>
+<tr><td><code>GET /tasks/:id/diff</code>, <code>/review</code></td><td>admin, delegator</td></tr>
+<tr><td><code>POST /tasks/:id/approve|reject</code>, <code>GET /reviews</code></td><td>admin</td></tr>
+<tr><td><code>POST/GET /tasks/:id/tests</code></td><td>admin</td></tr>
+<tr><td><code>POST /tasks/:id/publication/dry-run|authorize|publish</code>, <code>GET /tasks/:id/publication</code></td><td>admin</td></tr>
+<tr><td><code>/internal/workers/claim</code>, <code>/internal/tasks/:id/heartbeat|complete|fail|cancel-ack|observed-head</code>, <code>/internal/projects</code></td><td>worker</td></tr>
+<tr><td><code>/internal/publisher/claim</code>, <code>/internal/publisher/publications/:id/result</code></td><td>publisher</td></tr>
+<tr><td><code>/internal/test-runner/claim</code>, <code>/internal/test-runner/validations/:id/result</code></td><td>test-runner</td></tr>
+</tbody></table></div>
+<p>오류는 <code>{statusCode, code, message}</code> 형식(예: 409 <code>REVIEW_NOT_APPROVED</code>). 결정·요청자는 <code>X-Approver</code> 헤더로 <code>dashboard:owner</code>처럼 기록된다.</p>
+<h3>Learning (Dashboard 내부 전용, <code>http://learning:3000</code>)</h3>
+<p><code>/domains</code>, <code>/ideas</code>, <code>/goals</code>(GET/POST/PATCH), <code>/roadmaps</code>, <code>/roadmaps/:id</code>, <code>/versions</code>, <code>/versions/:versionId</code>, <code>/proposals</code>(GET/POST), <code>/proposals/generate</code>, <code>/proposals/:pid/diff|apply|reject</code>, <code>/restore</code>, <code>/export</code>, <code>/import</code>, <code>/status</code>, <code>/health</code>.</p>
+
+<!-- 9 -->
+<h2 id="runbook">9. 운영 Runbook (PowerShell 기준, 작업 폴더 <code>D:\personal_ai</code>)</h2>
+<h4>전체 compose 파일 묶음</h4>
+<pre><code>$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml".Split(' ')
+docker compose @F ps</code></pre>
+<div class="callout warn"><b>한 서비스만 다시 만들 때는 항상 <code>--no-deps</code></b>를 붙인다. 예: <code>docker compose @F up -d --build --no-deps dashboard</code>. 다른 컨테이너를 불필요하게 재생성하지 않는 것이 이 프로젝트의 원칙이다. <code>compose.github.yaml</code>은 PAT overlay로, 빼면 controller 설정이 바뀌어 재생성된다.</div>
+<h4>처음 설치 순서</h4>
+<pre><code>node services/controller/scripts/init-secrets.mjs
+node services/controller/scripts/add-hermes-token.mjs
+node services/hermes-broker/scripts/add-client-key.mjs
+node services/hermes-integration/scripts/configure-hermes.mjs
+node services/dashboard/scripts/init-secrets.mjs
+node services/github-publisher/scripts/init-secrets.mjs
+node services/test-runner/scripts/init-secrets.mjs
+node services/learning/scripts/init-secrets.mjs
+docker compose @F up -d --build</code></pre>
+<h4>자주 하는 작업</h4>
+<div class="table-wrap"><table>
+<thead><tr><th>작업</th><th>명령</th></tr></thead>
+<tbody>
+<tr><td>GitHub 프로젝트 동기화</td><td><code>powershell -ExecutionPolicy Bypass -File services\repo-sync\scripts\sync-project.ps1 -ProjectId hello-world</code></td></tr>
+<tr><td>export 재구성(권한 변경 후)</td><td><code>powershell -ExecutionPolicy Bypass -File services\repo-sync\scripts\provision-exports.ps1</code></td></tr>
+<tr><td>Worker 동작 확인</td><td><code>services\worker\scripts\verify-worker.ps1</code></td></tr>
+<tr><td>프로젝트 테스트 명령 등록</td><td><code>PATCH /projects/:id</code> body <code>{"testCommands":[{"name","argv","timeoutSeconds"}]}</code> (admin)</td></tr>
+<tr><td>이전 작업 bundle 생성</td><td><code>docker exec personal_ai-codex-worker-1 node /opt/agent-worker/export-artifact.js --task &lt;id&gt; --project &lt;p&gt; --base &lt;sha&gt;</code></td></tr>
+<tr><td>Learning 백업 / 복원</td><td><code>node services/learning/scripts/backup.mjs</code> / <code>restore.mjs &lt;file&gt;</code></td></tr>
+<tr><td>Dashboard 비밀번호 변경</td><td><code>'새비밀번호' | node services/dashboard/scripts/init-secrets.mjs set-password</code> 후 <code>docker restart personal_ai-dashboard-1</code></td></tr>
+<tr><td>토큰 교체</td><td><code>rotate-admin-token.mjs</code>, <code>rotate-hermes-token.mjs</code> 후 해당 서비스 재생성</td></tr>
+<tr><td>Controller DB 백업(마이그레이션 전 필수)</td><td>컨테이너 안에서 better-sqlite3 <code>.backup()</code> (이전 단계 기록 참고). 스크립트화는 남은 과제</td></tr>
+</tbody></table></div>
+
+<!-- 10 -->
+<h2 id="tests">10. 테스트</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>대상</th><th>실행</th><th>최근 결과</th></tr></thead>
+<tbody>
+<tr><td>controller</td><td><code>npm test</code> (vitest, Docker 빌드 중 자동)</td><td>108/108</td></tr>
+<tr><td>worker / repo-sync</td><td>Docker 빌드 단계(node:test, Linux)</td><td>72/72, 16/16</td></tr>
+<tr><td>hermes-broker / hermes-integration</td><td><code>npm test</code> / python unittest</td><td>7/7, 34/34</td></tr>
+<tr><td>dashboard</td><td><code>npm test</code></td><td>34/34</td></tr>
+<tr><td>test-runner</td><td>Docker 빌드(root로 실제 uid 전환)</td><td>6/6</td></tr>
+<tr><td>github-publisher</td><td>Docker 빌드(로컬 bare 원격 + Mock GitHub + git http-backend)</td><td>30/30</td></tr>
+<tr><td>learning</td><td><code>npm test</code></td><td>19/19</td></tr>
+<tr><td>Dashboard E2E(실행 중 스택)</td><td><code>node services/dashboard/scripts/e2e.mjs --confirm-only &lt;awaiting task&gt;</code></td><td>49/49</td></tr>
+<tr><td>실제 브라우저(Edge)</td><td><code>npm install --prefix services/dashboard/browser-test</code> 후 <code>approval.mjs</code>(테스트 리뷰 2개 필요), <code>learning.mjs</code>(백업 후 실행)</td><td>18/18, 33/33</td></tr>
+<tr><td>게시 정책 실환경</td><td><code>node services/github-publisher/scripts/e2e-policy.mjs &lt;task&gt; state tests dry-run authorize publish</code></td><td>시나리오별 확인</td></tr>
+</tbody></table></div>
+
+<!-- 11 -->
+<h2 id="repo">11. 저장소 구조</h2>
+<pre><code>D:\personal_ai
+├─ compose.yaml                 Hermes
+├─ compose.workers.yaml         claude-worker, codex-worker
+├─ compose.controller.yaml      controller, hermes-broker, repo-sync(tools) + 공유 네트워크/볼륨
+├─ compose.github.yaml          (선택) 읽기 전용 PAT overlay
+├─ compose.dashboard.yaml       dashboard
+├─ compose.publisher.yaml       github-publisher
+├─ compose.test-runner.yaml     test-runner
+├─ compose.learning.yaml        learning
+├─ docs/ROADMAP.md              단계별 상태·검증 근거 (가장 중요한 이력 문서)
+├─ docs/handover/               이 문서와 사용 설명서
+├─ images/coding-worker/        Worker 이미지, Codex seccomp 프로필
+├─ services/
+│  ├─ controller/  hermes-broker/  hermes-integration/  worker/  repo-sync/
+│  ├─ dashboard/ (browser-test/ 포함)  test-runner/  github-publisher/  learning/
+├─ Personal_AI_OS_Learning_Expansion/docs/learning-os/   Learning OS 설계(01~09, L0 보고)
+├─ secrets/      (Git 제외)  data/  (Git 제외)  workspaces/  (Git 제외)
+└─ request.txt   (Git 제외) 단계별 요구사항 원문</code></pre>
+<p>Git: <code>main</code>에 기준선 커밋 <code>bf37071</code>, 브랜치 <code>learning-os/l1</code>에 Learning L1 <code>3a7a8ae</code>(main 미병합). 원격 저장소는 설정되어 있지 않다.</p>
+
+<!-- 12 -->
+<h2 id="risks">12. 알려진 제한과 남은 위험</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>항목</th><th>설명</th><th>권장 조치</th></tr></thead>
+<tbody>
+<tr><td class="bad">secrets ACL</td><td><code>secrets\</code>가 D: 드라이브 기본 ACL을 상속(Authenticated Users Modify)</td><td>소유자 승인 후 <code>icacls secrets /inheritance:r /grant:r "%USERNAME%:(OI)(CI)F" "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F"</code></td></tr>
+<tr><td class="warn">초기 비밀번호 평문</td><td><code>secrets/dashboard-admin.password</code> 존재</td><td>비밀번호 관리자에 저장 후 삭제, E2E는 <code>DASHBOARD_E2E_PASSWORD</code> 사용</td></tr>
+<tr><td class="warn">Private 저장소</td><td>실제 Private 저장소 종단 검증 미완료(PAT 범위에 private 없음)</td><td>GitHub App 설정 후 검증</td></tr>
+<tr><td class="warn">게시 비활성</td><td>실제 Push/PR 미수행, GitHub App 미설정</td><td>App 생성(Metadata R, Contents W, PR W, 선택 저장소) 후 별도 승인으로 활성화</td></tr>
+<tr><td class="warn">AI(Learning)</td><td>키·월 상한·모델 미설정, 실제 호출 미검증</td><td><code>secrets/learning.env</code>, <code>learning-ai.key</code> 설정</td></tr>
+<tr><td>세션·로그인 제한</td><td>서버 메모리 — Dashboard 재시작 시 재로그인 필요</td><td>필요 시 영속 세션</td></tr>
+<tr><td>Test Runner</td><td>네트워크가 없어 의존성 설치가 필요한 프로젝트 테스트 불가</td><td>사전 구성 이미지/캐시 설계</td></tr>
+<tr><td>아티팩트 볼륨</td><td>Worker 안의 에이전트도 쓸 수 있음(SHA 고정으로 위조는 무의미, 방해는 가능)</td><td>작업 단위 격리 검토</td></tr>
+<tr><td>Hermes 경계</td><td>guard는 패턴 기반, toolset 축소는 운영자가 되돌릴 수 있음</td><td>설정 변경 시 검증</td></tr>
+<tr><td>Controller 백업</td><td>스크립트 없음, 백업이 같은 볼륨에 있음</td><td>Learning 방식처럼 볼륨 밖 백업 스크립트화</td></tr>
+<tr><td>Git</td><td>원격 없음, L1 브랜치 미병합</td><td>원격 백업 저장소 결정</td></tr>
+</tbody></table></div>
+
+<!-- 13 -->
+<h2 id="next">13. 다음 단계 (ROADMAP 기준)</h2>
+<ul>
+  <li>Learning L2: Milestone·Rubric·과제 제출·근거 기반 평가·검증된 숙련도(코드 과제 실행 방식은 별도 결정).</li>
+  <li>Learning L3: 일정·복습(사용자 고정 Deadline 보호). L4: Hermes 학습 도구(broker allowlist), 외부 자료 가져오기, Project 연결.</li>
+  <li>실제 게시: GitHub App 설정 → Private/공개 저장소 실제 검증 → 게시 활성화(별도 승인).</li>
+  <li>보안 정리: secrets ACL, 평문 비밀번호 파일, Controller 백업 스크립트, Git 원격.</li>
+</ul>
+
+<!-- 14 -->
+<h2 id="glossary">14. 용어집</h2>
+<div class="grid">
+<div class="card"><b>Task</b>Controller의 작업 단위. 에이전트(claude/codex)와 프로젝트를 지정.</div>
+<div class="card"><b>Review</b>한 작업의 한 head 커밋에 대한 승인 기록.</div>
+<div class="card"><b>Test Validation</b>승인 대상 커밋에 대한 테스트 실행 1회와 서명된 증거.</div>
+<div class="card"><b>Publication</b>Publisher 요청(dry-run 또는 publish)과 그 보고서.</div>
+<div class="card"><b>Publish Authorization</b>리뷰 승인과 별개인 게시 승인. 30분, 1회용.</div>
+<div class="card"><b>Export</b>repo-sync가 에이전트·publisher 별로 만든 저장소 복사본.</div>
+<div class="card"><b>Bundle / Artifact</b>Worker가 기록한 base..head git bundle과 manifest.</div>
+<div class="card"><b>Delegator</b>소유자 대신 작업을 위임하는 클라이언트(Hermes). 자기 작업만 봄.</div>
+<div class="card"><b>BFF</b>Backend-for-Frontend. Dashboard 서버가 토큰을 들고 내부 API 호출.</div>
+<div class="card"><b>Proposal (Learning)</b>로드맵 변경안. 승인되면 새 불변 버전.</div>
+</div>
+</main>
+</div>
+<button class="theme" type="button" onclick="(function(){var r=document.documentElement;var dark=r.dataset.theme?r.dataset.theme==='dark':matchMedia('(prefers-color-scheme: dark)').matches;r.dataset.theme=dark?'light':'dark';})()">테마 전환</button>
+</body>
+</html>

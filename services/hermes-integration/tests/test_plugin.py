@@ -47,10 +47,139 @@ class ToolTest(unittest.TestCase):
         return plugin.run_tool(args, env=self.env,
                                client_factory=lambda c: plugin.client_lib.Client(c, timeout=5, sleep=lambda _s: None))
 
-    def test_registers_one_tool_and_the_guard_hook(self):
+    def login(self, **args):
+        return plugin.run_login_tool(args, env=self.env,
+                                     client_factory=lambda c: plugin.client_lib.Client(c, timeout=5, sleep=lambda _s: None))
+
+    def test_login_tool(self):
+        status = self.login(action="status")
+        self.assertTrue(status["ok"])
+        self.assertEqual(status["workers"][0]["session"]["status"], "waiting_user")
+        started = self.login(action="start", agent="codex")
+        self.assertTrue(started["ok"])
+        self.assertEqual((self.mock.requests[-1]["method"], self.mock.requests[-1]["path"]), ("POST", "/workers/codex/auth/start"))
+        # A link is already out: no error, the tool says to use the message already on Discord.
+        again = self.login(action="start", agent="claude")
+        self.assertEqual((again["ok"], again["alreadyWaiting"], again["worker"]["session"]["status"]), (True, True, "waiting_user"))
+        sent = self.login(action="code", agent="claude", code="  AbCd1234#state-xyz  ")
+        self.assertTrue(sent["ok"])
+        self.assertEqual(self.mock.login_codes, [{"code": "AbCd1234#state-xyz"}])
+        self.assertEqual(self.login(action="code", agent="claude")["error"]["code"], "invalid_request")
+        # start/code never fall back to a default worker: the model must name the one the user meant.
+        self.assertEqual(self.login(action="start")["error"]["code"], "usage_error")
+        self.assertEqual(self.login(action="login_start", agent="codex")["error"]["code"], "usage_error")
+        # Logins are no longer actions of the task tool.
+        self.assertEqual(self.tool(action="login_start", agent="codex")["error"]["code"], "usage_error")
+
+    def test_system_status_points_at_the_login_tool_when_a_worker_is_logged_out(self):
+        self.mock.worker_login = {"loggedIn": False, "sessionStatus": "failed", "requested": False}
+        out = self.tool(action="system_status")
+        worker = out["workers"][0]
+        self.assertEqual((worker["online"], worker["state"], worker["loggedIn"]), (True, "login_required", False))
+        self.assertIn('personal_ai_worker_login(action="start", agent="claude")', out["attention"][0])
+        # While a login link is out, there is nothing to start.
+        self.mock.worker_login = {"loggedIn": False, "sessionStatus": "waiting_user", "requested": False}
+        self.assertNotIn("attention", self.tool(action="system_status"))
+
+    def planner(self, **args):
+        return plugin.run_planner_tool(args, env=self.env,
+                                       client_factory=lambda c: plugin.client_lib.Client(c, timeout=5, sleep=lambda _s: None))
+
+    def test_planner_day_shows_calendar_events_and_blocks_in_order(self):
+        out = self.planner(action="day", date="2026-11-23")
+        self.assertTrue(out["ok"])
+        self.assertEqual(out["display"].splitlines(), [
+            "2026-11-23(월) 초안(미확정)",
+            "  [마감] 종일 마감: 보고서",
+            "  [계획·공부] 07:00-08:30 알고리즘 과제 (block_id 11111111-1111-4111-8111-111111111111)",
+            "  [수업] 09:00-11:00 CSC263 (event_id lec1_20261123T140000Z, 반복)",
+        ])
+        self.assertEqual(self.mock.planner_calls[-1][:2], ("GET", "/planner/day?date=2026-11-23"))
+
+    def test_planner_confirm_and_deadline_changes_need_the_users_ok(self):
+        refused = self.planner(action="confirm", dates=["2026-11-23"])
+        self.assertEqual(refused["error"]["code"], "needs_confirmation")
+        self.assertFalse(getattr(self.mock, "planner_calls", []), "nothing reaches the planner without the OK")
+        self.assertTrue(self.planner(action="confirm", dates=["2026-11-23"], confirmed_by_user=True)["ok"])
+        self.assertEqual(self.mock.planner_calls[-1], ("POST", "/planner/plans/confirm", {"dates": ["2026-11-23"]}))
+        todo = "22222222-2222-4222-8222-222222222222"
+        self.assertEqual(self.planner(action="todo_update", todo_id=todo, deadline="2026-12-02")["error"]["code"], "needs_confirmation")
+        self.assertTrue(self.planner(action="todo_update", todo_id=todo, priority=1)["ok"], "other changes apply directly")
+        self.assertEqual(self.mock.planner_calls[-1][2], {"priority": 1})
+
+    def test_planner_validates_before_sending(self):
+        self.assertEqual(self.planner(action="nope")["error"]["code"], "usage_error")
+        self.assertEqual(self.planner(action="block_add", date="23-11-2026", start="07:00", end="08:00")["error"]["code"], "usage_error")
+        self.assertEqual(self.planner(action="block_add", date="2026-11-23", start="7pm", end="08:00")["error"]["code"], "usage_error")
+        self.assertEqual(self.planner(action="block_remove", block_id="../todos")["error"]["code"], "usage_error")
+        self.assertEqual(self.planner(action="todo_add", title="보고서")["error"]["code"], "usage_error")
+        self.assertEqual(self.planner(action="settings_update", settings={"token": "x"})["error"]["code"], "usage_error")
+        self.assertFalse(getattr(self.mock, "planner_calls", []))
+        added = self.planner(action="todo_add", title="보고서", estimate_minutes=90, deadline="2026-11-30")
+        self.assertIn("마감 2026-11-30", added["display"])
+        self.assertEqual(self.mock.planner_calls[-1][2], {"title": "보고서", "estimateMinutes": 90, "deadline": "2026-11-30"})
+
+    def test_planner_fixed_events_and_import(self):
+        added = self.planner(action="event_add", title="치과", date="2026-11-24", start="15:00", end="16:00", category="personal")
+        self.assertTrue(added["ok"])
+        self.assertEqual(self.mock.planner_calls[-1][2], {"title": "치과", "date": "2026-11-24", "category": "personal",
+                                                          "start": "15:00", "end": "16:00"})
+        weekly = self.planner(action="event_add", title="헬스", date="2026-11-23", start="07:00", end="08:00", category="routine",
+                              repeat="weekly", repeat_days=["MO", "TH"], until="2026-12-31")
+        self.assertTrue(weekly["ok"])
+        self.assertEqual(self.mock.planner_calls[-1][2]["repeatDays"], ["MO", "TH"])
+        self.assertEqual(self.planner(action="event_add", title="x", date="2026-11-24", start="15:00", end="16:00",
+                                      category="deadline")["error"]["code"], "usage_error", "deadline markers belong to todos")
+        calls = len(self.mock.planner_calls)
+        for action in ("event_update", "event_remove"):
+            self.assertEqual(self.planner(action=action, event_id="evt123abc", start="16:00")["error"]["code"], "needs_confirmation")
+        self.assertEqual(self.planner(action="proposal_apply", proposal="A")["error"]["code"], "needs_confirmation")
+        self.assertEqual(self.planner(action="import_apply", items=[1])["error"]["code"], "usage_error", "no direct import any more")
+        self.assertEqual(len(self.mock.planner_calls), calls, "nothing sent without the OK")
+        self.assertTrue(self.planner(action="event_remove", event_id="evt123abc", scope="series", confirmed_by_user=True)["ok"])
+        self.assertEqual(self.mock.planner_calls[-1][1:], ("/planner/events/evt123abc/remove", {"scope": "series"}))
+
+        self.assertEqual(self.planner(action="reference_sync", calendars=["Classes"])["display"], "Classes: 26개 (반복 26개)")
+        found = self.planner(action="reference_search", text="gym", calendar_name="Rountine")
+        self.assertEqual(found["display"], "[Rountine] Gym · 매주 화·수·목 19:00–21:00")
+        self.assertEqual(self.mock.planner_calls[-1][2], {"text": "gym", "calendar": "Rountine"})
+
+    def test_planner_proposals(self):
+        made = self.planner(action="proposal_create", title="루틴 시안 A", items=[
+            {"title": "헬스", "date": "2026-11-23", "start": "07:00", "end": "08:00", "category": "routine",
+             "repeat": "weekly", "repeat_days": ["MO", "WE", "FR"], "interval": 1}])
+        self.assertTrue(made["ok"])
+        self.assertIn("A-1 [루틴] 헬스 · 매주 월·수·금 07:00–08:00", made["display"])
+        self.assertEqual(self.mock.planner_calls[-1][2]["items"][0]["repeatDays"], ["MO", "WE", "FR"], "snake_case is renamed for the planner")
+        for bad in ([{"title": "x", "date": "2026-11-23", "start": "07:00", "end": "08:00", "category": "routine", "colour": "red"}],
+                    [{"title": "x", "date": "2026-11-23", "category": "routine"}],
+                    [{"title": "x", "date": "2026-11-23", "start": "7am", "end": "08:00", "category": "routine"}]):
+            self.assertEqual(self.planner(action="proposal_create", title="t", items=bad)["error"]["code"], "usage_error")
+        edited = self.planner(action="proposal_edit", proposal="a", update_items=[{"n": 1, "start": "06:00", "end": "07:00"}], remove_items=[2])
+        self.assertTrue(edited["ok"])
+        self.assertEqual(self.mock.planner_calls[-1][1:], ("/planner/proposals/A/edit", {"update": [{"n": 1, "start": "06:00", "end": "07:00"}], "remove": [2]}))
+        self.assertEqual(self.planner(action="proposal_edit", proposal="A", update_items=[{"start": "06:00"}])["error"]["code"], "usage_error")
+        calls = len(self.mock.planner_calls)
+        self.assertEqual(self.planner(action="proposal_apply", proposal="A")["error"]["code"], "needs_confirmation")
+        self.assertEqual(len(self.mock.planner_calls), calls)
+        applied = self.planner(action="proposal_apply", proposal="A", item_numbers=[1], confirmed_by_user=True)
+        self.assertIn("Written to the Kelly calendar: 1", applied["note"])
+        self.assertEqual(self.planner(action="proposal_show", proposal="../x")["error"]["code"], "usage_error")
+
+    def test_registers_four_tools_and_the_guard_hook(self):
         ctx = FakeContext()
         plugin.register(ctx)
-        self.assertEqual(list(ctx.tools), ["personal_ai_task"])
+        self.assertEqual(list(ctx.tools), ["personal_ai_task", "personal_ai_worker_login", "personal_ai_planner",
+                                           "personal_ai_document"])
+        document = ctx.tools["personal_ai_document"]
+        self.assertEqual(document["toolset"], "personal_ai")
+        self.assertEqual(document["schema"]["parameters"]["properties"]["action"]["enum"], ["list", "find", "read"])
+        self.assertEqual(json.loads(document["handler"]({"action": "nope"}))["error"]["code"], "usage_error")
+        self.assertEqual(ctx.tools["personal_ai_planner"]["toolset"], "personal_ai")
+        login = ctx.tools["personal_ai_worker_login"]
+        self.assertEqual(login["toolset"], "personal_ai")
+        self.assertEqual(login["schema"]["parameters"]["properties"]["action"]["enum"], ["start", "code", "status"])
+        self.assertEqual(json.loads(login["handler"]({"action": "nope"}))["error"]["code"], "usage_error")
         spec = ctx.tools["personal_ai_task"]
         self.assertEqual(spec["toolset"], "personal_ai")
         self.assertEqual(spec["schema"]["parameters"]["required"], ["action"])

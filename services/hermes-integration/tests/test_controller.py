@@ -15,6 +15,7 @@ import tempfile
 import threading
 import unittest
 import uuid
+from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -119,11 +120,69 @@ class MockController:
                         task["status"] = "cancel_requested"
                         return self._send(200, {"outcome": "cancel_requested", "message": "Cancellation requested. The worker has not yet confirmed that execution stopped.", "task": task})
                     return self._send(409, {"message": f"Task is already {task['status']} and cannot be canceled"})
+                if parts[:1] == ["planner"]:
+                    mock.planner_calls = getattr(mock, "planner_calls", []) + [(method, self.path, json.loads(raw) if raw else None)]
+                    day = {"date": "2026-11-23", "weekday": "월", "status": "draft", "pendingChanges": False,
+                           "blocks": [{"id": "11111111-1111-4111-8111-111111111111", "date": "2026-11-23", "start": "07:00",
+                                       "end": "08:30", "title": "알고리즘 과제", "todoId": None, "origin": "auto", "category": "study",
+                                       "inCalendar": False, "pending": True}],
+                           "events": [{"id": "lec1_20261123T140000Z", "seriesId": "lec1", "start": "09:00", "end": "11:00", "title": "CSC263",
+                                       "allDay": False, "location": None, "category": "class", "deadline": False},
+                                      {"id": "dl1", "seriesId": None, "start": None, "end": None, "title": "마감: 보고서",
+                                       "allDay": True, "location": None, "category": "deadline", "deadline": True}],
+                           "unscheduled": [], "warnings": [], "calendarConnected": True}
+                    todo = {"id": "22222222-2222-4222-8222-222222222222", "title": "보고서", "notes": None, "kind": "task",
+                            "priority": 2, "estimateMinutes": 90, "doneMinutes": 0, "deadline": "2026-11-30", "earliest": None,
+                            "status": "open", "createdAt": "", "updatedAt": ""}
+                    sub = parts[1:]
+                    if method == "GET" and sub == ["day"]:
+                        return self._send(200, day)
+                    if method == "POST" and sub in (["plans", "generate"], ["plans", "confirm"]):
+                        return self._send(200, {"days": [day]})
+                    if method == "POST" and sub[:1] == ["todos"]:
+                        return self._send(200, {"todo": todo})
+                    if method == "POST" and sub == ["events"]:
+                        return self._send(200, {"event": {"id": "evt123abc", "title": "치과", "category": "personal",
+                                                          "when": "11/24(화) 15:00–16:00"}})
+                    if method == "POST" and sub[:1] == ["events"]:
+                        return self._send(200, {"id": sub[1], "scope": "this"})
+                    if method == "GET" and sub == ["calendars"]:
+                        return self._send(200, {"calendars": [{"name": "Classes", "primary": False, "accessRole": "owner"}]})
+                    if method == "POST" and sub == ["reference", "sync"]:
+                        return self._send(200, {"calendars": [{"name": "Classes", "events": 26, "repeating": 26}], "from": "2025-11-22", "to": "2027-11-22"})
+                    if method == "POST" and sub == ["reference", "search"]:
+                        return self._send(200, {"total": 1, "items": [{"calendar": "Rountine", "title": "Gym", "when": "매주 화·수·목 19:00–21:00",
+                                                                       "repeats": True, "location": None, "hint": "routine"}]})
+                    proposal = {"code": "A", "title": "루틴 시안 A", "notes": None, "status": "draft", "warnings": [],
+                                "items": [{"n": 1, "title": "헬스", "category": "routine", "when": "매주 월·수·금 07:00–08:00",
+                                           "location": None, "applied": False}]}
+                    if sub == ["proposals"]:
+                        return self._send(200, {"proposal": proposal} if method == "POST" else {"proposals": []})
+                    if sub[:1] == ["proposals"]:
+                        return self._send(200, {"proposal": {**proposal, "written": [{"n": 1, "title": "헬스"}]}})
+                    if method == "POST" and sub[:1] == ["blocks"]:
+                        return self._send(200, {"block": day["blocks"][0]})
+                    return self._send(404, {"message": "no planner route"})
+                if parts[:1] == ["workers"]:
+                    session = {"id": "33333333-3333-4333-8333-333333333333", "status": "waiting_user", "needsCode": True,
+                               "loginUrl": "https://claude.com/cai/oauth/authorize?x=1", "userCode": None, "expiresAt": None, "message": None}
+                    item = {"agent": "claude", "loggedIn": False, "requested": False, "session": session}
+                    if method == "GET" and parts == ["workers", "auth"]:
+                        return self._send(200, {"items": [item, {"agent": "codex", "loggedIn": True, "requested": False, "session": None}]})
+                    if method == "POST" and parts[2:] == ["auth", "start"]:
+                        if parts[1] == "claude":  # its session above is still waiting for the user
+                            return self._send(409, {"message": "A claude login is already in progress (waiting_user)"})
+                        return self._send(200, {**item, "agent": parts[1], "requested": True, "session": None})
+                    if method == "POST" and parts[2:] == ["auth", "code"]:
+                        mock.login_codes = getattr(mock, "login_codes", []) + [json.loads(raw)]
+                        return self._send(200, {**item, "agent": parts[1], "session": {**session, "status": "code_submitted"}})
                 if method == "GET" and parts == ["system", "status"]:
                     return self._send(200, {
                         "controller": {"status": "ok", "version": "0.1.0", "uptimeSeconds": 5, "nodeVersion": "v24"},
                         "database": {"status": "ok"}, "tasks": {"total": len(mock.tasks), "byStatus": {}},
-                        "workers": [{"agent": "claude", "workerId": "claude-worker", "lastSeenAt": None, "queuedTasks": 0, "activeTasks": 0}],
+                        "workers": [{"agent": "claude", "workerId": "claude-worker", "queuedTasks": 0, "activeTasks": 0,
+                                     **({"lastSeenAt": datetime.now(timezone.utc).isoformat(), "login": mock.worker_login}
+                                        if getattr(mock, "worker_login", None) else {"lastSeenAt": None})}],
                         "projects": ["sandbox"], "services": [],
                     })
                 return self._send(404, {"message": "no route"})

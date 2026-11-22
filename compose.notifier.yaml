@@ -1,0 +1,89 @@
+# Discord notifier + hermes-broker task watcher. Merge with the existing files, e.g.:
+#   docker compose @F up -d --build --no-deps notifier hermes-broker
+# Secrets first: node services/notifier/scripts/init-secrets.mjs, then paste the Discord webhook
+# URL (one line) into secrets/discord-webhook.url.
+#
+# - notifier is the only holder of the Discord webhook. It accepts typed events only
+#   (task_finished for now; briefings/reminders later) from named callers with their own key,
+#   renders fixed templates and pings only the owner (allowed_mentions).
+# - hermes-broker (already holding the Hermes delegator token, so it sees exactly Hermes' tasks)
+#   polls the controller and reports finished tasks to the notifier. No LLM involved.
+# - notify-internal: broker <-> notifier only, no internet. notify-egress: notifier -> discord.com.
+# - No host port, no Docker socket, no controller/GitHub credentials in the notifier.
+
+services:
+  notifier:
+    build:
+      context: ./services/notifier
+    image: personal_ai-notifier:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./secrets/notifier.env            # DISCORD_MENTION_USER_ID
+    environment:
+      NOTIFIER_WEBHOOK_FILE: /run/secrets/discord_webhook
+      NOTIFIER_CLIENTS: hermes-broker=/run/secrets/broker_key
+      NOTIFIER_DASHBOARD_URL: http://127.0.0.1:8710
+      NOTIFIER_MAX_PER_MINUTE: "20"
+    secrets:
+      - source: discord_webhook
+        target: discord_webhook
+      - source: notifier_broker_key
+        target: broker_key
+    volumes:
+      - notifier-data:/var/lib/notifier    # keys of delivered events (no duplicate messages)
+    networks:
+      - notify-internal
+      - notify-egress
+    read_only: true
+    tmpfs:
+      - /tmp:size=8m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 128m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8090/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Overlay on compose.controller.yaml: turn on the broker's task watcher.
+  hermes-broker:
+    environment:
+      NOTIFIER_URL: http://notifier:8090
+      NOTIFIER_KEY_FILE: /run/secrets/notifier_key
+      WATCH_INTERVAL_SECONDS: "15"
+      WATCH_LOOKBACK_MINUTES: "120"
+      BROKER_HOST_WORKSPACES: 'D:\personal_ai\workspaces'
+    secrets:
+      - source: notifier_broker_key
+        target: notifier_key
+    networks:
+      - ai-internal
+      - notify-internal
+
+volumes:
+  notifier-data:
+
+networks:
+  notify-internal:
+    driver: bridge
+    internal: true
+  notify-egress:
+    driver: bridge
+
+secrets:
+  discord_webhook:
+    file: ./secrets/discord-webhook.url      # the owner pastes the webhook URL here; never printed
+  notifier_broker_key:
+    file: ./secrets/notifier-broker.key      # services/notifier/scripts/init-secrets.mjs

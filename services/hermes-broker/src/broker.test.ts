@@ -161,6 +161,71 @@ describe('hermes-broker', () => {
     assert.ok(!JSON.stringify(logs).includes(TOKEN));
   });
 
+  it('relays worker login requests and codes, validating the code and never logging it', async () => {
+    assert.equal((await call('GET', '/workers/auth')).status, 200);
+    assert.equal((await call('POST', '/workers/claude/auth/start')).status, 200);
+    const ok = await call('POST', '/workers/claude/auth/code', { code: 'AbC123_secret-code#state-xyz' });
+    assert.equal(ok.status, 200);
+    const forwarded = seen.at(-1)!;
+    assert.equal(forwarded.url, '/workers/claude/auth/code');
+    assert.deepEqual(JSON.parse(forwarded.body), { code: 'AbC123_secret-code#state-xyz' });
+    assert.ok(!JSON.stringify(logs).includes('AbC123_secret-code'), 'the code is not in the audit log');
+
+    const before = seen.length;
+    assert.equal((await call('POST', '/workers/gemini/auth/code', { code: 'abcdefgh123' })).status, 404);
+    assert.equal((await call('POST', '/workers/claude/auth/code', { code: 'has spaces in it' })).status, 400);
+    assert.equal((await call('POST', '/workers/claude/auth/code', { code: 'abcdefgh123', extra: 1 })).status, 400);
+    assert.equal((await call('GET', '/internal/workers/auth')).status, 404, 'worker endpoints are not reachable');
+    assert.equal(seen.length, before);
+  });
+
+  it('forwards planner routes with the planner key only, and nothing else under /planner', async () => {
+    const PLANNER_KEY = 'planner-' + 'p'.repeat(40);
+    const got: Array<{ method: string; url: string; auth?: string; key?: string; body: string }> = [];
+    const planner = createServer(async (req, res) => {
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      got.push({ method: req.method!, url: req.url!, auth: req.headers.authorization, key: req.headers['x-planner-key'] as string, body });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true, echo: PLANNER_KEY }));
+    });
+    const plannerUrl = await listen(planner);
+    const withPlanner = createBroker(
+      { controllerUrl: 'http://127.0.0.1:9', token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: null, planner: { url: plannerUrl, key: PLANNER_KEY }, plannerWritesPerMinute: 3 },
+      { info: () => {}, warn: () => {} },
+      () => clock,
+    );
+    const url = await listen(withPlanner);
+    const send = (method: string, path: string, body?: unknown) =>
+      fetch(url + path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    try {
+      const day = await send('GET', '/planner/day?date=2026-11-23');
+      assert.equal(day.status, 200);
+      assert.ok(!(await day.text()).includes(PLANNER_KEY), 'the planner key is redacted from responses');
+      assert.equal((await send('POST', '/planner/todos', { title: '장보기', estimateMinutes: 30 })).status, 200);
+      assert.equal((await send('POST', `/planner/blocks/${TASK_ID}/remove`)).status, 200);
+      assert.equal((await send('POST', '/planner/events/abc123def_20261123T150000Z/update', { scope: 'this' })).status, 200);
+      assert.deepEqual(got.map((g) => [g.method, g.url]), [
+        ['GET', '/day?date=2026-11-23'],
+        ['POST', '/todos'],
+        ['POST', `/blocks/${TASK_ID}/remove`],
+        ['POST', '/events/abc123def_20261123T150000Z/update'],
+      ]);
+      assert.ok(got.every((g) => g.key === PLANNER_KEY && g.auth === undefined), 'planner key only, never the controller token');
+      assert.equal(got[2].body, '{}');
+      assert.equal((await send('POST', '/planner/todos', { title: 'x', estimateMinutes: 30 })).status, 429, 'planner writes are rate limited');
+      clock += 61_000;
+      for (const [method, path] of [['GET', '/planner/day?date=../x'], ['POST', '/planner/day'], ['GET', '/planner/google_auth'], ['POST', '/planner/blocks/not-a-uuid/remove'], ['POST', '/planner/events/a%2Fb/remove'], ['POST', '/planner/proposals/a/apply'], ['POST', '/planner/import/apply']]) {
+        assert.ok([400, 404, 405].includes((await send(method, path)).status), `${method} ${path}`);
+      }
+      assert.equal(got.length, 4);
+    } finally {
+      await new Promise((r) => withPlanner.close(r));
+      await new Promise((r) => planner.close(r));
+    }
+    assert.equal((await call('GET', '/planner/status')).status, 503, 'without a planner configured');
+  });
+
   it('requires the client key when configured, before forwarding anything', async () => {
     const key = 'k'.repeat(48);
     const keyed = createBroker({ controllerUrl: base, token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: key }, { info: () => {}, warn: () => {} });

@@ -1,5 +1,5 @@
 name: personal-ai-controller
-version: 0.2.0
+version: 0.3.0
 description: "Personal AI OS: delegate coding tasks to the Claude/Codex Docker workers through the task controller (via hermes-broker), and block tool calls that would bypass it."
 author: "dydgh2011, Hermes Agent"
 kind: standalone
@@ -7,5 +7,8 @@ platforms:
   - linux
 provides_tools:
   - personal_ai_task
+  - personal_ai_worker_login
+  - personal_ai_planner
+  - personal_ai_document
 provides_hooks:
   - pre_tool_call

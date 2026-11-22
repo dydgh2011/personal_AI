@@ -1,3 +1,4 @@
+import type { AuthReport } from './auth.js';
 import type { AgentType } from './config.js';
 
 /** Subset of the controller's Task model the worker relies on. */
@@ -72,6 +73,11 @@ export class ControllerClient {
 
   async cancelAck(taskId: string): Promise<Task> {
     return (await this.post<{ task: Task }>(`/internal/tasks/${encodeURIComponent(taskId)}/cancel-ack`)).task;
+  }
+
+  /** Reports the CLI login state; returns whether a login was requested and, once, a submitted login code. */
+  reportAuth(report: AuthReport): Promise<{ requested: boolean; code: string | null }> {
+    return this.post('/internal/workers/auth', report);
   }
 
   /** Projects this worker may run tasks in, straight from the registry. */

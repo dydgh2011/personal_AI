@@ -1,3 +1,4 @@
+import type { AuthManager } from './auth.js';
 import { backoffDelay, sleep } from './backoff.js';
 import type { WorkerConfig } from './config.js';
 import { ControllerError, type ControllerClient } from './controller-client.js';
@@ -15,6 +16,8 @@ export interface WorkerDeps {
   state: WorkerState;
   lock: InstanceLock;
   logger: Logger;
+  /** Login gate: when set, no task is claimed while the CLI is logged out (a login is started instead). */
+  auth?: AuthManager;
 }
 
 const RECONNECT_BACKOFF = { baseMs: 1000, maxMs: 60_000 };
@@ -63,6 +66,18 @@ export class Worker {
     let failures = 0;
 
     while (!signal.aborted) {
+      if (this.deps.auth) {
+        let ready = false;
+        try {
+          ready = await this.deps.auth.ready(signal);
+        } catch (error) {
+          logger.warn('Login check failed', { error: (error as Error).message });
+        }
+        if (!ready) {
+          await sleep(config.pollIntervalMs, signal);
+          continue;
+        }
+      }
       let task;
       try {
         task = await client.claim();
@@ -87,7 +102,9 @@ export class Worker {
         continue;
       }
       try {
-        await this.executor.execute(task, signal);
+        const outcome = await this.executor.execute(task, signal);
+        // A failed run may mean the login just expired: ask the CLI again before the next claim.
+        if (outcome !== 'completed') this.deps.auth?.invalidate();
       } catch (error) {
         logger.error('Task execution crashed', { taskId: task.id, error: (error as Error).message });
       }

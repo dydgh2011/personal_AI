@@ -1,7 +1,11 @@
 
 services:
   hermes:
-    image: nousresearch/hermes-agent:stable
+    # The official nousresearch/hermes-agent:stable plus pypdf for reading attached
+    # documents (services/hermes-integration/image/Dockerfile).
+    build:
+      context: ./services/hermes-integration/image
+    image: personal_ai-hermes:local
     restart: unless-stopped
     command: gateway run
 
