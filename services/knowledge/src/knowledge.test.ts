@@ -227,6 +227,18 @@ describe('search and recall', () => {
     assert.equal(p.pages, 'course: CSC263');
     assert.equal(p.pageCount, 1);
   });
+
+  it('always puts every preference into the compact profile, beyond the last 12 owner facts', () => {
+    const { kb } = setup();
+    kb.addFact({ page: 'preferences', text: '선호: 메일 요약은 마감일을 맨 앞에' }, 'hermes');
+    for (let i = 0; i < 20; i++) kb.addFact({ page: 'me', text: `사실 ${i}` }, 'hermes');
+    const p = kb.profile(true) as { text: string; pages: string };
+    assert.match(p.text, /Owner preferences and feedback/);
+    assert.match(p.text, /마감일을 맨 앞에/);
+    assert.doesNotMatch(p.text, /사실 0/); // me facts are still capped
+    assert.doesNotMatch(p.pages, /취향과 피드백/);
+    assert.equal(kb.getPage('피드백').page.slug, 'preferences'); // found by alias too
+  });
 });
 
 describe('imports and permanent deletion', () => {

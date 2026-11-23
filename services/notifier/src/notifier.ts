@@ -10,6 +10,8 @@ import {
   ValidationError,
 } from './format.js';
 import { formatCalendar, formatPlan, formatReminder, parseCalendar, parsePlan, parseReminder } from './plan-format.js';
+import { formatLlm, parseLlm } from './llm-format.js';
+import { formatSchool, parseSchool } from './school-format.js';
 import type { SentStore } from './store.js';
 
 export interface NotifierConfig {
@@ -67,7 +69,7 @@ class HttpError extends Error {
 /**
  * The only component that can post to Discord. Callers send typed events with an idempotency
  * key; the notifier validates them, renders a fixed template, delivers once, and remembers it.
- * Event types: task_finished, login_required, login_result, plan, reminder, calendar (new types are
+ * Event types: task_finished, login_required, login_result, plan, reminder, calendar, llm, school (new types are
  * added here, never as free text).
  */
 export function createNotifier(config: NotifierConfig, store: SentStore, logger: Logger, post: Poster = discordPoster, now: () => number = Date.now): Server {
@@ -99,6 +101,8 @@ export function createNotifier(config: NotifierConfig, store: SentStore, logger:
         plan: 'plan',
         reminder: 'reminder',
         calendar: 'calendar',
+        llm: 'llm',
+        school: 'school',
       };
       const payloadField = typeof b.type === 'string' && Object.hasOwn(PAYLOAD, b.type) ? PAYLOAD[b.type] : null;
       if (!payloadField) throw new HttpError(400, `type must be one of ${Object.keys(PAYLOAD).join(', ')}`);
@@ -122,6 +126,14 @@ export function createNotifier(config: NotifierConfig, store: SentStore, logger:
         const reminder = parseReminder(b.reminder);
         audit.start = reminder.start;
         render = () => formatReminder(reminder, config.mentionUserId);
+      } else if (b.type === 'school') {
+        const school = parseSchool(b.school);
+        Object.assign(audit, { schoolMode: school.mode, items: school.items.length });
+        render = () => formatSchool(school, config.mentionUserId);
+      } else if (b.type === 'llm') {
+        const llm = parseLlm(b.llm);
+        audit.llmKind = llm.kind;
+        render = () => formatLlm(llm, config.mentionUserId);
       } else if (b.type === 'calendar') {
         const calendar = parseCalendar(b.calendar);
         audit.calendarStatus = calendar.status;

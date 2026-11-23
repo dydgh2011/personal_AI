@@ -111,9 +111,13 @@ export class ProviderService {
       }
       if (!present) missing.push('AI key (secrets/learning-ai.key is empty)');
     }
-    if (ai.monthlyBudgetUsd === null) missing.push('LEARNING_AI_MONTHLY_BUDGET_USD');
-    if (ai.inputUsdPerMTok === null) missing.push('LEARNING_AI_INPUT_USD_PER_MTOK');
-    if (ai.outputUsdPerMTok === null) missing.push('LEARNING_AI_OUTPUT_USD_PER_MTOK');
+    // Through the gateway the purpose alias only uses free routes (paid needs the owner's approval
+    // there), so a budget and prices are optional; directly at Gemini they are required.
+    if (ai.provider !== 'gateway') {
+      if (ai.monthlyBudgetUsd === null) missing.push('LEARNING_AI_MONTHLY_BUDGET_USD');
+      if (ai.inputUsdPerMTok === null) missing.push('LEARNING_AI_INPUT_USD_PER_MTOK');
+      if (ai.outputUsdPerMTok === null) missing.push('LEARNING_AI_OUTPUT_USD_PER_MTOK');
+    }
     return missing;
   }
 
@@ -130,26 +134,45 @@ export class ProviderService {
     if (missing.length) throw conflict('PROVIDER_NOT_CONFIGURED', `AI generation is not configured yet (missing: ${missing.join(', ')})`);
     const prompt = JSON.stringify(request);
     // Worst case of this call must still fit the monthly budget (hard cap, never exceeded).
-    const worstCase = cost(Math.ceil((SYSTEM.length + prompt.length) / 3), MAX_OUTPUT_TOKENS, ai.inputUsdPerMTok!, ai.outputUsdPerMTok!);
+    const inPrice = ai.inputUsdPerMTok ?? 0;
+    const outPrice = ai.outputUsdPerMTok ?? 0;
+    const worstCase = cost(Math.ceil((SYSTEM.length + prompt.length) / 3), MAX_OUTPUT_TOKENS, inPrice, outPrice);
     const { spentUsd } = this.usage();
-    if (spentUsd + worstCase > ai.monthlyBudgetUsd!) {
+    if (ai.monthlyBudgetUsd !== null && spentUsd + worstCase > ai.monthlyBudgetUsd) {
       throw conflict('AI_BUDGET_EXCEEDED', `Monthly AI budget reached (${spentUsd.toFixed(4)} of ${ai.monthlyBudgetUsd} USD spent; this call could cost up to ${worstCase.toFixed(4)})`);
     }
     const key = (await readFile(ai.keyFile!, 'utf8').catch(() => '')).trim();
     if (!key) throw conflict('PROVIDER_NOT_CONFIGURED', 'AI key file is missing or empty');
 
-    const body = {
-      systemInstruction: { parts: [{ text: SYSTEM }] },
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      generationConfig: { responseMimeType: 'application/json', responseSchema: RESPONSE_SCHEMA, temperature: 0.4, maxOutputTokens: MAX_OUTPUT_TOKENS },
-    };
+    const gateway = ai.provider === 'gateway';
+    const body = gateway
+      ? {
+          model: ai.model,
+          messages: [
+            { role: 'system', content: `${SYSTEM}
+JSON shape (OpenAPI subset): ${JSON.stringify(RESPONSE_SCHEMA)}` },
+            { role: 'user', content: prompt },
+          ],
+          response_format: { type: 'json_object' },
+          temperature: 0.4,
+          max_tokens: MAX_OUTPUT_TOKENS,
+        }
+      : {
+          systemInstruction: { parts: [{ text: SYSTEM }] },
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: 'application/json', responseSchema: RESPONSE_SCHEMA, temperature: 0.4, maxOutputTokens: MAX_OUTPUT_TOKENS },
+        };
+    const url = gateway ? `${ai.apiUrl}/chat/completions` : `${ai.apiUrl}/models/${encodeURIComponent(ai.model!)}:generateContent`;
+    const headers: Record<string, string> = gateway
+      ? { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }
+      : { 'Content-Type': 'application/json', 'x-goog-api-key': key };
     let lastError = 'unknown error';
     for (let attempt = 1; attempt <= 2; attempt++) {
       let res: Response;
       try {
-        res = await fetch(`${ai.apiUrl}/models/${encodeURIComponent(ai.model!)}:generateContent`, {
+        res = await fetch(url, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-goog-api-key': key },
+          headers,
           body: JSON.stringify(body),
           redirect: 'error',
           signal: AbortSignal.timeout(ai.timeoutMs),
@@ -163,10 +186,10 @@ export class ProviderService {
         this.record('error', null, null, 0, lastError);
         throw unavailable(lastError === 'timeout' ? 'AI_PROVIDER_TIMEOUT' : 'AI_PROVIDER_ERROR', `AI provider ${lastError}`);
       }
-      const json = (await res.json().catch(() => null)) as GeminiResponse | null;
-      const inTok = json?.usageMetadata?.promptTokenCount ?? null;
-      const outTok = json?.usageMetadata?.candidatesTokenCount ?? null;
-      const callCost = cost(inTok ?? 0, outTok ?? 0, ai.inputUsdPerMTok!, ai.outputUsdPerMTok!);
+      const raw = (await res.json().catch(() => null)) as (GeminiResponse & ChatResponse) | null;
+      const inTok = (gateway ? raw?.usage?.prompt_tokens : raw?.usageMetadata?.promptTokenCount) ?? null;
+      const outTok = (gateway ? raw?.usage?.completion_tokens : raw?.usageMetadata?.candidatesTokenCount) ?? null;
+      const callCost = cost(inTok ?? 0, outTok ?? 0, inPrice, outPrice);
       if (res.status === 429 || res.status >= 500) {
         lastError = `HTTP ${res.status}`;
         this.record('error', inTok, outTok, callCost, lastError);
@@ -180,7 +203,9 @@ export class ProviderService {
         this.record('error', inTok, outTok, callCost, `HTTP ${res.status}`);
         throw unavailable('AI_PROVIDER_ERROR', `AI provider answered ${res.status}`, 502);
       }
-      const text = json?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '';
+      const text = gateway
+        ? (raw?.choices?.[0]?.message?.content ?? '')
+        : (raw?.candidates?.[0]?.content?.parts?.map((p) => p.text ?? '').join('') ?? '');
       let output: unknown = null;
       try {
         output = JSON.parse(text);
@@ -205,6 +230,11 @@ export class ProviderService {
   private month(): string {
     return this.clock.now().toISOString().slice(0, 7);
   }
+}
+
+interface ChatResponse {
+  choices?: Array<{ message?: { content?: string | null } }>;
+  usage?: { prompt_tokens?: number; completion_tokens?: number };
 }
 
 interface GeminiResponse {

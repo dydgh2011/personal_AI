@@ -22,7 +22,7 @@ node services/learning/scripts/init-secrets.mjs
 #   → secrets/learning.env (LEARNING_DASHBOARD_TOKEN과 AI 설정 자리)
 #   → secrets/learning-dashboard.token (Dashboard에만 mount)
 #   → secrets/learning-ai.key (빈 파일, AI 키를 넣을 자리)
-$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml".Split(' ')
+$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml -f compose.llm.yaml -f compose.school.yaml".Split(' ')
 docker compose @F up -d --build --no-deps learning dashboard
 ```
 

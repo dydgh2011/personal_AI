@@ -6,7 +6,8 @@ export const APP_CONFIG = Symbol('APP_CONFIG');
  * and the rest of the service works normally.
  */
 export interface AiConfig {
-  provider: 'none' | 'gemini';
+  /** gemini: Google API directly. gateway: the Personal AI LLM gateway (OpenAI-compatible, model = purpose alias). */
+  provider: 'none' | 'gemini' | 'gateway';
   model: string | null;
   keyFile: string | null;
   apiUrl: string;
@@ -36,7 +37,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push('PORT must be 1-65535');
 
   const provider = (env.LEARNING_AI_PROVIDER?.trim() || 'none') as AiConfig['provider'];
-  if (provider !== 'none' && provider !== 'gemini') problems.push('LEARNING_AI_PROVIDER must be none or gemini');
+  if (provider !== 'none' && provider !== 'gemini' && provider !== 'gateway') problems.push('LEARNING_AI_PROVIDER must be none, gemini or gateway');
   const num = (name: string): number | null => {
     const raw = env[name]?.trim();
     if (!raw) return null;
@@ -48,7 +49,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     return value;
   };
   const timeout = num('LEARNING_AI_TIMEOUT_SECONDS') ?? 30;
-  const apiUrl = (env.LEARNING_AI_API_URL?.trim() || 'https://generativelanguage.googleapis.com/v1beta').replace(/\/+$/, '');
+  const defaultUrl = provider === 'gateway' ? 'http://llm-gateway:8094/v1' : 'https://generativelanguage.googleapis.com/v1beta';
+  const apiUrl = (env.LEARNING_AI_API_URL?.trim() || defaultUrl).replace(/\/+$/, '');
   if (!/^https?:\/\/[^/]+/.test(apiUrl)) problems.push('LEARNING_AI_API_URL must be an http(s) URL');
   const model = env.LEARNING_AI_MODEL?.trim() || null;
   if (model && !/^[A-Za-z0-9._-]{1,100}$/.test(model)) problems.push('LEARNING_AI_MODEL contains unexpected characters');

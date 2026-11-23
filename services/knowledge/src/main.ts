@@ -35,8 +35,14 @@ function main(): void {
   } catch {
     throw new Error(`KNOWLEDGE_TIME_ZONE "${timeZone}" is not a valid IANA time zone`);
   }
-  // KNOWLEDGE_CLIENTS = name=/path/to/key[,name2=/path2]
-  const clients = (process.env.KNOWLEDGE_CLIENTS ?? '')
+  // KNOWLEDGE_CLIENTS = name=/path/to/key[,name2=/path2]; compose overlays add callers in
+  // KNOWLEDGE_CLIENTS_<NAME> so they do not overwrite each other's lists.
+  const clientLists = Object.keys(process.env)
+    .filter((k) => /^KNOWLEDGE_CLIENTS(_[A-Z0-9]+)?$/.test(k))
+    .sort()
+    .map((k) => process.env[k] ?? '');
+  const clients = clientLists
+    .join(',')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)

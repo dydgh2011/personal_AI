@@ -25,7 +25,7 @@ controller ◀─(delegator 토큰, 조회만)── hermes-broker [task watcher
 node services/notifier/scripts/init-secrets.mjs
 # secrets/notifier-broker.key(생성), secrets/notifier.env(멘션할 사용자 id, Hermes Discord 설정에서 가져옴)
 # secrets/discord-webhook.url 은 소유자가 직접 만든다: Discord 채널 설정 → 연동 → 웹후크 → URL 복사 → 파일에 한 줄로
-$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml".Split(' ')
+$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml -f compose.llm.yaml -f compose.school.yaml".Split(' ')
 docker compose @F up -d --build --no-deps notifier hermes-broker
 ```
 

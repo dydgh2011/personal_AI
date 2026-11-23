@@ -34,6 +34,10 @@ class FakeContext:
     def register_hook(self, name, fn):
         self.hooks[name] = fn
 
+    def register_command(self, name, handler, description="", args_hint=""):
+        self.commands = getattr(self, "commands", {})
+        self.commands[name] = handler
+
 
 class ToolTest(unittest.TestCase):
     def setUp(self):
@@ -166,11 +170,11 @@ class ToolTest(unittest.TestCase):
         self.assertIn("Written to the Kelly calendar: 1", applied["note"])
         self.assertEqual(self.planner(action="proposal_show", proposal="../x")["error"]["code"], "usage_error")
 
-    def test_registers_four_tools_and_the_guard_hook(self):
+    def test_registers_five_tools_and_the_guard_hook(self):
         ctx = FakeContext()
         plugin.register(ctx)
         self.assertEqual(list(ctx.tools), ["personal_ai_task", "personal_ai_worker_login", "personal_ai_planner",
-                                           "personal_ai_document"])
+                                           "personal_ai_document", "personal_ai_school"])
         document = ctx.tools["personal_ai_document"]
         self.assertEqual(document["toolset"], "personal_ai")
         self.assertEqual(document["schema"]["parameters"]["properties"]["action"]["enum"], ["list", "find", "read"])

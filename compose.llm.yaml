@@ -1,0 +1,149 @@
+# LLM gateway: the only holder of the AI provider keys (OpenAI public/private projects, Gemini, Groq).
+# Needs compose.notifier.yaml (notify-internal, notifier) and compose.learning.yaml / compose.dashboard.yaml.
+#   node services/llm-gateway/scripts/init-secrets.mjs [--import <name=value file>]   (never prints keys)
+#   docker compose @F up -d --build --no-deps llm-gateway notifier hermes
+#
+# - Callers ask for purpose aliases (kelly, kelly-aux, batch, private) with their own key; rights per
+#   caller are fixed in services/llm-gateway/src/config.ts. Provider keys never leave this container.
+# - Free quotas are counted here (OpenAI shared 2.5M tokens/day stops at 80%, Gemini 500 requests/day,
+#   Groq 200K tokens/day). Paid routes need the owner's /ai-paid on for that day (cap LLM_PAID_DAILY_CAP_USD).
+# - llm-internal: callers only, no internet. llm-egress: the providers. notify-internal: the notifier.
+# - No host port. Usage: GET /usage (hermes, dashboard keys).
+
+services:
+  llm-gateway:
+    build:
+      context: ./services/llm-gateway
+    image: personal_ai-llm-gateway:local
+    restart: unless-stopped
+    init: true
+    environment:
+      TZ: America/Toronto
+      LLM_CLIENTS: hermes=/run/secrets/hermes_key,learning=/run/secrets/learning_key,school=/run/secrets/school_key,dashboard=/run/secrets/dashboard_key
+      LLM_PAID_DAILY_CAP_USD: "0.30"
+      NOTIFIER_URL: http://notifier:8090
+      NOTIFIER_KEY_FILE: /run/secrets/notifier_key
+    secrets:
+      - source: llm_openai_public
+        target: openai_public
+      - source: llm_openai_private
+        target: openai_private
+      - source: llm_gemini
+        target: gemini
+      - source: llm_groq
+        target: groq
+      - source: llm_hermes_key
+        target: hermes_key
+      - source: llm_learning_key
+        target: learning_key
+      - source: llm_school_key
+        target: school_key
+      - source: llm_dashboard_key
+        target: dashboard_key
+      - source: notifier_llm_key
+        target: notifier_key
+    volumes:
+      - llm-data:/var/lib/llm-gateway        # gateway.db: usage records, daily approvals (no secrets)
+    networks:
+      - llm-internal
+      - llm-egress
+      - notify-internal
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 192m
+    cpus: 1.0
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:8094/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Overlay: the notifier accepts the gateway's quota events.
+  notifier:
+    environment:
+      NOTIFIER_CLIENTS_LLM: llm-gateway=/run/secrets/llm_key
+    secrets:
+      - source: notifier_llm_key
+        target: llm_key
+
+  # Overlay: Hermes talks to the gateway (model.provider custom, base_url http://llm-gateway:8094/v1,
+  # api_key ${LLM_GATEWAY_KEY} from secrets/llm-hermes.env).
+  hermes:
+    env_file:
+      - ./secrets/hermes.env
+      - ./secrets/llm-hermes.env
+    environment:
+      LLM_GATEWAY_URL: http://llm-gateway:8094
+    networks:
+      - ai-internal
+      - llm-internal
+
+  # Overlay: learning drafts roadmaps through the gateway's free "batch" alias (no provider key in learning).
+  learning:
+    environment:
+      LEARNING_AI_PROVIDER: gateway
+      LEARNING_AI_MODEL: batch
+      LEARNING_AI_API_URL: http://llm-gateway:8094/v1
+      LEARNING_AI_KEY_FILE: /run/secrets/llm_key
+    secrets:
+      - source: llm_learning_key
+        target: llm_key
+    networks:
+      - learning-internal
+      - learning-egress
+      - llm-internal
+
+  # Overlay: the dashboard's "AI usage" page reads GET /usage (its key has no aliases and no control).
+  dashboard:
+    environment:
+      LLM_GATEWAY_URL: http://llm-gateway:8094
+      LLM_GATEWAY_KEY_FILE: /run/secrets/llm_key
+    secrets:
+      - source: llm_dashboard_key
+        target: llm_key
+    networks:
+      - admin-internal
+      - learning-internal
+      - llm-internal
+
+volumes:
+  llm-data:
+
+networks:
+  llm-internal:
+    driver: bridge
+    internal: true
+  llm-egress:
+    driver: bridge
+
+secrets:
+  llm_openai_public:
+    file: ./secrets/llm-openai-public.key    # OpenAI project with data sharing ON (free daily tokens)
+  llm_openai_private:
+    file: ./secrets/llm-openai-private.key   # OpenAI project with data sharing OFF (paid)
+  llm_gemini:
+    file: ./secrets/llm-gemini.key
+  llm_groq:
+    file: ./secrets/llm-groq.key
+  llm_hermes_key:
+    file: ./secrets/llm-hermes.key           # services/llm-gateway/scripts/init-secrets.mjs
+  llm_learning_key:
+    file: ./secrets/llm-learning.key
+  llm_school_key:
+    file: ./secrets/llm-school.key
+  llm_dashboard_key:
+    file: ./secrets/llm-dashboard.key
+  notifier_llm_key:
+    file: ./secrets/notifier-llm.key

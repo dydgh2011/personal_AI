@@ -43,7 +43,7 @@ export async function createTestApp(config: AppConfig, clock?: Pick<Clock, 'now'
 
 /** Gemini generateContent stand-in: records requests, answers what the test queues. */
 export class FakeGemini {
-  readonly requests: Array<{ url: string; key: string | undefined; body: any }> = [];
+  readonly requests: Array<{ url: string; key: string | undefined; auth?: string; body: any }> = [];
   replies: Array<{ status: number; text?: string; raw?: unknown; delayMs?: number }> = [];
   url = '';
   private server: Server | null = null;
@@ -53,10 +53,18 @@ export class FakeGemini {
       let body = '';
       req.on('data', (d) => (body += d));
       req.on('end', async () => {
-        this.requests.push({ url: req.url!, key: req.headers['x-goog-api-key'] as string | undefined, body: body ? JSON.parse(body) : null });
+        this.requests.push({ url: req.url!, key: req.headers['x-goog-api-key'] as string | undefined, auth: req.headers.authorization, body: body ? JSON.parse(body) : null });
         const reply = this.replies.shift() ?? { status: 500 };
         if (reply.delayMs) await new Promise((r) => setTimeout(r, reply.delayMs));
         res.writeHead(reply.status, { 'content-type': 'application/json' });
+        // The LLM gateway speaks the OpenAI chat format.
+        if (req.url!.endsWith('/chat/completions')) {
+          res.end(JSON.stringify(reply.raw ?? {
+            choices: reply.text === undefined ? [] : [{ message: { role: 'assistant', content: reply.text } }],
+            usage: { prompt_tokens: 1500, completion_tokens: 600 },
+          }));
+          return;
+        }
         res.end(JSON.stringify(reply.raw ?? {
           candidates: reply.text === undefined ? [] : [{ content: { parts: [{ text: reply.text }] } }],
           usageMetadata: { promptTokenCount: 1200, candidatesTokenCount: 800 },

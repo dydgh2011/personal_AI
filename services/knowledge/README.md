@@ -6,7 +6,7 @@
 
 | 층 | 무엇 | 누가 쓰나 | 바뀌나 |
 |---|---|---|---|
-| 0 원본 (`raw_items`) | 모든 대화 한 턴, 첨부 문서(원본 파일 + 뽑은 텍스트), 메모 | 자동 (Hermes 메모리 제공자), `note` | **절대 안 바뀜** (DB 트리거로 수정·삭제 차단) |
+| 0 원본 (`raw_items`) | 모든 대화 한 턴, 첨부 문서(원본 파일 + 뽑은 텍스트), 메모, 학교 소식(공지·Piazza 글·메일) | 자동 (Hermes 메모리 제공자, school 서비스), `note` | **절대 안 바뀜** (DB 트리거로 수정·삭제 차단) |
 | 1 활동 기록 (`activities`) | 언제, 무엇을, 몇 분, 결과, 느낌, 관련 문서 | Kelly `activity_add` | 고치기·숨기기 가능, 기록 남음 |
 | 2 위키 문서 (`pages`, `facts`, `links`) | 주제마다 한 장: 요약 + 날짜·출처가 있는 사실 + 다른 문서 링크 | Kelly `page_save`, `fact_add`, `fact_change`, `link` | 사실을 고치면 옛 사실은 `superseded`로 남음 |
 | 3 프로필 | `me` 문서(나에 대한 요약과 사실) + 문서 목록 | Kelly | Hermes 시스템 프롬프트에 짧게 들어감 |
@@ -61,7 +61,8 @@ Hermes의 메모리 제공자(`memory.provider: personal-ai-knowledge`, `data/he
 
 ## 구성과 보안
 
-- 네트워크: `knowledge-internal`(broker와만), `knowledge-egress`(이 PC의 Ollama, `host.docker.internal:11434`).
+- 네트워크: `knowledge-internal`(broker, school과), `knowledge-egress`(이 PC의 Ollama, `host.docker.internal:11434`).
+- 호출자: `KNOWLEDGE_CLIENTS`(hermes-broker)에 compose 파일마다 `KNOWLEDGE_CLIENTS_<이름>`으로 더합니다(운영자, school). **school**은 원본 추가(`POST /raw`, `source: school`)와 `/status`만 할 수 있습니다(기록상 actor `system`). 학교 항목은 `externalId: school:<서비스>:<id>`로 한 번만 저장됩니다.
 - **저장 위치 (모두 D:)**: 원본 파일은 `data/knowledge/blobs/<sha256>.<확장자>`(호스트 폴더), DB는 `knowledge-data` 볼륨(Docker Desktop의 디스크 이미지 위치를 D:로 둬야 D:에 있음), 가져올 자료는 `data/knowledge-inbox/`.
 - Hermes의 첨부 폴더(`data/hermes/cache/documents`)만 읽기 전용으로 마운트합니다. Hermes의 다른 파일(.env, auth.json 등)은 보이지 않습니다. 첨부 폴더가 Hermes 사용자 전용(0700)이라 이 서비스도 같은 uid 10000으로 돕니다(root 아님).
 - 같은 내용의 파일은 원본을 한 번만 저장합니다(채팅 첨부와 가져오기 사이에도).

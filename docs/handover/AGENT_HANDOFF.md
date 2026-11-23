@@ -97,7 +97,7 @@
 - `learning-os/l1`은 **main에 병합되지 않았다**. 원격 저장소는 없다.
 - 커밋되지 않은 파일: `docs/handover/` (HANDOVER.html, USER_GUIDE.html, 이 문서). 커밋하라는 요청은 아직 없다.
 
-### 2.2 실행 중인 서비스 (11개, 모두 running)
+### 2.2 실행 중인 서비스 (13개, 모두 running)
 
 | 서비스 | 호스트 포트 | 역할 |
 |---|---|---|
@@ -112,6 +112,8 @@
 | notifier | – | Discord 웹훅의 유일한 보유자. 작업 완료/실패·Worker 로그인·일정(계획/리마인더/캘린더 연결) 알림 (typed event만, `compose.notifier.yaml`). hermes-broker의 task watcher가 이벤트를 보냄 |
 | planner | 127.0.0.1:8720 (Google 로그인 복귀 페이지만) | 할 일·하루 계획·Google Calendar 동기화, 23:00/일 23:00 초안, 05:00 오늘 계획, 15분 전 리마인더 (`compose.planner.yaml`, `services/planner/README.md`). Hermes는 broker의 `/planner/*` 고정 경로로만 접근 |
 | knowledge | 없음 | 주인에 대한 지식 저장소: 원본(대화·첨부), 활동 기록, 위키 문서(사실·링크), 프로필. 키워드+의미 검색(Ollama bge-m3). Hermes 메모리 제공자 `personal-ai-knowledge`로 대화 자동 보관·자동 회상 (`compose.knowledge.yaml`, `services/knowledge/README.md`). Hermes는 broker의 `/knowledge/*` 고정 경로로만 접근. 원본은 `data/knowledge/blobs`(D:). 대량 가져오기·Claude Code 정리는 필요할 때만 `compose.knowledge-operator.yaml`(127.0.0.1:8793, `kb.mjs`, `knowledge-importer`). 학습 모델 설계: `docs/knowledge/LEARNING_MODEL.md` |
+| llm-gateway | 없음 | AI 공급자 키(OpenAI Public/Private, Gemini, Groq)의 유일한 보유자. OpenAI 호환, 용도 이름(`kelly`, `kelly-aux`, `batch`, `private`), 무료 한도 집계(OpenAI 80%에서 멈춤), 유료는 주인의 Discord `/ai-paid on` 승인 + 하루 상한 (`compose.llm.yaml`, `services/llm-gateway/README.md`). Hermes·learning·school·dashboard가 자기 키로 호출 |
+| school | 없음 | Quercus(API 토큰, GET만), Piazza(로그인, 읽기만), UofT 메일(Gmail IMAP 읽기 전용), CSC207 사이트. 20분마다 확인 → 지식 저장소 원본 + 중요 소식 바로/나머지 12:00·20:00 모음 Discord 알림 (`compose.school.yaml`, `services/school/README.md`). Hermes는 broker의 `/school/*` 읽기 전용 경로로만 접근. 초기 수집: `docs/knowledge/SCHOOL_BACKFILL.md` |
 
 `repo-sync`는 `tools` profile로, 필요할 때만 실행한다.
 
@@ -191,7 +193,7 @@ D:\personal_ai
 
 **PowerShell**
 ```powershell
-$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml".Split(' ')
+$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml -f compose.llm.yaml -f compose.school.yaml".Split(' ')
 docker compose @F ps
 docker compose @F up -d --build --no-deps <service>    # 해당 서비스만 다시 빌드
 docker compose @F logs --tail 100 <service>            # 로그에 비밀 정보가 없는지도 확인
@@ -199,7 +201,7 @@ docker compose @F logs --tail 100 <service>            # 로그에 비밀 정보
 
 **Bash**
 ```bash
-F="-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml"
+F="-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml -f compose.llm.yaml -f compose.school.yaml"
 docker compose $F up -d --build --no-deps dashboard
 ```
 

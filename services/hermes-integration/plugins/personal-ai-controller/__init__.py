@@ -29,13 +29,17 @@ try:  # loaded as a package by Hermes
     from . import controller_client as client_lib
     from . import document_client
     from . import guard
+    from . import llm_client
     from . import planner_client
+    from . import school_client
 except ImportError:  # loaded as a plain module (tests)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import controller_client as client_lib  # type: ignore[no-redef]
     import document_client  # type: ignore[no-redef]
     import guard  # type: ignore[no-redef]
+    import llm_client  # type: ignore[no-redef]
     import planner_client  # type: ignore[no-redef]
+    import school_client  # type: ignore[no-redef]
 
 logger = logging.getLogger("personal_ai_controller")
 
@@ -307,6 +311,34 @@ def run_planner_tool(args: dict[str, Any], env: dict[str, str] | None = None, cl
         return {"ok": False, "error": {"code": "server_error", "message": f"Unexpected error ({type(err).__name__})"}}
 
 
+SCHOOL_TOOL_NAME = "personal_ai_school"
+
+
+def run_school_tool(args: dict[str, Any], env: dict[str, str] | None = None, client_factory=client_lib.Client) -> dict[str, Any]:
+    """Executes one personal_ai_school call (read-only) and returns the JSON-able result (never raises)."""
+    args = args or {}
+    handler = school_client.HANDLERS.get(args.get("action"))
+    if handler is None:
+        return {"ok": False, "error": {"code": "usage_error", "message": f"action must be one of {', '.join(school_client.ACTIONS)}"}}
+    try:
+        config = client_lib.Config(env if env is not None else dict(os.environ))
+        return handler(client_factory(config), args)
+    except client_lib.CliError as err:
+        error: dict[str, Any] = {"code": err.code, "message": err.message}
+        if err.http_status is not None:
+            error["httpStatus"] = err.http_status
+        return {"ok": False, "error": error}
+    except Exception as err:  # noqa: BLE001 - report, never crash the agent loop
+        logger.warning("%s %s failed: %s", SCHOOL_TOOL_NAME, args.get("action"), type(err).__name__)
+        return {"ok": False, "error": {"code": "server_error", "message": f"Unexpected error ({type(err).__name__})"}}
+
+
+def handle_personal_ai_school(args: dict[str, Any], **_: Any) -> str:
+    result = run_school_tool(args)
+    logger.info("%s action=%s ok=%s", SCHOOL_TOOL_NAME, (args or {}).get("action"), result.get("ok"))
+    return json.dumps(result, ensure_ascii=False)
+
+
 def run_document_tool(args: dict[str, Any], env: dict[str, str] | None = None) -> dict[str, Any]:
     """Executes one personal_ai_document call and returns the JSON-able result (never raises)."""
     try:
@@ -373,4 +405,17 @@ def register(ctx) -> None:
         description="Read documents the owner attached in chat (syllabi, PDFs, DOCX)",
         emoji="📄",
     )
+    ctx.register_tool(
+        name=SCHOOL_TOOL_NAME,
+        toolset="personal_ai",
+        schema=school_client.SCHEMA,
+        handler=handle_personal_ai_school,
+        description="The owner's school news: Quercus, Piazza, UofT mail, course site (read-only)",
+        emoji="🏫",
+    )
+    # Owner-only switches handled by code, so they work even when every free AI quota is used up.
+    ctx.register_command("ai-paid", handler=llm_client.handle_paid, args_hint="on|off|status",
+                         description="오늘만 유료 AI 허용/끄기 (무료 한도가 다 찼을 때)")
+    ctx.register_command("ai-usage", handler=llm_client.handle_usage,
+                         description="오늘 AI 무료 한도와 유료 사용액")
     ctx.register_hook("pre_tool_call", guard.pre_tool_call)

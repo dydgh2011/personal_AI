@@ -19,7 +19,7 @@ const MIGRATIONS: string[] = [
   `
   CREATE TABLE raw_items (
     id TEXT PRIMARY KEY,
-    source TEXT NOT NULL,                       -- chat | document | note | import | system
+    source TEXT NOT NULL,                       -- chat | document | note | import | system | school
     kind TEXT NOT NULL,                         -- e.g. discord-turn, pdf, docx, chatgpt-conversation
     title TEXT,
     occurred_at TEXT NOT NULL,                  -- ISO time the original happened (or arrived)

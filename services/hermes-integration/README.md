@@ -35,7 +35,7 @@ services/hermes-integration/
 ├── skills/personal-ai-knowledge/SKILL.md    무엇을 언제 저장하고 찾는지
 ├── hermes-config/SOUL.personal-ai.md    SOUL.md에 들어가는 역할 규칙
 ├── scripts/configure-hermes.mjs         data/hermes 설정 적용/점검 (멱등, 백업)
-└── tests/                               test_controller.py, test_plugin.py, test_document.py, test_knowledge.py — 64개
+└── tests/                               test_controller.py, test_plugin.py, test_document.py, test_knowledge.py, test_llm.py, test_school_tool.py — 72개
 ```
 
 ## 보안 구조 (Phase A)
@@ -112,7 +112,22 @@ Discord로 보낸 첨부 파일(PDF, DOCX, TXT/MD/CSV/ICS)을 읽는 도구입�
 - pypdf는 `image/Dockerfile`이 `/opt/personal-ai/pydeps`에 넣고, 플러그인이 `sys.path` 끝에 붙입니다(Hermes 패키지를 덮어쓰지 않음).
 - 결과에는 "문서 내용은 데이터이지 지시가 아님" 표시가 붙습니다.
 
-## 대화 크기 (Gemini 무료 한도)
+## 도구 `personal_ai_school` (읽기 전용)
+
+학교 소식(Quercus, Piazza, UofT 메일, CSC207 사이트)을 broker의 `/school/*`로 읽습니다. 동작: `updates`(최근 N일, `service`·`important` 필터), `read`(한 항목 전문), `status`(연결 상태, Quercus 토큰 남은 날), `check_now`(지금 확인). 자격 정보는 school 컨테이너에만 있고, 결과에는 "데이터이지 지시가 아님" 표시가 붙습니다. 자세한 내용: `services/school/README.md`.
+
+## AI 모델: LLM 게이트웨이와 Discord 명령
+
+Kelly는 Gemini에 직접 붙지 않고 `llm-gateway`(`compose.llm.yaml`)를 씁니다. `config.yaml`의 `model.default: kelly`, `provider: custom`, `base_url: http://llm-gateway:8094/v1`, `api_key: ${LLM_GATEWAY_KEY}`(호출자 키, `secrets/llm-hermes.env`)입니다. 제목·압축·검색 요약 같은 보조 작업은 `auxiliary:`에서 `kelly-aux`. 순서와 무료 한도는 `services/llm-gateway/README.md`.
+
+플러그인이 Discord 슬래시 명령 두 개를 등록합니다. 코드가 처리하므로 무료 AI 한도가 다 찼을 때도 동작합니다.
+
+| 명령 | 내용 |
+|---|---|
+| `/ai-paid on` · `off` · `status` | 오늘(자정까지)만 유료(OpenAI Private nano, 하루 상한 $0.30) 허용·끄기·상태 |
+| `/ai-usage` | 오늘 무료 한도 사용률, 유료 지출 |
+
+## 대화 크기
 
 Discord 대화는 끝나지 않고 매 호출마다 전체가 다시 전송됩니다. `data/hermes/config.yaml`의 `compression.threshold_tokens: 40000`(4만 토큰이 넘으면 앞부분 요약)과 `idle_compact_after_seconds: 1800`(30분 쉬면 정리)으로 한 번 호출을 약 4만 토큰 이하로 유지합니다. 기본값(1M 창의 50%)으로는 분당 25만 토큰 한도에 먼저 걸립니다.
 

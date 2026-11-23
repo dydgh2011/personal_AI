@@ -37,8 +37,13 @@ function main(): void {
   const mention = process.env.DISCORD_MENTION_USER_ID?.trim() || null;
   if (mention !== null && !/^\d{5,25}$/.test(mention)) throw new Error('DISCORD_MENTION_USER_ID must be a numeric Discord user id');
 
-  // NOTIFIER_CLIENTS = name=/path/to/key[,name2=/path2]
-  const clients = (process.env.NOTIFIER_CLIENTS ?? '')
+  // NOTIFIER_CLIENTS = name=/path/to/key[,name2=/path2]; compose overlays add callers in
+  // NOTIFIER_CLIENTS_<NAME> so they do not overwrite each other's lists.
+  const clients = Object.keys(process.env)
+    .filter((k) => /^NOTIFIER_CLIENTS(_[A-Z0-9]+)?$/.test(k))
+    .sort()
+    .map((k) => process.env[k] ?? '')
+    .join(',')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean)

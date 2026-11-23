@@ -1,0 +1,21 @@
+{
+  "name": "personal-ai-llm-gateway",
+  "version": "0.1.0",
+  "description": "Sole holder of the AI provider keys: OpenAI-compatible gateway with purpose aliases, free-tier quotas, fallbacks, paid approval and usage records",
+  "private": true,
+  "license": "UNLICENSED",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "node --test --test-reporter=spec --test-timeout=60000 \"dist/**/*.test.js\"",
+    "start": "node dist/main.js"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "~6.0.3"
+  }
+}

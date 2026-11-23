@@ -1,0 +1,12 @@
+# Exact versions, as tested by the owner in %USERPROFILE%\.school-connectors (2026-11-22).
+requests==2.34.2
+urllib3==2.8.0
+certifi==2026.11.20
+charset-normalizer==3.5.2
+idna==3.20
+beautifulsoup4==4.15.0
+soupsieve==4.1.3
+typing_extensions==4.16.0
+piazza-api==0.16.1
+six==1.17.0
+tzdata==2026.6

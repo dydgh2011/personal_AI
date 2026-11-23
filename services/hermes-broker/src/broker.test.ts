@@ -274,6 +274,49 @@ describe('hermes-broker', () => {
     assert.equal((await call('GET', '/knowledge/status')).status, 503, 'without a knowledge store configured');
   });
 
+  it('forwards only the read-only school routes, with the school key', async () => {
+    const SCHOOL_KEY = 'school-' + 's'.repeat(40);
+    const got: Array<{ method: string; url: string; key?: string; knowledge?: string }> = [];
+    const school = createServer(async (req, res) => {
+      for await (const _ of req) void _;
+      got.push({ method: req.method!, url: req.url!, key: req.headers['x-school-key'] as string, knowledge: req.headers['x-knowledge-key'] as string });
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+    });
+    const schoolUrl = await listen(school);
+    const broker = createBroker(
+      { controllerUrl: 'http://127.0.0.1:9', token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: null, school: { url: schoolUrl, key: SCHOOL_KEY } },
+      { info: () => {}, warn: () => {} },
+      () => clock,
+    );
+    const url = await listen(broker);
+    const send = (method: string, path: string, body?: unknown) =>
+      fetch(url + path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+    try {
+      assert.equal((await send('GET', '/school/updates?days=3&service=piazza&important=1&limit=20')).status, 200);
+      assert.equal((await send('GET', '/school/item?service=quercus&id=stream%3A1%3At')).status, 200);
+      assert.equal((await send('POST', '/school/poll', {})).status, 200);
+      assert.equal((await send('POST', '/school/settings/mail-rule', { match: '@ads.com', action: 'ignore' })).status, 200);
+      assert.equal((await send('GET', '/school/updates?service=gmail')).status, 200);
+      assert.deepEqual(got.map((g) => [g.method, g.url]), [
+        ['GET', '/updates?days=3&service=piazza&important=1&limit=20'],
+        ['GET', '/item?service=quercus&id=stream%3A1%3At'],
+        ['POST', '/poll'],
+        ['POST', '/settings/mail-rule'],
+        ['GET', '/updates?service=gmail'],
+      ]);
+      assert.ok(got.every((g) => g.key === SCHOOL_KEY && g.knowledge === undefined));
+      for (const [method, path] of [['GET', '/school/updates?service=acorn'], ['GET', '/school/updates?token=1'], ['POST', '/school/updates'], ['GET', '/school/secrets'], ['POST', '/school/login']]) {
+        assert.ok([400, 404, 405].includes((await send(method, path)).status), `${method} ${path}`);
+      }
+      assert.equal(got.length, 5);
+    } finally {
+      await new Promise((r) => broker.close(r));
+      await new Promise((r) => school.close(r));
+    }
+    assert.equal((await call('GET', '/school/status')).status, 503, 'without a school service configured');
+  });
+
   it('requires the client key when configured, before forwarding anything', async () => {
     const key = 'k'.repeat(48);
     const keyed = createBroker({ controllerUrl: base, token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: key }, { info: () => {}, warn: () => {} });

@@ -1,0 +1,122 @@
+# School connectors: Quercus (API token), Piazza (login), UofT mail (Outlook -> Gmail forward, IMAP read-only),
+# public course sites. Needs compose.knowledge.yaml, compose.notifier.yaml, compose.llm.yaml, compose.controller.yaml.
+#   node services/school/scripts/init-secrets.mjs --import <owner's .env>     (never prints values)
+#   docker compose @F up -d --build --no-deps school knowledge notifier hermes-broker
+#
+# - The only holder of the school credentials (secrets/school.env). Uses them for reading only.
+# - Every item -> knowledge store original (source "school"); important items -> Discord right away
+#   (summary by the gateway's free kelly-aux alias), the rest -> digests at 12:00 and 20:00.
+# - Hermes reads results only through hermes-broker (/school/updates, /item, /status, /poll).
+# - school-internal: broker <-> school (no internet). school-egress: the school services.
+# - No host port, no Docker socket.
+
+services:
+  school:
+    build:
+      context: ./services/school
+    image: personal_ai-school:local
+    restart: unless-stopped
+    init: true
+    env_file:
+      - ./secrets/school.env
+    environment:
+      TZ: America/Toronto
+      SCHOOL_SERVICES: quercus,piazza,outlook,course_site
+      SCHOOL_COURSE_SITES: CSC207|https://mcs.utm.utoronto.ca/~207/26f/|index,lectures,assignments,tests,resources
+      SCHOOL_POLL_MINUTES: "20"
+      SCHOOL_DIGEST_TIMES: "12:00,20:00"
+      SCHOOL_CLIENTS: hermes-broker=/run/secrets/broker_key
+      SCHOOL_DB: /var/lib/school/school.db
+      KNOWLEDGE_URL: http://knowledge:8092
+      KNOWLEDGE_KEY_FILE: /run/secrets/knowledge_key
+      NOTIFIER_URL: http://notifier:8090
+      NOTIFIER_KEY_FILE: /run/secrets/notifier_key
+      LLM_URL: http://llm-gateway:8094
+      LLM_KEY_FILE: /run/secrets/llm_key
+    secrets:
+      - source: school_broker_key
+        target: broker_key
+      - source: knowledge_school_key
+        target: knowledge_key
+      - source: notifier_school_key
+        target: notifier_key
+      - source: llm_school_key
+        target: llm_key
+    volumes:
+      - school-data:/var/lib/school           # school.db: items seen (full text), what was sent, page snapshots
+      - ./data/knowledge-inbox/school:/import:ro   # one-time backfill .jsonl (docs/knowledge/SCHOOL_BACKFILL.md)
+    networks:
+      - school-internal
+      - school-egress
+      - knowledge-internal
+      - notify-internal
+      - llm-internal
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 256m
+    cpus: 0.5
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8095/health', timeout=4).status == 200 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # Overlay: the knowledge store accepts originals from the school service (add only).
+  knowledge:
+    environment:
+      KNOWLEDGE_CLIENTS_SCHOOL: school=/run/secrets/school_key
+    secrets:
+      - source: knowledge_school_key
+        target: school_key
+
+  # Overlay: the notifier accepts school events.
+  notifier:
+    environment:
+      NOTIFIER_CLIENTS_SCHOOL: school=/run/secrets/school_key
+    secrets:
+      - source: notifier_school_key
+        target: school_key
+
+  # Overlay: the broker forwards Hermes' read-only /school/* calls.
+  hermes-broker:
+    environment:
+      SCHOOL_URL: http://school:8095
+      SCHOOL_KEY_FILE: /run/secrets/school_key
+    secrets:
+      - source: school_broker_key
+        target: school_key
+    networks:
+      - ai-internal
+      - school-internal
+
+volumes:
+  school-data:
+
+networks:
+  school-internal:
+    driver: bridge
+    internal: true
+  school-egress:
+    driver: bridge
+
+secrets:
+  school_broker_key:
+    file: ./secrets/school-broker.key        # services/school/scripts/init-secrets.mjs
+  knowledge_school_key:
+    file: ./secrets/knowledge-school.key
+  notifier_school_key:
+    file: ./secrets/notifier-school.key
+  llm_school_key:
+    file: ./secrets/llm-school.key           # services/llm-gateway/scripts/init-secrets.mjs

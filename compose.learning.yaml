@@ -9,7 +9,8 @@
 # - learning-egress: outbound only, for the AI provider once the owner configures it.
 # - No Docker socket, no controller / GitHub / worker / publisher credentials.
 #
-# AI drafts are off until the owner sets, in secrets/learning.env:
+# With compose.llm.yaml, AI drafts go through the LLM gateway's free "batch" alias (provider "gateway",
+# no provider key in this service). Without it, AI drafts are off until the owner sets, in secrets/learning.env:
 #   LEARNING_AI_PROVIDER=gemini
 #   LEARNING_AI_MODEL=<model id>
 #   LEARNING_AI_MONTHLY_BUDGET_USD=<hard monthly cap>

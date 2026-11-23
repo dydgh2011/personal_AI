@@ -22,12 +22,13 @@ const notFound = (message: string, extra: Record<string, unknown> = {}) => new K
 
 export type Actor = 'hermes' | 'system' | 'operator';
 
+export const PREFERENCES_SLUG = 'preferences';
 export const PAGE_TYPES = ['me', 'course', 'topic', 'goal', 'project', 'person', 'habit', 'place', 'org', 'other'] as const;
 export const ACTIVITY_KINDS = [
   'study', 'class', 'assignment', 'exam', 'project', 'coding', 'reading', 'experiment', 'exercise',
   'chore', 'errand', 'social', 'work', 'rest', 'health', 'other',
 ] as const;
-const RAW_SOURCES = ['chat', 'note', 'import', 'system'] as const;
+const RAW_SOURCES = ['chat', 'note', 'import', 'system', 'school'] as const;
 const SEARCH_KINDS = ['page', 'fact', 'activity', 'raw'] as const;
 type SearchKind = (typeof SEARCH_KINDS)[number];
 
@@ -197,6 +198,7 @@ export class Knowledge {
     this.now = options.now ?? (() => new Date());
     mkdirSync(this.blobDir, { recursive: true });
     this.ensureMe();
+    this.ensurePreferences();
   }
 
   private iso(): string {
@@ -221,6 +223,21 @@ export class Knowledge {
     this.db
       .prepare("INSERT INTO pages (id, slug, title, type, summary, aliases, created_at, updated_at) VALUES (?, 'me', ?, 'me', '', '[]', ?, ?)")
       .run(id, '나 (owner)', ts, ts);
+    this.indexPage(id);
+  }
+
+  /**
+   * The owner's preferences and feedback ("요약은 마감일 먼저", "광고 메일은 무시"): one page whose
+   * active facts all go into every Hermes system prompt (profile compact), so feedback given once is
+   * followed everywhere, in every later session.
+   */
+  private ensurePreferences() {
+    if (this.db.prepare(`SELECT 1 FROM pages WHERE slug = '${PREFERENCES_SLUG}'`).get()) return;
+    const ts = this.iso();
+    const id = randomUUID();
+    this.db
+      .prepare("INSERT INTO pages (id, slug, title, type, summary, aliases, created_at, updated_at) VALUES (?, ?, ?, 'other', ?, ?, ?, ?)")
+      .run(id, PREFERENCES_SLUG, '취향과 피드백', '주인이 시스템에 준 취향과 피드백. 모든 대화와 작업에서 항상 따른다.', JSON.stringify(['preferences', '피드백', '취향', '선호']), ts, ts);
     this.indexPage(id);
   }
 
@@ -933,7 +950,7 @@ export class Knowledge {
   profile(compact = false) {
     const me = this.getPage('me');
     const index = this.db
-      .prepare("SELECT type, title FROM pages WHERE archived = 0 AND slug != 'me' ORDER BY type, updated_at DESC")
+      .prepare("SELECT type, title FROM pages WHERE archived = 0 AND slug NOT IN ('me', 'preferences') ORDER BY type, updated_at DESC")
       .all() as Array<{ type: string; title: string }>;
     const byType: Record<string, string[]> = {};
     for (const r of index) (byType[r.type] ??= []).push(r.title);
@@ -944,6 +961,11 @@ export class Knowledge {
     const lines: string[] = [];
     if (me.page.summary) lines.push(clip(me.page.summary, 500));
     for (const f of me.facts.slice(-12)) lines.push(`- ${clip(f.text, 140)}`);
+    const prefs = this.getPage(PREFERENCES_SLUG).facts;
+    if (prefs.length) {
+      lines.push('Owner preferences and feedback (always follow; newest wins when two disagree):');
+      for (const f of prefs.slice(-40)) lines.push(`- ${clip(f.text, 200)}`);
+    }
     const pageList = Object.entries(byType)
       .map(([t, titles]) => `${t}: ${titles.slice(0, 12).join(', ')}${titles.length > 12 ? ` (+${titles.length - 12})` : ''}`)
       .join(' | ');

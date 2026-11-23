@@ -11,6 +11,7 @@ export interface ApiLogger {
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const SEARCH_KINDS = ['page', 'fact', 'activity', 'raw'] as const;
+const SCHOOL_ROUTES = new Set(['status', 'raw.add']);
 
 class HttpError extends Error {
   constructor(
@@ -117,9 +118,11 @@ export function createApi(kb: Knowledge, clientKeys: Array<{ name: string; key: 
       if (!route) throw new HttpError(405, 'method_not_allowed', 'Method not allowed');
       audit.op = route.name;
       if (route.clients && !route.clients.includes(client.name)) throw new HttpError(403, 'forbidden', 'This operation is for the operator only');
+      // The school connector only adds originals (and reads status).
+      if (client.name === 'school' && !SCHOOL_ROUTES.has(route.name)) throw new HttpError(403, 'forbidden', 'The school connector may only add originals');
       const params = (url.pathname.match(route.pattern) ?? []).slice(1);
       const body = req.method === 'POST' ? await readJson(req) : {};
-      const actor: Actor = client.name === 'hermes-broker' ? 'hermes' : 'operator';
+      const actor: Actor = client.name === 'hermes-broker' ? 'hermes' : client.name === 'school' ? 'system' : 'operator';
       const result = await route.handler({ body, query: url.searchParams, params, actor });
       status = 200;
       send(res, 200, result);

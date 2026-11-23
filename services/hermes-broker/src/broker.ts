@@ -22,6 +22,8 @@ export interface BrokerConfig {
   knowledge?: { url: string; key: string } | null;
   /** Cap on knowledge writes per minute (chat turns are stored too, so higher than the planner's). */
   knowledgeWritesPerMinute?: number;
+  /** School connector service (compose.school.yaml): read-only updates; null = school routes answer 503. */
+  school?: { url: string; key: string } | null;
 }
 
 export interface Logger {
@@ -43,12 +45,19 @@ const MAX_KNOWLEDGE_BODY_BYTES = 4 * 1024 * 1024;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MAX_INSTRUCTION_CHARS = 20_000;
 
+type Target = 'planner' | 'knowledge' | 'school';
+const TARGETS: Record<Target, { label: string; header: string }> = {
+  planner: { label: 'planner', header: 'X-Planner-Key' },
+  knowledge: { label: 'knowledge store', header: 'X-Knowledge-Key' },
+  school: { label: 'school service', header: 'X-School-Key' },
+};
+
 interface Route {
   method: 'GET' | 'POST';
   pattern: RegExp;
   name: string;
   /** Upstream service; default the controller. Planner/knowledge routes get their own key, never the controller token. */
-  target?: 'planner' | 'knowledge';
+  target?: Target;
   /** Query parameters forwarded to the controller, each with its validator. Everything else is rejected. */
   query?: Record<string, (value: string) => boolean>;
 }
@@ -94,7 +103,37 @@ const ROUTES: Route[] = [
   // Knowledge store (pages, facts, activities, raw originals, search). Forwarded without the
   // /knowledge prefix; the knowledge service validates every field itself.
   ...knowledgeRoutes(),
+  // School connectors (Quercus, Piazza, UofT mail, course sites): read-only, plus "check now".
+  ...schoolRoutes(),
 ];
+
+function schoolRoutes(): Route[] {
+  const s = (method: Route['method'], path: string, name: string, query?: Route['query']): Route => ({
+    method,
+    pattern: new RegExp(`^/school${path}$`),
+    name: `school.${name}`,
+    target: 'school',
+    query,
+  });
+  return [
+    s('GET', '/status', 'status'),
+    s('GET', '/updates', 'updates', {
+      days: (v) => /^\d{1,2}$/.test(v),
+      limit: (v) => /^\d{1,3}$/.test(v),
+      service: (v) => ['quercus', 'piazza', 'outlook', 'gmail', 'course_site'].includes(v),
+      important: (v) => v === '1' || v === '0',
+    }),
+    s('GET', '/item', 'item', {
+      service: (v) => ['quercus', 'piazza', 'outlook', 'gmail', 'course_site'].includes(v),
+      id: (v) => v.length >= 1 && v.length <= 300,
+    }),
+    s('POST', '/poll', 'poll'),
+    // The owner's mail rules and summary style (the school service validates every field).
+    s('GET', '/settings', 'settings'),
+    s('POST', '/settings/mail-rule', 'settings.mailRule'),
+    s('POST', '/settings/summary-style', 'settings.summaryStyle'),
+  ];
+}
 
 function knowledgeRoutes(): Route[] {
   const date = (v: string) => /^\d{4}-\d{2}-\d{2}$/.test(v);
@@ -206,7 +245,7 @@ class HttpError extends Error {
  */
 export function createBroker(config: BrokerConfig, logger: Logger, now: () => number = Date.now): Server {
   const created: number[] = [];
-  const writes: Record<'planner' | 'knowledge', number[]> = { planner: [], knowledge: [] };
+  const writes: Record<Target, number[]> = { planner: [], knowledge: [], school: [] };
 
   const rateLimit = () => {
     const t = now();
@@ -251,9 +290,10 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
       if (route.target) {
         const target = route.target;
         const upstreamConfig = config[target];
-        const label = target === 'planner' ? 'planner' : 'knowledge store';
+        const label = TARGETS[target].label;
         if (!upstreamConfig) throw new HttpError(503, `The ${label} is not set up`);
-        const perMinute = (target === 'planner' ? config.plannerWritesPerMinute : config.knowledgeWritesPerMinute) ?? (target === 'planner' ? 30 : 120);
+        const perMinute =
+          target === 'planner' ? (config.plannerWritesPerMinute ?? 30) : target === 'knowledge' ? (config.knowledgeWritesPerMinute ?? 120) : 10;
         let body: string | undefined;
         if (route.method === 'POST') {
           const value = await readJson(req, false, true, target === 'knowledge' ? MAX_KNOWLEDGE_BODY_BYTES : MAX_BODY_BYTES);
@@ -267,7 +307,7 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
           }
           recent.push(t);
         }
-        const header = target === 'planner' ? 'X-Planner-Key' : 'X-Knowledge-Key';
+        const header = TARGETS[target].header;
         let upstream: Response;
         try {
           upstream = await fetch(upstreamConfig.url + url.pathname.slice(`/${target}`.length) + url.search, {
