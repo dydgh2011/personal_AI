@@ -215,8 +215,14 @@ def run(client: Client, args: dict[str, Any]) -> dict[str, Any]:
             query["kinds"] = ",".join(k for k in args["kinds"] if k in SEARCH_KINDS)
         result = client.call("GET", "/search", query)
         hits = _compact_hits(result.get("results", []))
-        return {"ok": True, "results": hits, "count": len(hits),
-                "note": None if hits else "Nothing stored matches. Ask the owner, then store what they say."}
+        if not hits:
+            note = "Nothing stored matches. Ask the owner, then store what they say."
+        elif any(h["kind"] == "raw" for h in hits):
+            note = ("A raw hit's snippet is only a short excerpt (answers and replies usually come later). Before "
+                    "answering about what an original says, read it in full with action raw and its id.")
+        else:
+            note = None
+        return {"ok": True, "results": hits, "count": len(hits), "note": note}
     if action == "page":
         _need(args, "page")
         return {"ok": True, **client.call("GET", "/page", {"ref": str(args["page"])[:200]})}

@@ -56,6 +56,20 @@
 | Piazza·Google 비밀번호를 바꿨을 때 | `secrets\school.env` 수정 후 재시작 |
 | 학기가 바뀔 때 | `compose.school.yaml`의 `SCHOOL_COURSE_SITES` 수정 (Piazza 과목은 `auto`가 따라감) |
 
+## 학교 자료 한꺼번에 받기·묶기 (호스트에서 실행, `services/school/scripts/`)
+
+자료는 Kelly(지식 저장소)와 **다른 AI 서비스에 건네줄 공부 묶음(zip)** 양쪽에 씁니다. 그래서 영상과 외부 읽기 자료 본문까지 받습니다.
+
+| 스크립트 | 하는 일 |
+|---|---|
+| `course-site-crawl.py <출력 폴더>` | CSC207 강의 사이트(공개) 전체: 슬라이드·코드·영상·지난 시험, 랩/과제 페이지 본문, 읽기 자료(Oracle 튜토리얼은 단원 하위 쪽까지) → `INDEX.md`(주차별). 다시 실행하면 새 파일만 받음. 지금 출력: `data\knowledge-inbox\courses\CSC207\site` |
+| `piazza-to-jsonl.py <백업 폴더> <출력 폴더>` | 주인의 `piazza_scrape.py` 백업(`data\school-backup\piazza\<과목>`)을 backfill `.jsonl`로 (이름 없이 역할만). 순서는 파일 맨 위 설명 |
+| `pack-course.py <과목\|all> [--no-video] [--max-mb N]` | `courses\<과목>` 전체 + Piazza 전체(`.md`) + README(기말 일정) → `data\exports\<과목>-<날짜>.zip`. 업로드 한도가 있는 서비스엔 `--max-mb`로 나눔 |
+
+```powershell
+python -I services\school\scripts\pack-course.py all
+```
+
 ## 설정
 
 ```powershell

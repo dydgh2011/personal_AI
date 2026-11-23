@@ -1,7 +1,7 @@
 ---
 name: personal-ai-knowledge
 description: Remember everything about the owner in the knowledge store - pages with facts and links, an activity timeline, raw originals - and find it again.
-version: 0.3.0
+version: 0.3.1
 author: dydgh2011, Hermes Agent
 license: MIT
 platforms: [linux]
@@ -53,7 +53,7 @@ The page `preferences` ("취향과 피드백") holds how the owner wants the sys
 
 ## When to look things up
 
-- Before saying you don't know something about the owner: `search` (keyword + meaning). Then `page` for the full picture, `timeline` for what they did (e.g. last week's study), `raw` to read an original (a chat turn or document) when exact wording matters.
+- Before saying you don't know something about the owner: `search` (keyword + meaning). Then `page` for the full picture, `timeline` for what they did (e.g. last week's study), `raw` to read an original (a chat turn or document) when exact wording matters. A raw hit's snippet is only a short excerpt: school posts and mails (Piazza, Quercus, UofT mail, imported with their answers and follow-ups) put the answers later in the text, so read the original with `raw` before saying what it says or that it has no answer.
 - "What did I do last week?" → `timeline` with `date_from`/`date_to`.
 - "What do you know about me?" → `profile`.
 

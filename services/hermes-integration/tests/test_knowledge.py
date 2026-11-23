@@ -78,6 +78,11 @@ class ToolTest(unittest.TestCase):
         found = self.run_tool(client, action="search", q="헬스 언제", kinds=["fact", "bogus"], limit=5)
         self.assertEqual(found["results"], [{"kind": "fact", "title": "헬스", "snippet": "헬스: 월수금", "page": "헬스", "date": "2026-11-22", "id": UUID}])
         self.assertEqual(client.calls[-1][2], {"q": "헬스 언제", "limit": 5, "kinds": "fact"})
+        self.assertIsNone(found["note"])
+        raw_client = FakeClient({("GET", "/search"): {"results": [
+            {"kind": "raw", "id": UUID, "title": "[STA 256] @136 Final Exam Formula Sheet?", "snippet": "will we be given a formula sheet"}]}})
+        raw_found = self.run_tool(raw_client, action="search", q="formula sheet")
+        self.assertIn("action raw", raw_found["note"])
         self.run_tool(client, action="fact_add", page="헬스", text="화목 저녁으로 바꿈", observed_on="2026-11-22", source_raw_id=UUID)
         self.assertEqual(client.calls[-1][:2], ("POST", "/facts"))
         self.assertEqual(client.calls[-1][3], {"page": "헬스", "text": "화목 저녁으로 바꿈", "sourceRawId": UUID, "observedOn": "2026-11-22"})
