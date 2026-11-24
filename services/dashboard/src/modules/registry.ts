@@ -21,4 +21,6 @@ export const MODULES: DashboardModule[] = [
   { id: 'reviews', title: 'Code Reviews', href: '/reviews', description: 'Diffs and approvals', permission: 'admin' },
   { id: 'learning', title: 'Learning', href: '/learning', description: 'AI Learning OS: domains, ideas, goals, roadmaps', permission: 'admin' },
   { id: 'ai-usage', title: 'AI usage', href: '/ai-usage', description: 'LLM gateway: free quotas, paid spend, routes', permission: 'admin' },
+  { id: 'knowledge', title: 'Knowledge', href: '/knowledge', description: 'Knowledge graph: pages, facts, links; owner edits', permission: 'admin' },
+  { id: 'services', title: 'Services', href: '/services', description: 'Service map: containers, links, networks, lockdown', permission: 'admin' },
 ];

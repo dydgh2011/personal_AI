@@ -27,6 +27,7 @@ services:
       LEARNING_URL: http://learning:3000
       LEARNING_TOKEN_FILE: /run/secrets/learning_token
       DASHBOARD_SESSION_ABSOLUTE_HOURS: "8"
+      SERVICE_MAP_FILE: /var/lib/service-map/service-map.json
     secrets:
       - source: dashboard_controller_token
         target: controller_token
@@ -38,6 +39,9 @@ services:
       - "127.0.0.1:${DASHBOARD_HOST_PORT:-8710}:3000"   # host-local only
     volumes:
       - dashboard-data:/var/lib/dashboard              # audit log
+      # Service map snapshot written every minute by the host collector (services/service-map).
+      # A directory, not the file: the collector replaces the file by rename. Read-only.
+      - ./data/service-map:/var/lib/service-map:ro
     networks:
       - admin-internal       # shared only with the controller (defined in compose.controller.yaml)
       - learning-internal    # shared only with the learning service (compose.learning.yaml)

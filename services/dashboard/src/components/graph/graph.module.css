@@ -1,0 +1,141 @@
+/* Shared graph canvas (CytoGraph). The canvas sits on --panel: the categorical palette below is
+   validated (dataviz validate_palette.js) against the panel surfaces, dark #161a21 and light #ffffff.
+   Pages put the `palette` class on an ancestor to get these tokens. Text never wears a series color. */
+
+.palette {
+  --viz-s1: #3987e5;
+  --viz-s2: #d95926;
+  --viz-s3: #199e70;
+  --viz-s4: #c98500;
+  --viz-s5: #d55181;
+  --viz-s6: #0ca30c;
+  --viz-other: #6b7280;
+}
+
+:global(:root[data-theme='light']) .palette {
+  --viz-s1: #2a78d6;
+  --viz-s2: #eb6834;
+  --viz-s3: #1baf7a;
+  --viz-s4: #eda100;
+  --viz-s5: #e87ba4;
+  --viz-s6: #008300;
+  --viz-other: #8b919c;
+}
+
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.tools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.search {
+  flex: 1;
+  min-width: 180px;
+}
+
+.search input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.canvas {
+  height: clamp(460px, 72vh, 900px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* legend pieces, shared */
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--viz-other);
+}
+
+.s1 { background: var(--viz-s1); }
+.s2 { background: var(--viz-s2); }
+.s3 { background: var(--viz-s3); }
+.s4 { background: var(--viz-s4); }
+.s5 { background: var(--viz-s5); }
+.s6 { background: var(--viz-s6); }
+.other { background: var(--viz-other); }
+.me { background: var(--text); box-shadow: 0 0 0 2px var(--accent); }
+.small { width: 7px; height: 7px; }
+
+.diamond {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  transform: rotate(45deg);
+  background: var(--viz-other);
+}
+
+.square {
+  display: inline-block;
+  width: 10px;
+  height: 8px;
+  border-radius: 2px;
+  background: var(--panel-2);
+  border: 1px solid var(--muted);
+}
+
+.ring {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--warn);
+}
+
+.line,
+.dashed,
+.dotted,
+.broken {
+  display: inline-block;
+  width: 24px;
+  border-top: 2px solid var(--muted);
+}
+
+.dashed { border-top-style: dashed; }
+.dotted { border-top-style: dotted; }
+.broken { border-top: 2px dashed var(--bad); }
+
+@media (max-width: 900px) {
+  .canvas {
+    height: clamp(380px, 60vh, 620px);
+  }
+}

@@ -1,0 +1,316 @@
+/* Knowledge page only. Page-type colors are the AI usage page's categorical palette, validated
+   (dataviz validate_palette.js) against the dashboard panel surfaces: dark #161a21, light #ffffff.
+   The graph sits on --panel for that reason. Text never wears a type color. */
+
+.page {
+  --viz-s1: #3987e5;
+  --viz-s2: #d95926;
+  --viz-s3: #199e70;
+  --viz-s4: #c98500;
+  --viz-s5: #d55181;
+  --viz-s6: #0ca30c;
+  --viz-other: #6b7280;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+:global(:root[data-theme='light']) .page {
+  --viz-s1: #2a78d6;
+  --viz-s2: #eb6834;
+  --viz-s3: #1baf7a;
+  --viz-s4: #eda100;
+  --viz-s5: #e87ba4;
+  --viz-s6: #008300;
+  --viz-other: #8b919c;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header h1 {
+  margin: 0;
+}
+
+.toggles {
+  display: inline-flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.toggles a {
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.toggles a[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.counts {
+  margin: 0;
+}
+
+.legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.legendItem {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.swatch {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--viz-other);
+}
+
+.sw_course { background: var(--viz-s1); }
+.sw_topic { background: var(--viz-s2); }
+.sw_person { background: var(--viz-s3); }
+.sw_habit { background: var(--viz-s4); }
+.sw_goal { background: var(--viz-s5); }
+.sw_project { background: var(--viz-s6); }
+.sw_me { background: var(--text); box-shadow: 0 0 0 2px var(--accent); }
+.sw_other,
+.sw_place,
+.sw_org { background: var(--viz-other); }
+.sw_fact { width: 7px; height: 7px; background: var(--viz-other); }
+
+.lnLink,
+.lnTogether {
+  display: inline-block;
+  width: 24px;
+  border-top: 2px solid var(--muted);
+}
+
+.lnTogether {
+  border-top-style: dashed;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 380px;
+  gap: 14px;
+  align-items: start;
+}
+
+.graphWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+
+.graphTools {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.search {
+  flex: 1;
+  min-width: 180px;
+}
+
+.search input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.graph {
+  height: clamp(460px, 72vh, 900px);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  overflow: hidden;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 14px 16px;
+  max-height: calc(clamp(460px, 72vh, 900px) + 44px);
+  overflow: auto;
+  min-width: 0;
+}
+
+.panel h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+  overflow-wrap: anywhere;
+}
+
+.panel h3 {
+  margin: 14px 0 6px;
+  font-size: 14px;
+}
+
+.subtle {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+
+.factText {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--panel-2);
+}
+
+.factList,
+.linkList {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.factList li,
+.linkList li {
+  margin-bottom: 6px;
+  overflow-wrap: anywhere;
+}
+
+.kind {
+  margin-left: 6px;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.inline {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+.inline input {
+  flex: 1;
+  min-width: 120px;
+}
+
+.editBox {
+  margin-top: 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+
+.editBox summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+
+.editBox form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.check {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 13px;
+}
+
+.dl {
+  display: grid;
+  grid-template-columns: 70px minmax(0, 1fr);
+  gap: 6px 10px;
+  font-size: 13px;
+}
+
+.dl dt {
+  color: var(--muted);
+}
+
+.dl dd {
+  margin: 0;
+}
+
+.listView {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 8px 12px;
+}
+
+.listView summary {
+  cursor: pointer;
+}
+
+.listView table {
+  width: 100%;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panel {
+    max-height: none;
+  }
+
+  .graph {
+    height: clamp(380px, 60vh, 620px);
+  }
+}

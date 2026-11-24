@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "cytoscape": "3.34.4",
     "next": "16.4.3",
     "react": "19.3.1",
     "react-dom": "19.3.1",

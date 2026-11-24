@@ -1,0 +1,320 @@
+/* Services page only. Colors come from the dashboard tokens (globals.css), so light and dark both work. */
+
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.header h1 {
+  margin: 0;
+}
+
+.stale {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warn);
+  border-radius: 8px;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 10%, transparent);
+}
+
+.summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.levels {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.level {
+  display: inline-block;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  border: 1px solid currentColor;
+}
+
+.lv_danger {
+  color: var(--bad);
+}
+
+.lv_warn {
+  color: var(--warn);
+}
+
+.lv_info {
+  color: var(--muted);
+}
+
+.controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 18px;
+}
+
+.control {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.control select {
+  max-width: 100%;
+}
+
+.segment {
+  display: inline-flex;
+}
+
+.segment button {
+  border-radius: 0;
+}
+
+.segment button:first-child {
+  border-radius: 6px 0 0 6px;
+}
+
+.segment button:last-child {
+  border-radius: 0 6px 6px 0;
+  margin-left: -1px;
+}
+
+.segment button[aria-pressed='true'] {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.plainList {
+  margin: 8px 0 12px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.listView {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 8px 12px;
+}
+
+.listView summary {
+  cursor: pointer;
+}
+
+.listView table {
+  width: 100%;
+  margin-top: 8px;
+  font-size: 13px;
+}
+
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 14px;
+  align-items: start;
+}
+
+.panel {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 14px 16px;
+  max-height: clamp(440px, 70vh, 860px);
+  overflow: auto;
+  min-width: 0;
+}
+
+.panel h2 {
+  margin: 0 0 4px;
+  font-size: 18px;
+}
+
+.panel h3 {
+  margin: 14px 0 6px;
+  font-size: 14px;
+}
+
+.empty h2 {
+  font-size: 16px;
+}
+
+.subtle {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 13px;
+  word-break: break-all;
+}
+
+.dl {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 8px 10px;
+  margin: 12px 0 0;
+  font-size: 13px;
+}
+
+.dl dt {
+  color: var(--muted);
+}
+
+.dl dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.dl code {
+  display: inline-block;
+  margin: 0 4px 4px 0;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--panel-2);
+  font-size: 12px;
+}
+
+.chip {
+  margin: 0 4px 4px 0;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.chip:hover {
+  border-color: var(--accent);
+}
+
+.linkButton {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.checks {
+  list-style: none;
+  margin: 0 0 4px;
+  padding: 0;
+}
+
+.checks li::before {
+  display: inline-block;
+  width: 1.3em;
+}
+
+.yes::before {
+  content: '✓';
+  color: var(--ok);
+}
+
+.no {
+  color: var(--muted);
+}
+
+.no::before {
+  content: '–';
+}
+
+.bad {
+  color: var(--bad);
+}
+
+.findingList {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.dot {
+  display: inline-block;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+}
+
+.ok {
+  background: var(--ok);
+}
+
+.warn {
+  background: var(--warn);
+}
+
+.dot.bad {
+  background: var(--bad);
+}
+
+/* ---- findings */
+
+.findings h2 {
+  margin: 4px 0 8px;
+  font-size: 18px;
+}
+
+.findingGroup {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 8px 12px;
+  margin-bottom: 8px;
+}
+
+.findingGroup summary {
+  cursor: pointer;
+}
+
+.findingGroup ul {
+  margin: 8px 0 2px;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.findingGroup li {
+  margin-bottom: 4px;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .panel {
+    max-height: none;
+  }
+
+}

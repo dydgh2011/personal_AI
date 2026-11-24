@@ -91,6 +91,19 @@ services:
     networks:
       - knowledge-internal
 
+  # Overlay: the dashboard's "Knowledge" graph page (client "dashboard": read the graph, edit facts,
+  # pages and links; never raw originals, search, purge or operator routes). knowledge-dashboard is
+  # internal and has only these two services on it.
+  dashboard:
+    environment:
+      KNOWLEDGE_URL: http://knowledge:8092
+      KNOWLEDGE_KEY_FILE: /run/secrets/knowledge_key
+    secrets:
+      - source: knowledge_dashboard_key
+        target: knowledge_key
+    networks:
+      - knowledge-dashboard
+
 volumes:
   knowledge-data:
 

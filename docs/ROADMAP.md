@@ -1,7 +1,16 @@
 # Personal AI OS — Roadmap
 
 상태 표기: ✅ 완료(검증됨) · 🟡 부분 완료 · ⬜ 미착수. 완료는 실제 Docker 환경에서 검증한 경우에만 표시합니다.
-마지막 갱신: 2026-11-23 (18절 AI 사용량 그래프 계획 추가)
+마지막 갱신: 2026-11-24 (18절 완료, 19절 사실 종류·지식 그래프 편집 화면, 20절 Service Map, 21절 Ubuntu 이전 계획)
+
+**진행 요약** (✅ 1 · 🟡 0.5 · ⬜ 0으로 센 대략값)
+
+| 트랙 | 절 | 진행 | 남은 큰 일 |
+|---|---|---|---|
+| 코딩 자동화 | 1~15 | 약 60% (✅ 10 · 🟡 4 · ⬜ 6) | 실제 게시, PR, CI 확인, 커밋 스타일, 프로젝트별 규칙 |
+| AI Learning OS | 17 | 약 40% (L0·L1 ✅) | L2 평가·숙련도, L3 일정·복습, L4 연동 |
+| 개인 비서·Kelly | 18~19 | 약 72% (✅ 11 · 🟡 1 · ⬜ 4) | 사실 종류 채우기, Learning↔플래너, Learning 화면, 할 일 확인 |
+| Service Map | 20 | 1단계 완료 | 허용된 명령(2단계), 호출 수(3단계) |
 
 ```text
 사용자 ─ Telegram/hermes chat ─▶ Hermes ─▶ hermes-broker ─▶ Controller ◀─ claude-worker / codex-worker
@@ -372,8 +381,8 @@
 
 ## 16. 범위 밖 (후속)
 
-Memory Agent, Finance Agent, Personal Assistant Agent, JARVIS TTS 연동, 자동 배포, 다중 Agent 병렬 프로젝트 수정 — ⬜ 미착수.
-(학습 기능은 17절 AI Learning OS로 이동했다. 범용 Memory/Knowledge Graph는 여전히 범위 밖이며, Learning OS는 자체 선수지식 DAG만 소유한다.)
+Finance Agent, JARVIS TTS 연동, 자동 배포, 다중 Agent 병렬 프로젝트 수정 — ⬜ 미착수.
+(학습 기능은 17절 AI Learning OS로 이동했다. Personal Assistant와 Memory(지식 저장소)는 19절로 옮겨 진행 중이다. Learning OS는 자체 선수지식 DAG만 소유하며 지식 저장소와 섞지 않는다.)
 
 ## 17. AI Learning OS (L0~L4) 🟡 (L0 ✅ · L1 ✅ 2026-11-04, AI 실제 호출은 미설정 · L2~L4 미착수)
 
@@ -431,7 +440,13 @@ Memory Agent, Finance Agent, Personal Assistant Agent, JARVIS TTS 연동, 자동
   - L4-04 Quest, 음성 어댑터: 선택 사항이며, 실패해도 핵심 기능에 영향이 없어야 한다.
 - **단계 게이트**: L0 승인 전에는 구현하지 않는다. 각 단계는 실제 Docker 검증과 테스트 근거가 있어야 ✅로 표시한다. `S/M/L`은 난이도이지 진행률이 아니다.
 
-## 18. AI 사용량 그래프 (Usage 화면) ⬜ (2026-11-23 계획 추가)
+## 18. AI 사용량 그래프 (Usage 화면) ✅ (2026-11-24, 커밋 8cdd56f)
+
+- 구현: 게이트웨이 `GET /usage/series`(읽기 전용 집계), Dashboard `/ai-usage` 그래프 화면. 테스트 게이트웨이 22, Dashboard 47.
+- 실환경: 실제 `gateway.db`에서 그래프 합계가 `/usage` 일별 합계와 같음(11/23 84회, 11/24 70회, 호출자·별칭·모델 모두), 빈 기간 정상, 잘못된 단위 400. 사용자가 화면 확인, 피드백은 쓰면서 계속 받는다.
+- 주의: 게이트웨이와 Dashboard 이미지를 동시에 빌드하면 게이트웨이 테스트가 시간 초과로 실패할 수 있다. 하나씩 빌드한다.
+
+아래는 처음 계획이다.
 
 Claude, ChatGPT의 사용량 화면처럼 AI 사용량의 **변화**를 그래프로 본다. 지금 Dashboard `/ai-usage`는 오늘 숫자와 일별 합계 표만 보여 준다(읽기 전용).
 
@@ -449,3 +464,72 @@ Claude, ChatGPT의 사용량 화면처럼 AI 사용량의 **변화**를 그래�
   - 프롬프트·응답 본문은 게이트웨이에 저장하지 않는 원칙을 유지한다(토큰 수만).
   - 데스크톱과 390px 모바일, 라이트·다크 모두 확인한다.
 - **수용 기준**: 실제 `gateway.db` 기준으로 그래프 합계가 `/usage` 일별 합계와 같다. 빈 기간과 게이트웨이 장애 때 화면이 깨지지 않는다. 실제 브라우저로 확인한다.
+
+## 19. 개인 비서·Kelly 🟡 (2026-11-24 기준 약 72%)
+
+Discord에서 Kelly(Hermes)가 일정, 할 일, 학교, 공부를 돕는다. 계획 결정은 2026-11-21(Discord, 플래너 서비스, Google Calendar, 그래프 화면, LLM 게이트웨이).
+원칙: AI는 정해진 도구와 코드 흐름으로만 움직이고(임의 HTTP 없음), 사실은 코드가 모아 붙이고 AI는 말로 옮긴다.
+
+| 상태 | 항목 | 서비스·위치 | 커밋 |
+|---|---|---|---|
+| ✅ | Discord Kelly, `/new`·`/reset`로 대화 비우기, Discord 전용 도구·스킬 축소 | `hermes`, `data/hermes/config.yaml` | 0fb0781 이후 |
+| ✅ | 플래너(할 일, 일정), Kelly 전용 Google 캘린더, 23시·5시 브리핑, 15분 전 알림 | `services/planner`, `services/notifier` | 0fb0781 |
+| ✅ | 첨부 문서 읽기(PDF 등) | `hermes-integration/plugins/personal-ai-controller` | 0fb0781 |
+| ✅ | 지식 저장소 4층(원본, 활동, 페이지·사실, 프로필), 대량 가져오기 | `services/knowledge`, `services/knowledge-importer` | 922b603 |
+| ✅ | LLM 게이트웨이: 무료 경로 우선, 유료는 승인제, 호출별 토큰 기록(LiteLLM 대신 직접 만듦) | `services/llm-gateway` | db1b257 |
+| ✅ | 학교 연결: Quercus, Piazza, UofT 메일 규칙, CSC207 사이트 | `services/school` | db1b257, 8b45b23 |
+| ✅ | 학교 자료 수집, 다른 AI에 줄 공부 zip | `services/school` | 8b45b23 |
+| ✅ | Kelly 답변: 과목 기록·다가오는 일정을 코드가 붙임, 답에서 빠진 사실을 코드가 덧붙임, 토론토 시간 기준 | `plugins/personal-ai-knowledge` | 6e47f40 |
+| ✅ | Discord "입력 중" 원인 제거(도구 진행 표시 끔) | `data/hermes/config.yaml` | 설정만 |
+| 🟡 | 기말 대비: 자료·과목 정리 완료, Kelly와 공부 계획 세우기는 확인 전 | 지식 저장소 | — |
+| ✅ | 지식 그래프 화면: Obsidian 그래프 뷰처럼 페이지·사실·연결을 보고, 필요하면 직접 고치기(아래 설명). Dashboard `/knowledge` 구현, 실환경 API·격리 확인, 사용자 브라우저 확인(2026-11-24) | `dashboard`, `knowledge` | f0c9676 + 작업 중 |
+| ✅ | AI 사용량 그래프(18절) | `dashboard`, `llm-gateway` | 8cdd56f |
+| 🟡 | 사실에 종류 붙이기(점수, 실수, 자료): 코드가 키워드 대신 종류로 고름. migration 3 적용·Kelly 반영 완료, 기존 사실 62개에 종류 채우기는 승인 대기(미리보기 완료) | `knowledge`, `personal-ai-knowledge` | f515b3c |
+| ⬜ | Learning ↔ 플래너 연결(학습 과제를 일정·할 일로) | `learning`, `planner` | — |
+| ⬜ | Learning 화면 다시 만들기 | `dashboard` `/learning` | — |
+| ⬜ | 할 일을 실제로 했는지 확인(나중 기능) | `planner` | — |
+
+- **지식 그래프 보기·편집 화면** (2026-11-24 요청)
+  - Obsidian 그래프 뷰처럼 페이지(과목, 사람, 습관 등)와 사실, 연결을 점과 선으로 본다. 종류·페이지 유형별 색, 검색, 확대·이동, 노드를 누르면 내용 패널.
+  - 필요하면 직접 고친다: 사실 고치기·종류 바꾸기·보관, 페이지 제목·별칭, 연결 추가·삭제. 지우기 대신 보관을 기본으로 하고, 모든 변경은 지식 저장소의 변경 기록에 남는다(누가: dashboard).
+  - 연결: Dashboard 전용 키(`secrets/knowledge-dashboard.key`)와 내부 전용 네트워크 `knowledge-dashboard`(두 서비스만). 허용: 그래프·문서·사실 읽기와 고치기 4가지. 원본, 검색, 회상, 프로필, 일반 쓰기, purge, 운영자 경로는 403(실환경 확인). 다른 서비스는 `knowledge` 이름을 찾지 못함(확인). 로그인·CSRF 그대로.
+  - 그림: Cytoscape.js 3.34.4(힘 배치, 문서 크기 = 사실 수, 사실은 작은 점, 검색, 목록 보기). Service Map은 React Flow 12.12.1.
+- **아직 사용자 확인 전**: Discord에서 "입력 중"이 사라지는지, 답 끝 📌 기록이 잘 보이는지, `/new` 동작.
+- **수용 기준**: 다른 절과 같다. 실제 Docker에서 확인하고, Kelly에게 실제로 물어 답을 본 경우에만 ✅.
+
+### 여러 세션 동시 작업 규칙
+
+서비스가 컨테이너로 나뉘어 있어 **코드 작업은 나눠서 동시에** 할 수 있다. 다만 **실행 중인 스택은 하나**라 확인 단계는 한 번에 하나씩 한다.
+
+- **동시에 해도 되는 것**: 각자 git worktree(별도 폴더·브랜치)에서 코드 수정, 단위 테스트, 이미지 빌드(태그를 겹치지 않게).
+- **한 번에 하나만**: `docker compose ... up`, 서비스 재생성, DB 백업·정리, 운영자 접근 열기, Kelly에게 실제로 묻기.
+  - Compose 프로젝트 이름은 폴더 이름(`personal_ai`)에서 온다. worktree 폴더에서 `up`을 하면 빈 볼륨으로 **두 번째 스택**이 생기고, 같은 포트가 부딪히며, Discord 봇이 두 개 붙는다.
+  - `data/`, `secrets/`는 `D:\personal_ai`에만 있다(git에 없음).
+- **같은 파일을 건드리는 작업은 같이 하지 않는다**: Dashboard(`services/dashboard`)는 그래프 화면, 사용량 그래프, Learning 화면이 함께 쓰므로 메뉴·레이아웃·`package.json`이 겹친다. 한 번에 하나씩 하거나 순서를 정한다.
+- **추천 묶음**
+  - 동시 가능: 사용량 그래프(`llm-gateway` + Dashboard) ∥ 사실 종류(`knowledge` + Kelly 플러그인) ∥ 코딩 자동화(`controller`, `github-publisher`).
+  - 순서 필요: 사실 종류 → 지식 그래프 화면(종류별로 보여 주기 위해), 사용량 그래프 → Learning 화면(같은 Dashboard).
+
+## 20. Service Map (서비스 지도) 🟡 (2026-11-24 시작)
+
+Docker 인프라 지도와 서비스 의존 지도를 합친 Dashboard 화면. 서비스마다 상태와 설명, 서비스 사이 연결, 연결마다 허용된 명령을 한 화면에서 본다.
+
+- **결정**
+  - 추적 도구(Grafana+Tempo, SigNoz, SkyWalking)는 쓰지 않는다. 실제 호출만 보여 주고 "허용된 것"은 모르며, 모든 서비스에 계측 코드를 넣어야 하고, 수집기가 모든 내부망에 붙어야 해서 네트워크 격리가 약해진다.
+  - 그림은 React Flow(`@xyflow/react`) + `elkjs` 자동 배치. Cytoscape.js는 지식 그래프 화면에서 검토한다.
+  - Dashboard는 Docker 소켓도, 다른 서비스 네트워크도 받지 않는다. 호스트 수집기가 쓴 스냅샷 파일을 읽기 전용으로 받는다.
+- **1단계 — 정적 지도와 상태**
+  - ✅ 수집기 `services/service-map/collect.mjs`: Compose 설정, 컨테이너 상태, 설명 파일(`catalog.mjs`)로 `data/service-map/service-map.json`을 만든다. 허용 목록 방식이라 환경 변수 값과 비밀은 들어가지 않는다. 테스트 8/8, 실제 스택에서 14개 서비스, 연결 20개, 닿는 쌍 30개 확인.
+  - ✅ 1분마다 실행(Windows 작업 스케줄러 `PersonalAIServiceMap`, 2026-11-24 등록·확인). 배터리로 돌 때는 Windows 기본 설정 때문에 멈춘다.
+  - ✅ Dashboard `/services` 화면: Knowledge와 같은 그래프(Cytoscape 공통 부품). 점 = 서비스(색 = 층, 크기 = 보기 기준: 연결 수 기본·메모리 한도, 기준은 SIZE_METRICS에 추가해 늘림), 테두리와 ! = 주의, 마름모 = 바깥 연결(기본 켬), 화살표 = 부름, 점선 = 닿기만 함(필터), 네트워크 점(필터, 기본 끔 — 사용자가 써 보고 결정), 자유 배치/층별 정렬, 검색, 목록 보기. React Flow는 뺐다. 선택하면 연결점 강조·나머지 흐리게, 확대는 선택을 풀 때만 원래대로. 테스트 67 통과, 사용자 브라우저 확인(2026-11-24).
+- **2단계 — 허용된 명령** ⬜: `hermes-broker`의 `ROUTES`, LLM 게이트웨이 별칭, Controller 경로를 코드에서 뽑아 연결선에 붙인다. 코드와 지도가 다르면 테스트가 실패한다.
+- **3단계 — 최근 호출 수** ⬜: broker 감사 로그와 게이트웨이 `calls` 표로 연결선마다 호출 수를 보여 준다.
+- **첫 수집에서 나온 것**
+  - `admin-internal`, `ai-internal`, `learning-internal`, `publisher-internal`은 `internal: true`가 아니라서 인터넷으로 나갈 수 있다. 포트를 여는 서비스 때문에 일부러 둔 것일 수 있어 아직 바꾸지 않았다(보안 설정 변경은 승인 후).
+  - 닿지만 부르지 않는 쌍 10개(예: `claude-worker` ↔ `codex-worker`, `hermes` ↔ `school`). 줄일 수 있는 권한 후보다.
+
+## 21. Ubuntu로 이전 ⬜ (먼 훗날, 지금은 신경 쓰지 않음)
+
+Windows 10 지원이 끝나서, 프로젝트가 완성되고 유지보수 단계에 들어가면 언젠가 Ubuntu로 옮긴다. 1~2년 뒤일 수 있다. **지금 작업에서는 고려하지 않는다.**
+
+- 그때 볼 것(메모만): Windows 작업 스케줄러로 도는 Service Map 수집기 → systemd timer나 cron, D 드라이브 경로와 Docker Desktop 전제(`host.docker.internal`, 바인드 마운트 경고) → Linux Docker, `data/`·`secrets/` 옮기기와 권한.
