@@ -1,5 +1,5 @@
-import { readFileSync } from 'node:fs';
 import { createApi } from './api.js';
+import { parseClients } from './clients.js';
 import { openDatabase } from './db.js';
 import { EmbedError, ollamaEmbedder } from './embed.js';
 import { Knowledge } from './knowledge.js';
@@ -17,17 +17,6 @@ function int(name: string, fallback: number, min: number, max: number): number {
   return value;
 }
 
-function secret(file: string, what: string): string {
-  let value: string;
-  try {
-    value = readFileSync(file, 'utf8').trim();
-  } catch {
-    throw new Error(`Cannot read ${what} (${file})`);
-  }
-  if (value.length < 32 || /\s/.test(value)) throw new Error(`${what} (${file}) must be at least 32 characters without spaces`);
-  return value;
-}
-
 function main(): void {
   const timeZone = process.env.KNOWLEDGE_TIME_ZONE?.trim() || 'America/Toronto';
   try {
@@ -35,23 +24,9 @@ function main(): void {
   } catch {
     throw new Error(`KNOWLEDGE_TIME_ZONE "${timeZone}" is not a valid IANA time zone`);
   }
-  // KNOWLEDGE_CLIENTS = name=/path/to/key[,name2=/path2]; compose overlays add callers in
-  // KNOWLEDGE_CLIENTS_<NAME> so they do not overwrite each other's lists.
-  const clientLists = Object.keys(process.env)
-    .filter((k) => /^KNOWLEDGE_CLIENTS(_[A-Z0-9]+)?$/.test(k))
-    .sort()
-    .map((k) => process.env[k] ?? '');
-  const clients = clientLists
-    .join(',')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .map((entry) => {
-      const [name, file] = entry.split('=');
-      if (!name || !/^[a-z][a-z0-9-]{1,40}$/.test(name) || !file) throw new Error(`Invalid KNOWLEDGE_CLIENTS entry "${entry}"`);
-      return { name, key: secret(file, `the key for ${name}`) };
-    });
-  if (!clients.length) throw new Error('KNOWLEDGE_CLIENTS must name at least one caller');
+  // KNOWLEDGE_CLIENTS(_<NAME>) = name=/path/to/key,...; name?=/path = optional (left out while its key is missing).
+  const { clients, skipped } = parseClients(process.env);
+  for (const s of skipped) logger.warn('Knowledge client left out (no key file yet)', { client: s.name, error: s.reason });
 
   const ollamaUrl = process.env.OLLAMA_URL?.trim().replace(/\/+$/, '');
   if (ollamaUrl && !/^https?:\/\/[^\s/]+/.test(ollamaUrl)) throw new Error('OLLAMA_URL must be an http(s) URL');

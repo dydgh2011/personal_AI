@@ -19,8 +19,9 @@ export class KnowledgeError extends Error {
 
 const bad = (message: string, extra: Record<string, unknown> = {}) => new KnowledgeError(400, 'invalid_request', message, extra);
 const notFound = (message: string, extra: Record<string, unknown> = {}) => new KnowledgeError(404, 'not_found', message, extra);
+const conflict = (message: string, extra: Record<string, unknown> = {}) => new KnowledgeError(409, 'conflict', message, extra);
 
-export type Actor = 'hermes' | 'system' | 'operator';
+export type Actor = 'hermes' | 'system' | 'operator' | 'dashboard';
 
 export const PREFERENCES_SLUG = 'preferences';
 export const PAGE_TYPES = ['me', 'course', 'topic', 'goal', 'project', 'person', 'habit', 'place', 'org', 'other'] as const;
@@ -59,6 +60,13 @@ const DOC_PREFIX = /^doc_[0-9a-f]{6,32}_/;
 /** Semantic match needed for automatic recall (bge-m3 cosine; unrelated text is usually below 0.45). */
 const RECALL_MIN_SIMILARITY = 0.5;
 const SEMANTIC_MIN_SIMILARITY = 0.35;
+/** Graph view bounds (pages, facts, done-together edges) and the fact excerpt length. */
+const GRAPH_PAGES = 500;
+const GRAPH_MAX_PAGES = 2000;
+const GRAPH_FACTS = 2000;
+const GRAPH_MAX_FACTS = 5000;
+const GRAPH_MAX_TOGETHER = 2000;
+const GRAPH_EXCERPT = 200;
 
 export interface PageRow {
   id: string;
@@ -679,8 +687,9 @@ export class Knowledge {
 
   /** Creates a page (title + type) or updates the given fields of an existing one. */
   savePage(body: Record<string, unknown>, actor: Actor) {
-    only(body, ['page', 'title', 'type', 'summary', 'aliases', 'archived']);
+    only(body, ['page', 'title', 'type', 'summary', 'aliases', 'archived', 'reason']);
     const ref = str(body, 'page', 200);
+    const reason = str(body, 'reason', 300);
     const title = str(body, 'title', 120);
     const summary = str(body, 'summary', 4000);
     const aliases = body.aliases === undefined ? undefined : strList(body.aliases, 'aliases', 20, 80);
@@ -700,7 +709,7 @@ export class Knowledge {
           .prepare('INSERT INTO pages (id, slug, title, type, summary, aliases, archived, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)')
           .run(id, slug, title, type, summary ?? '', JSON.stringify(aliases ?? []), ts, ts);
         this.indexPage(id);
-        this.log(actor, 'create', 'page', id, { slug, title, type, summary, aliases });
+        this.log(actor, 'create', 'page', id, { slug, title, type, summary, aliases, ...(reason ? { reason } : {}) });
         return { created: true, page: this.pageView(id) };
       }
       if (existing.slug === 'me' && (type !== undefined || archived)) throw bad('The owner page cannot change type or be archived');
@@ -718,6 +727,7 @@ export class Knowledge {
       this.log(actor, 'update', 'page', existing.id, {
         before: { title: existing.title, type: existing.type, summary: existing.summary, aliases: existing.aliases, archived: existing.archived },
         after,
+        ...(reason ? { reason } : {}),
       });
       return { created: false, page: this.pageView(existing.id) };
     });
@@ -885,22 +895,24 @@ export class Knowledge {
   }
 
   link(body: Record<string, unknown>, actor: Actor) {
-    only(body, ['from', 'to', 'relation', 'note', 'remove']);
+    only(body, ['from', 'to', 'relation', 'note', 'remove', 'reason']);
     const from = this.page(str(body, 'from', 200, true)!);
     const to = this.page(str(body, 'to', 200, true)!);
     if (from.id === to.id) throw bad('A page cannot link to itself');
     const relation = str(body, 'relation', 30) ?? 'related';
     if (!RELATION.test(relation)) throw bad('relation must be 2-30 characters of a-z and _ (e.g. related, part_of, prerequisite, goal_of, uses)');
     const note = str(body, 'note', 300);
+    const reason = str(body, 'reason', 300);
+    const why = reason ? { reason } : {};
     if (body.remove === true) {
       const result = this.db.prepare('DELETE FROM links WHERE from_page = ? AND to_page = ? AND relation = ?').run(from.id, to.id, relation);
-      if (result.changes) this.log(actor, 'unlink', 'link', null, { from: from.slug, to: to.slug, relation });
+      if (result.changes) this.log(actor, 'unlink', 'link', null, { from: from.slug, to: to.slug, relation, ...why });
       return { removed: result.changes > 0 };
     }
     const result = this.db
       .prepare('INSERT OR IGNORE INTO links (from_page, to_page, relation, note, created_at) VALUES (?, ?, ?, ?, ?)')
       .run(from.id, to.id, relation, note ?? null, this.iso());
-    if (result.changes) this.log(actor, 'link', 'link', null, { from: from.slug, to: to.slug, relation, note });
+    if (result.changes) this.log(actor, 'link', 'link', null, { from: from.slug, to: to.slug, relation, note, ...why });
     return { linked: true, duplicate: result.changes === 0, from: from.title, to: to.title, relation };
   }
 
@@ -1079,6 +1091,260 @@ export class Knowledge {
       nodes: nodes.map((n) => ({ id: n.slug, title: n.title, type: n.type, facts: n.facts, activities: n.activities })),
       edges: [...edges.map((e) => ({ ...e, weight: 1 })), ...together.map((e) => ({ ...e, relation: 'done_together' }))],
     };
+  }
+
+  /**
+   * The knowledge graph for a viewer (the Dashboard's graph page): pages with their names and counts,
+   * links, pages done together, and optionally facts as child nodes (short excerpt; full text with
+   * factDetail). Bounded: at most maxPages pages (newest changed first, "me" always first) and maxFacts
+   * facts; `truncated` and `totals` say when something was left out.
+   *   facts=1      include facts (active; with archived=1 also archived ones, status "removed")
+   *   archived=1   include archived pages and archived facts
+   *   type=<t>     only pages of this type
+   * Superseded facts (older versions) are never nodes; they stay in the history.
+   */
+  graphView(query: URLSearchParams) {
+    const allowed = ['facts', 'archived', 'type', 'maxPages', 'maxFacts'];
+    const unknown = [...new Set(query.keys())].filter((k) => !allowed.includes(k));
+    if (unknown.length) throw bad(`Unexpected parameters: ${unknown.join(', ')} (allowed: ${allowed.join(', ')})`);
+    const flag = (name: string) => {
+      const v = query.get(name);
+      if (v === null || v === '0') return false;
+      if (v === '1') return true;
+      throw bad(`${name} must be 0 or 1`);
+    };
+    const bound = (name: string, fallback: number, max: number) => {
+      const v = query.get(name);
+      if (v === null) return fallback;
+      const n = /^\d+$/.test(v) ? Number(v) : NaN;
+      if (!(n >= 1 && n <= max)) throw bad(`${name} must be an integer 1-${max}`);
+      return n;
+    };
+    const withFacts = flag('facts');
+    const withArchived = flag('archived');
+    const type = query.get('type');
+    if (type) oneOf(type, 'type', PAGE_TYPES);
+    const maxPages = bound('maxPages', GRAPH_PAGES, GRAPH_MAX_PAGES);
+    const maxFacts = bound('maxFacts', GRAPH_FACTS, GRAPH_MAX_FACTS);
+
+    const where = [withArchived ? '1' : 'p.archived = 0', ...(type ? ['p.type = ?'] : [])].join(' AND ');
+    const args = type ? [type] : [];
+    const totalPages = (this.db.prepare(`SELECT count(*) AS n FROM pages p WHERE ${where}`).get(...args) as { n: number }).n;
+    const pages = this.db
+      .prepare(
+        `SELECT p.id, p.slug, p.title, p.type, p.aliases, p.archived, p.updated_at,
+           (SELECT count(*) FROM facts f WHERE f.page_id = p.id AND f.status = 'active') AS facts,
+           (SELECT count(*) FROM facts f WHERE f.page_id = p.id AND f.status = 'removed') AS archived_facts,
+           (SELECT count(*) FROM activity_pages ap JOIN activities a ON a.id = ap.activity_id WHERE ap.page_id = p.id AND a.status = 'active') AS activities
+         FROM pages p WHERE ${where} ORDER BY p.slug = 'me' DESC, p.updated_at DESC, p.id LIMIT ${maxPages}`,
+      )
+      .all(...args) as Array<{
+      id: string;
+      slug: string;
+      title: string;
+      type: string;
+      aliases: string;
+      archived: number;
+      updated_at: string;
+      facts: number;
+      archived_facts: number;
+      activities: number;
+    }>;
+    const ids = JSON.stringify(pages.map((p) => p.id));
+    const inSet = (col: string) => `${col} IN (SELECT value FROM json_each(?))`;
+
+    const links = this.db
+      .prepare(
+        `SELECT f.slug AS source, t.slug AS target, l.relation, l.note FROM links l JOIN pages f ON f.id = l.from_page JOIN pages t ON t.id = l.to_page
+         WHERE ${inSet('l.from_page')} AND ${inSet('l.to_page')} ORDER BY l.created_at, f.slug, t.slug, l.relation`,
+      )
+      .all(ids, ids) as Array<{ source: string; target: string; relation: string; note: string | null }>;
+    const together = this.db
+      .prepare(
+        `SELECT pa.slug AS source, pb.slug AS target, count(*) AS weight FROM activity_pages a1
+         JOIN activity_pages a2 ON a2.activity_id = a1.activity_id AND a2.page_id > a1.page_id
+         JOIN activities act ON act.id = a1.activity_id AND act.status = 'active'
+         JOIN pages pa ON pa.id = a1.page_id JOIN pages pb ON pb.id = a2.page_id
+         WHERE ${inSet('a1.page_id')} AND ${inSet('a2.page_id')}
+         GROUP BY a1.page_id, a2.page_id ORDER BY weight DESC, pa.slug, pb.slug LIMIT ${GRAPH_MAX_TOGETHER + 1}`,
+      )
+      .all(ids, ids) as Array<{ source: string; target: string; weight: number }>;
+
+    let facts: Array<Record<string, unknown>> | undefined;
+    let totalFacts: number | undefined;
+    let factsTruncated = false;
+    if (withFacts) {
+      const statuses = withArchived ? `('active', 'removed')` : `('active')`;
+      const from = `FROM facts f JOIN pages p ON p.id = f.page_id WHERE f.status IN ${statuses} AND ${inSet('f.page_id')}`;
+      totalFacts = (this.db.prepare(`SELECT count(*) AS n ${from}`).get(ids) as { n: number }).n;
+      const rows = this.db
+        .prepare(`SELECT f.id, p.slug, f.text, f.kind, f.status, f.observed_on, f.updated_at ${from} ORDER BY f.created_at DESC, f.id LIMIT ${maxFacts}`)
+        .all(ids) as Array<{ id: string; slug: string; text: string; kind: FactKind | null; status: string; observed_on: string | null; updated_at: string }>;
+      factsTruncated = totalFacts > rows.length;
+      facts = rows.map((f) => {
+        const excerpt = clip(f.text, GRAPH_EXCERPT);
+        return {
+          id: f.id,
+          page: f.slug,
+          text: excerpt,
+          clipped: excerpt !== f.text,
+          kind: f.kind,
+          status: f.status,
+          observedOn: f.observed_on,
+          updatedAt: f.updated_at,
+        };
+      });
+    }
+    return {
+      include: { facts: withFacts, archived: withArchived, type: type ?? null },
+      pages: pages.map((p) => ({
+        id: p.id,
+        slug: p.slug,
+        title: p.title,
+        type: p.type,
+        aliases: JSON.parse(p.aliases) as string[],
+        archived: !!p.archived,
+        counts: { facts: p.facts, archivedFacts: p.archived_facts, activities: p.activities },
+        updatedAt: p.updated_at,
+      })),
+      ...(facts ? { facts } : {}),
+      links: links.map((l) => ({ source: l.source, target: l.target, relation: l.relation, note: l.note })),
+      doneTogether: together.slice(0, GRAPH_MAX_TOGETHER).map((e) => ({ source: e.source, target: e.target, weight: e.weight })),
+      totals: { pages: totalPages, ...(totalFacts !== undefined ? { facts: totalFacts } : {}) },
+      truncated: { pages: totalPages > pages.length, facts: factsTruncated, doneTogether: together.length > GRAPH_MAX_TOGETHER },
+      vocab: { pageTypes: PAGE_TYPES, factKinds: FACT_KINDS },
+    };
+  }
+
+  /** One fact with its full text and history pointers (for the viewer's edit form). Any status. */
+  factDetail(id: string) {
+    const f = this.db.prepare('SELECT f.*, p.slug AS page_slug, p.title AS page_title FROM facts f JOIN pages p ON p.id = f.page_id WHERE f.id = ?').get(id) as unknown as
+      | (FactRow & { page_slug: string; page_title: string })
+      | undefined;
+    if (!f) throw notFound('No fact with this id');
+    return {
+      id: f.id,
+      page: { slug: f.page_slug, title: f.page_title },
+      text: f.text,
+      kind: f.kind,
+      status: f.status,
+      observedOn: f.observed_on,
+      source: f.source_raw_id ? { rawId: f.source_raw_id } : (f.source_note ?? null),
+      supersededBy: f.superseded_by,
+      createdBy: f.created_by,
+      createdAt: f.created_at,
+      updatedAt: f.updated_at,
+    };
+  }
+
+  // ---- owner edits from the Dashboard graph page ----
+  // Narrow wrappers over the same code paths Hermes uses (changeFact, savePage, link): pages are named by
+  // slug only (never created by a typo), a reason is required and lands in change_log with the actor,
+  // and nothing here deletes for good (archive/unarchive only; permanent deletion stays with purge).
+
+  private reasonOf(body: Record<string, unknown>): string {
+    return str(body, 'reason', 300, true)!;
+  }
+
+  private pageBySlug(value: unknown, key: string): PageRow {
+    if (typeof value !== 'string' || !value.trim() || value.length > 100) throw bad(`${key} must be a page slug`);
+    const p = this.db.prepare('SELECT * FROM pages WHERE slug = ?').get(value.trim()) as unknown as PageRow | undefined;
+    if (!p) throw notFound(`No page with slug "${value.trim()}"`);
+    return p;
+  }
+
+  /** Changes a fact's text and/or kind. A new text replaces the fact (new id; the old one stays as superseded). */
+  editFact(id: string, body: Record<string, unknown>, actor: Actor) {
+    only(body, ['text', 'kind', 'reason']);
+    const reason = this.reasonOf(body);
+    if (body.text === undefined && body.kind === undefined) throw bad('Nothing to change: give text and/or kind');
+    const text = body.text === undefined ? undefined : str(body, 'text', 1000, true)!;
+    const kind = factKind(body.kind);
+    const f = this.db.prepare('SELECT * FROM facts WHERE id = ?').get(id) as unknown as FactRow | undefined;
+    if (!f) throw notFound('No fact with this id');
+    if (f.status === 'removed') throw conflict('This fact is archived; unarchive it before editing');
+    if (f.status !== 'active') throw conflict('This fact was replaced by a newer version; edit that one', { supersededBy: f.superseded_by });
+    if (text === undefined || text === f.text) {
+      if (kind === undefined || kind === f.kind) return { changed: false, fact: this.factDetail(id) };
+      this.changeFact(id, { kind, reason }, actor);
+      return { changed: true, fact: this.factDetail(id) };
+    }
+    const same = this.db.prepare("SELECT id FROM facts WHERE page_id = ? AND status = 'active' AND id != ? AND lower(text) = lower(?)").get(f.page_id, id, text) as
+      | { id: string }
+      | undefined;
+    if (same) throw conflict('The page already has an active fact with this text', { id: same.id });
+    const result = this.changeFact(id, { text, ...(kind !== undefined ? { kind } : {}), ...(f.observed_on ? { observedOn: f.observed_on } : {}), reason }, actor) as { id: string };
+    return { changed: true, replaced: id, fact: this.factDetail(result.id) };
+  }
+
+  /** Archives (status "removed": out of search and answers) or unarchives a fact. */
+  setFactArchived(id: string, body: Record<string, unknown>, actor: Actor) {
+    only(body, ['archived', 'reason']);
+    if (typeof body.archived !== 'boolean') throw bad('archived must be true or false');
+    const reason = this.reasonOf(body);
+    const f = this.db.prepare('SELECT * FROM facts WHERE id = ?').get(id) as unknown as FactRow | undefined;
+    if (!f) throw notFound('No fact with this id');
+    if (f.status === 'superseded') throw conflict('This fact was replaced by a newer version; archive that one', { supersededBy: f.superseded_by });
+    const archived = f.status === 'removed';
+    if (archived === body.archived) return { changed: false, fact: this.factDetail(id) };
+    if (body.archived) {
+      this.changeFact(id, { remove: true, reason }, actor);
+      return { changed: true, fact: this.factDetail(id) };
+    }
+    const same = this.db.prepare("SELECT id FROM facts WHERE page_id = ? AND status = 'active' AND lower(text) = lower(?)").get(f.page_id, f.text) as { id: string } | undefined;
+    if (same) throw conflict('The page already has an active fact with this text', { id: same.id });
+    transaction(this.db, () => {
+      this.db.prepare("UPDATE facts SET status = 'active', updated_at = ? WHERE id = ?").run(this.iso(), id);
+      this.indexFact(id);
+      this.log(actor, 'restore', 'fact', id, { text: f.text, reason });
+    });
+    return { changed: true, fact: this.factDetail(id) };
+  }
+
+  /** Changes a page's title and/or aliases, or archives/unarchives it. */
+  editPage(body: Record<string, unknown>, actor: Actor) {
+    only(body, ['page', 'title', 'aliases', 'archived', 'reason']);
+    const reason = this.reasonOf(body);
+    const p = this.pageBySlug(body.page, 'page');
+    if (body.title === undefined && body.aliases === undefined && body.archived === undefined) throw bad('Nothing to change: give title, aliases and/or archived');
+    const title = body.title === undefined ? undefined : str(body, 'title', 120, true)!;
+    const aliases = body.aliases === undefined ? undefined : strList(body.aliases, 'aliases', 20, 80);
+    if (body.archived !== undefined && typeof body.archived !== 'boolean') throw bad('archived must be true or false');
+    const archived = body.archived as boolean | undefined;
+    if (archived && (p.slug === 'me' || p.slug === PREFERENCES_SLUG)) throw bad(`The page "${p.slug}" cannot be archived`);
+    // A name must lead to this page only: page lookups by title or alias would otherwise become ambiguous.
+    for (const name of [...(title !== undefined ? [title] : []), ...(aliases ?? [])]) {
+      const other = this.findPage(name);
+      if (other && other.id !== p.id) throw conflict(`"${name}" already names the page "${other.title}" (${other.slug})`, { page: other.slug });
+    }
+    const change: Record<string, unknown> = {};
+    if (title !== undefined && title !== p.title) change.title = title;
+    if (aliases !== undefined && JSON.stringify(aliases) !== p.aliases) change.aliases = aliases;
+    if (archived !== undefined && archived !== !!p.archived) change.archived = archived;
+    if (!Object.keys(change).length) return { changed: false, page: this.pageView(p.id) };
+    const result = this.savePage({ page: p.slug, ...change, reason }, actor);
+    return { changed: true, page: result.page };
+  }
+
+  /** Adds or removes a link between two pages (named by slug). */
+  editLink(body: Record<string, unknown>, actor: Actor) {
+    only(body, ['from', 'to', 'relation', 'note', 'remove', 'reason']);
+    const reason = this.reasonOf(body);
+    const from = this.pageBySlug(body.from, 'from');
+    const to = this.pageBySlug(body.to, 'to');
+    const relation = str(body, 'relation', 30, true)!;
+    if (relation === 'done_together') throw bad('done_together is computed from activities and cannot be set by hand');
+    if (body.remove !== undefined && typeof body.remove !== 'boolean') throw bad('remove must be true or false');
+    if (body.remove && body.note !== undefined) throw bad('note is only for adding a link');
+    const result = this.link(
+      { from: from.slug, to: to.slug, relation, ...(body.note !== undefined ? { note: body.note } : {}), ...(body.remove ? { remove: true } : {}), reason },
+      actor,
+    );
+    if (body.remove) {
+      if (!(result as { removed: boolean }).removed) throw notFound('No such link');
+      return { changed: true, removed: true };
+    }
+    return { changed: !(result as { duplicate: boolean }).duplicate, link: { source: from.slug, target: to.slug, relation } };
   }
 
   changes(limit: number) {

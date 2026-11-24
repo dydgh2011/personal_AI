@@ -1,7 +1,9 @@
 # Knowledge store: everything about the owner, in four layers (raw originals, activity timeline,
 # wiki pages with sourced facts and links, profile), with keyword + semantic search.
 # Needs compose.controller.yaml (hermes-broker) and compose.yaml (hermes: chat turns, attachments).
-#   node services/knowledge/scripts/init-secrets.mjs      (key; never prints it)
+#   node services/knowledge/scripts/init-secrets.mjs      (keys; never prints them)
+#   secrets/knowledge-dashboard.key (same script) is optional: while it is missing, Compose only warns
+#   ("secret file ... does not exist") and the knowledge service starts without the dashboard client.
 #   docker compose @F up -d --build --no-deps knowledge hermes-broker
 #
 # - Hermes reaches it only through hermes-broker (fixed /knowledge/* routes, key held by the broker).
@@ -9,6 +11,10 @@
 # - Reads Hermes's chat attachment folder read-only, to keep a copy of each attached original.
 # - Originals (possibly 20 GB+) live in data/knowledge/blobs on this drive; the database in the
 #   knowledge-data volume (Docker Desktop: Settings > Resources > Advanced > Disk image location on D:).
+# - The Dashboard graph page reaches it over knowledge-dashboard (internal, nothing else on it) with its
+#   own key (client "dashboard"): read the graph/pages/facts, edit facts, pages and links (archive, never
+#   delete). No raw originals, search, purge, imports or operator routes. The dashboard service joins
+#   knowledge-dashboard in its own compose file (see services/knowledge/README.md, "Dashboard client").
 # - Bulk import and Claude Code access: compose.knowledge-operator.yaml (add it only while needed).
 # - knowledge-egress: Ollama on this PC (host.docker.internal:11434, bge-m3 embeddings). Without
 #   Ollama the store works with keyword search only.
@@ -24,6 +30,7 @@ services:
       TZ: America/Toronto
       KNOWLEDGE_TIME_ZONE: America/Toronto
       KNOWLEDGE_CLIENTS: hermes-broker=/run/secrets/broker_key
+      KNOWLEDGE_CLIENTS_DASHBOARD: dashboard?=/run/secrets/dashboard_key   # ? = optional: no key file yet -> no dashboard access, service still starts
       KNOWLEDGE_DB_FILE: /var/lib/knowledge/knowledge.db
       KNOWLEDGE_BLOB_DIR: /var/lib/knowledge-blobs
       KNOWLEDGE_DOCUMENTS_DIR: /imports/hermes-documents
@@ -32,6 +39,8 @@ services:
     secrets:
       - source: knowledge_broker_key
         target: broker_key
+      - source: knowledge_dashboard_key
+        target: dashboard_key
     volumes:
       - knowledge-data:/var/lib/knowledge                                 # knowledge.db (Docker disk; keep Docker's disk image on D:)
       - ./data/knowledge/blobs:/var/lib/knowledge-blobs                   # stored originals, <sha256>.<ext>, on D:
@@ -41,6 +50,7 @@ services:
     networks:
       - knowledge-internal
       - knowledge-egress
+      - knowledge-dashboard
     read_only: true
     tmpfs:
       - /tmp:size=16m
@@ -90,7 +100,13 @@ networks:
     internal: true
   knowledge-egress:
     driver: bridge
+  # Dashboard <-> knowledge only (the graph page). internal: no way out to the internet.
+  knowledge-dashboard:
+    driver: bridge
+    internal: true
 
 secrets:
   knowledge_broker_key:
     file: ./secrets/knowledge-broker.key        # services/knowledge/scripts/init-secrets.mjs
+  knowledge_dashboard_key:
+    file: ./secrets/knowledge-dashboard.key     # services/knowledge/scripts/init-secrets.mjs (client "dashboard")

@@ -11,7 +11,20 @@ export interface ApiLogger {
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const SEARCH_KINDS = ['page', 'fact', 'activity', 'raw'] as const;
-const SCHOOL_ROUTES = new Set(['status', 'raw.add']);
+/** Dashboard callers send small JSON edits only. */
+const DASHBOARD_MAX_BODY_BYTES = 64 * 1024;
+/**
+ * Callers limited to a fixed list of operations (every other caller may use every route that does not
+ * name its own `clients`). Anything not listed is refused with 403 before the body is read.
+ *   school     the school connector only adds originals
+ *   dashboard  the owner's graph page: read the graph, a page, a fact; edit facts, pages, links.
+ *              No raw originals, search, purge, imports or operator routes.
+ */
+const CLIENT_ROUTES: Record<string, ReadonlySet<string>> = {
+  school: new Set(['status', 'raw.add']),
+  dashboard: new Set(['status', 'graph.view', 'pages.get', 'facts.get', 'edit.fact', 'edit.factArchive', 'edit.page', 'edit.link']),
+};
+const ACTORS: Record<string, Actor> = { 'hermes-broker': 'hermes', school: 'system', dashboard: 'dashboard' };
 
 class HttpError extends Error {
   constructor(
@@ -42,7 +55,8 @@ function kindsParam(query: URLSearchParams): Array<(typeof SEARCH_KINDS)[number]
 }
 
 /**
- * Internal API for the hermes-broker (and operators). Callers send X-Knowledge-Key.
+ * Internal API for the hermes-broker, the school connector, the Dashboard graph page (and operators).
+ * Callers send X-Knowledge-Key; each key names one client.
  * Not published on the host.
  */
 export function createApi(kb: Knowledge, clientKeys: Array<{ name: string; key: string }>, logger: ApiLogger): Server {
@@ -73,6 +87,7 @@ export function createApi(kb: Knowledge, clientKeys: Array<{ name: string; key: 
     },
     { method: 'GET', pattern: /^\/facts$/, name: 'facts.list', handler: ({ query }) => kb.listFacts(query) },
     { method: 'POST', pattern: /^\/facts$/, name: 'facts.add', handler: ({ body, actor }) => kb.addFact(body, actor) },
+    { method: 'GET', pattern: new RegExp(`^/facts/(${UUID})$`), name: 'facts.get', handler: ({ params }) => kb.factDetail(params[0]) },
     { method: 'POST', pattern: new RegExp(`^/facts/(${UUID})$`), name: 'facts.change', handler: ({ body, params, actor }) => kb.changeFact(params[0], body, actor) },
     { method: 'POST', pattern: /^\/links$/, name: 'links.save', handler: ({ body, actor }) => kb.link(body, actor) },
     // layer 1
@@ -98,6 +113,18 @@ export function createApi(kb: Knowledge, clientKeys: Array<{ name: string; key: 
     },
     { method: 'GET', pattern: /^\/recall$/, name: 'recall', handler: ({ query }) => kb.recall(query.get('q') ?? '') },
     { method: 'GET', pattern: /^\/graph$/, name: 'graph', handler: () => kb.graph() },
+    { method: 'GET', pattern: /^\/graph\/view$/, name: 'graph.view', handler: ({ query }) => kb.graphView(query) },
+    // owner edits from the Dashboard graph page (reason required, logged with actor "dashboard"; no hard delete)
+    { method: 'POST', pattern: new RegExp(`^/edit/facts/(${UUID})$`), name: 'edit.fact', handler: ({ body, params, actor }) => kb.editFact(params[0], body, actor), clients: ['dashboard'] },
+    {
+      method: 'POST',
+      pattern: new RegExp(`^/edit/facts/(${UUID})/archive$`),
+      name: 'edit.factArchive',
+      handler: ({ body, params, actor }) => kb.setFactArchived(params[0], body, actor),
+      clients: ['dashboard'],
+    },
+    { method: 'POST', pattern: /^\/edit\/pages$/, name: 'edit.page', handler: ({ body, actor }) => kb.editPage(body, actor), clients: ['dashboard'] },
+    { method: 'POST', pattern: /^\/edit\/links$/, name: 'edit.link', handler: ({ body, actor }) => kb.editLink(body, actor), clients: ['dashboard'] },
     { method: 'GET', pattern: /^\/changes$/, name: 'changes', handler: ({ query }) => ({ changes: kb.changes(Number(query.get('limit') ?? 30) || 30) }) },
   ];
 
@@ -118,12 +145,12 @@ export function createApi(kb: Knowledge, clientKeys: Array<{ name: string; key: 
       const route = candidates.find((r) => r.method === req.method);
       if (!route) throw new HttpError(405, 'method_not_allowed', 'Method not allowed');
       audit.op = route.name;
-      if (route.clients && !route.clients.includes(client.name)) throw new HttpError(403, 'forbidden', 'This operation is for the operator only');
-      // The school connector only adds originals (and reads status).
-      if (client.name === 'school' && !SCHOOL_ROUTES.has(route.name)) throw new HttpError(403, 'forbidden', 'The school connector may only add originals');
+      if (route.clients && !route.clients.includes(client.name)) throw new HttpError(403, 'forbidden', `This operation is only for ${route.clients.join(', ')}`);
+      const allowed = CLIENT_ROUTES[client.name];
+      if (allowed && !allowed.has(route.name)) throw new HttpError(403, 'forbidden', `The ${client.name} client may not use ${route.name}`);
       const params = (url.pathname.match(route.pattern) ?? []).slice(1);
-      const body = req.method === 'POST' ? await readJson(req) : {};
-      const actor: Actor = client.name === 'hermes-broker' ? 'hermes' : client.name === 'school' ? 'system' : 'operator';
+      const body = req.method === 'POST' ? await readJson(req, client.name === 'dashboard' ? DASHBOARD_MAX_BODY_BYTES : MAX_BODY_BYTES) : {};
+      const actor: Actor = ACTORS[client.name] ?? 'operator';
       const result = await route.handler({ body, query: url.searchParams, params, actor });
       status = 200;
       send(res, 200, result);
@@ -155,12 +182,12 @@ function keyMatches(header: string | string[] | undefined, key: string): boolean
   return timingSafeEqual(a, b);
 }
 
-async function readJson(req: IncomingMessage): Promise<Record<string, unknown>> {
+async function readJson(req: IncomingMessage, maxBytes: number): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = [];
   let size = 0;
   for await (const chunk of req) {
     size += (chunk as Buffer).length;
-    if (size > MAX_BODY_BYTES) throw new HttpError(413, 'invalid_request', 'Request body too large');
+    if (size > maxBytes) throw new HttpError(413, 'invalid_request', 'Request body too large');
     chunks.push(chunk as Buffer);
   }
   const text = Buffer.concat(chunks).toString('utf8').trim();
