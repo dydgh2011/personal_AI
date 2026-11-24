@@ -368,6 +368,231 @@ class ScheduleBriefTest(unittest.TestCase):
         self.assertIn("STA256", text)
 
 
+class FactKindTest(unittest.TestCase):
+    """Code picks facts by kind; untyped facts (stored before kinds) keep the old word rules."""
+
+    def run_tool(self, client, **args):
+        return kc.run_tool(args, client=client)
+
+    def test_tool_sends_and_validates_fact_kinds(self):
+        self.assertEqual(kc.SCHEMA["parameters"]["properties"]["fact_kind"]["enum"], kc.FACT_KINDS)
+        self.assertIn("score (test result)", kc.SCHEMA["description"])
+        client = FakeClient()
+        self.assertEqual(self.run_tool(client, action="fact_add", page="MAT223", text="x", fact_kind="grade")["error"]["code"], "usage_error")
+        self.assertEqual(self.run_tool(client, action="fact_change", fact_id=UUID, fact_kind="study")["error"]["code"], "usage_error")
+        self.assertEqual(client.calls, [])
+        self.run_tool(client, action="fact_add", page="MAT223", text="Test 1: 47/50 (94%)", fact_kind="score")
+        self.assertEqual(client.calls[-1][3], {"page": "MAT223", "text": "Test 1: 47/50 (94%)", "kind": "score"})
+        self.run_tool(client, action="fact_add", page="MAT223", text="교재: Liu 노트")
+        self.assertNotIn("kind", client.calls[-1][3])                       # no kind given: untyped, as before
+        self.run_tool(client, action="fact_change", fact_id=UUID, fact_kind="mistake", reason="종류 바로잡기")
+        self.assertEqual(client.calls[-1][1:], (f"/facts/{UUID}", None, {"kind": "mistake", "reason": "종류 바로잡기"}))
+        self.run_tool(client, action="fact_change", fact_id=UUID, text="Test 1 5(c) 0/2.5", fact_kind="mistake")
+        self.assertEqual(client.calls[-1][3], {"text": "Test 1 5(c) 0/2.5", "kind": "mistake"})
+        self.assertEqual(self.run_tool(client, action="fact_change", fact_id=UUID)["error"]["code"], "usage_error")   # nothing to change
+
+    def test_fact_is_prefers_the_kind_and_falls_back_for_untyped(self):
+        self.assertTrue(kc.fact_is({"text": "아무 말", "kind": "mistake"}, ("mistake",), kc.MISTAKE))
+        self.assertFalse(kc.fact_is({"text": "근거 없는 T/F는 0/2 처리", "kind": "grading"}, ("mistake",), kc.MISTAKE))
+        self.assertTrue(kc.fact_is({"text": "근거 없는 T/F는 0/2 처리"}, ("mistake",), kc.MISTAKE))          # untyped: word rule
+        self.assertTrue(kc.fact_is({"text": "x", "kind": None}, ("mistake",), lambda t: t == "x"))
+        self.assertFalse(kc.fact_is({"text": "x"}, ("mistake",)))
+
+    def test_recorded_mistakes_go_by_kind_first(self):
+        page = {"page": {"slug": "sta256", "title": "STA256", "type": "course"}, "facts": [
+            {"id": "1", "text": "Term Test 2: 11.5/25 (46%)", "kind": "score"},
+            {"id": "2", "text": "Q3 조건부확률 분모를 P(A)로 씀", "kind": "mistake"},     # no mistake word: found by kind
+            {"id": "3", "text": "늦게 내면 하루 10% 감점, 근거 없는 답은 0/2", "kind": "grading"},   # word false match: left out
+            {"id": "4", "text": "Quiz 2 베이즈 계산 실수"},                                  # untyped: word rule as before
+            {"id": "5", "text": "교재 5장 연습문제"},                                         # untyped, no mistake word
+        ]}
+        result = self.run_tool(FakeClient({("GET", "/page"): page}), action="page", page="STA256")
+        self.assertEqual(result["recordedMistakes"], [
+            {"page": "STA256", "text": "Q3 조건부확률 분모를 P(A)로 씀", "kind": "mistake"},
+            {"page": "STA256", "text": "Quiz 2 베이즈 계산 실수"}])
+
+    def test_linked_facts_carry_their_kind(self):
+        pages = {"MAT223": {"page": {"slug": "mat223", "title": "MAT223", "type": "topic"},
+                            "links": [{"relation": "covers", "to": {"slug": "tf", "title": "정당화 T/F 문제", "type": "topic"}}]},
+                 "tf": {"page": {"slug": "tf"}, "facts": [{"id": "a", "text": "MAT223 Test 1 5(c) 0/2.5", "kind": "mistake"}]}}
+        result = self.run_tool(FakeClient({("GET", "/page"): lambda q: pages[q["ref"]]}), action="page", page="MAT223")
+        self.assertEqual(result["linkedFacts"][0]["facts"][0]["kind"], "mistake")
+
+    def test_course_brief_requires_facts_by_kind_and_words_for_untyped(self):
+        cb = plugin.cb
+        facts = [
+            ("STA256", {"text": "Q3 분모를 P(A)로 씀", "kind": "mistake"}),
+            ("STA256", {"text": "Term Test 2: 11.5/25", "kind": "score"}),
+            ("STA256", {"text": "기말: 2026-12-10(목), RA Gym", "kind": "exam"}),           # exam by kind, no time range
+            ("STA256", {"text": "오피스아워 월 14:00–15:00", "kind": "other"}),               # time range but not an exam
+            ("STA256", {"text": "늦으면 10% 감점, 근거 없으면 0/2", "kind": "grading"}),
+            ("STA256", {"text": "장별 Exercise 109개", "kind": "resource"}),
+            ("MAT223", {"text": "Test 1: 47/50 (94%)"}),                                     # untyped: TOTAL_SCORE
+            ("MAT223", {"text": "기말 2026-12-19(토) 09:00–12:00"}),                         # untyped: time range
+            ("MAT223", {"text": "배점: 기말 40%"}),                                           # untyped: grading words
+        ]
+        texts = lambda query: [t for _, t in cb._required(query, facts)]
+        self.assertEqual(texts("STA256 약점 알려줘"), ["Q3 분모를 P(A)로 씀", "Term Test 2: 11.5/25", "Test 1: 47/50 (94%)"])
+        self.assertEqual(texts("기말 언제야"), ["기말: 2026-12-10(목), RA Gym", "기말 2026-12-19(토) 09:00–12:00"])
+        self.assertEqual(texts("배점 비중 알려줘"), ["늦으면 10% 감점, 근거 없으면 0/2", "배점: 기말 40%"])
+        self.assertEqual(texts("연습문제 어디서 풀어"), ["장별 Exercise 109개"])
+
+    def test_schedule_skips_typed_results_but_keeps_exams_and_untyped(self):
+        from datetime import datetime
+        sb = plugin.sb
+        sb._cache.clear()
+        saved = sb.now
+        sb.now = lambda: datetime(2026, 11, 24, 9, 0, tzinfo=sb.TZ)
+        try:
+            client = FakeClient({
+                ("GET", "/pages"): {"pages": [{"slug": "sta256"}]},
+                ("GET", "/page"): {"page": {"title": "STA256"}, "facts": [
+                    {"text": "기말: 2026-12-10(목) 17:00–20:00", "kind": "exam"},
+                    {"text": "Quiz 5 (2026-12-01) 결과 공개 예정 8/10", "kind": "score"},
+                    {"text": "과제 A4 2026-12-05 23:59 마감"}]},
+            })
+            items = [i["what"] for i in sb._course_items(client)]
+        finally:
+            sb.now = saved
+            sb._cache.clear()
+        self.assertEqual(items, ["STA256 · 기말: 2026-12-10(목) 17:00–20:00", "STA256 · 과제 A4 2026-12-05 23:59 마감"])
+
+
+def _load_backfill():
+    spec = importlib.util.spec_from_file_location("backfill_fact_kinds", PLUGIN_DIR.parents[1] / "scripts" / "backfill_fact_kinds.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class BackfillTest(unittest.TestCase):
+    """Deterministic kind proposals for existing facts; dry run by default, writes only through the API."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.bf = _load_backfill()
+
+    def test_proposals_follow_the_old_word_rules(self):
+        course = {"slug": "mat223", "type": "course"}
+        cases = [
+            ("MAT223 Quiz 1 T/F 0/1, Test 1 5(c) 0점", course, "mistake"),
+            ("Test 1: 47/50 (94%). Q2 9.5(셋째 성분 계산 실수 10→18)", course, "mistake"),   # both: mistake wins (stays in recordedMistakes)
+            ("Test 1: 47/50 (94%)", course, "score"),
+            ("Term Test 2 (2026-11-14): 11.5/25", course, "score"),
+            ("Test 1은 10/15", course, "score"),
+            ("기말: 2026-12-16(수) 09:00–12:00, RA Gym A/B", course, "exam"),
+            ("기말 (12/16 수) RA Gym", course, "exam"),                       # a date, not a score
+            ("기말 12/16 09:00–12:00", course, "exam"),
+            ("과제 A2 마감 2026-11-28 23:59", course, "deadline"),
+            ("배점: 시험 2개 각 20% · 기말 40%", course, "grading"),
+            ("늦으면 하루 10% 감점", course, "grading"),
+            ("장별 Exercise 109개: 1장 10 · 2장 18", course, "resource"),
+            ("교재: Liu 노트", course, "resource"),
+            ("월·수·금 아침 7시", {"slug": "헬스", "type": "habit"}, "habit"),
+            ("메일 요약은 마감일 먼저", {"slug": "preferences", "type": "other"}, "preference"),
+            ("담당 교수: Mohammad", course, None),
+        ]
+        for text, page, kind in cases:
+            self.assertEqual(self.bf.propose(text, page)[0], kind, text)
+
+    def _db(self, with_kind: bool) -> str:
+        import sqlite3
+        path = os.path.join(self.tmp.name, f"k{int(with_kind)}.db")
+        con = sqlite3.connect(path)
+        con.executescript(
+            "CREATE TABLE pages (id TEXT PRIMARY KEY, slug TEXT, title TEXT, type TEXT, archived INTEGER DEFAULT 0);"
+            f"CREATE TABLE facts (id TEXT PRIMARY KEY, page_id TEXT, text TEXT, status TEXT, created_at TEXT{', kind TEXT' if with_kind else ''});")
+        con.execute("INSERT INTO pages VALUES ('p1', 'mat223', 'MAT223', 'course', 0)")
+        con.execute("INSERT INTO pages VALUES ('p2', 'old', 'Old', 'course', 1)")
+        rows = [("f1", "p1", "Test 1: 47/50 (94%)"), ("f2", "p1", "Test 1 5(c) 근거가 틀려 0점"), ("f3", "p1", "담당 교수: Mohammad"),
+                ("f4", "p2", "Quiz 0/1 실수")]
+        for i, (fid, pid, text) in enumerate(rows):
+            con.execute(f"INSERT INTO facts (id, page_id, text, status, created_at) VALUES (?, ?, ?, 'active', ?)", (fid, pid, text, f"2026-11-0{i + 1}"))
+        if with_kind:
+            con.execute("UPDATE facts SET kind = 'score' WHERE id = 'f1'")
+        con.commit()
+        con.close()
+        return path
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _main(self, *argv):
+        import contextlib
+        import io
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = self.bf.main(list(argv))
+        return code, out.getvalue()
+
+    def test_dry_run_on_a_database_copy_changes_nothing(self):
+        before_v2 = self._db(with_kind=False)                       # a backup taken before the migration
+        code, out = self._main("--db", before_v2)
+        self.assertEqual(code, 0)
+        self.assertIn("active facts: 3  already typed: 0  untyped: 3", out)   # archived page left out
+        self.assertRegex(out, r"mistake\s+1\n\s+f2  \[MAT223\] Test 1 5\(c\)")
+        self.assertRegex(out, r"score\s+1\n\s+f1")
+        self.assertRegex(out, r"\(no rule: stays untyped\)\s+1")
+        self.assertIn("recordedMistakes   gained 0; lost 0", out)
+        self.assertIn("dry run: nothing was changed.", out)
+        code, out = self._main("--db", self._db(with_kind=True), "--no-excerpts")
+        self.assertIn("already typed: 1  untyped: 2", out)
+        self.assertIn("already typed (left as they are): score 1", out)
+        self.assertNotIn("근거가", out)                               # ids only
+        import contextlib
+        import io
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.bf.main(["--db", before_v2, "--apply"])             # never writes into a database file
+
+    def test_apply_goes_through_the_api_for_untyped_facts_only(self):
+        posted, keys = [], []
+        facts = [{"id": UUID, "text": "Test 1 5(c) 근거가 틀려 0점", "kind": None, "page": {"slug": "mat223", "title": "MAT223", "type": "course"}},
+                 {"id": "typed", "text": "Quiz 0/1 실수", "kind": "other", "page": {"slug": "mat223", "title": "MAT223", "type": "course"}},
+                 {"id": "plain", "text": "담당 교수", "kind": None, "page": {"slug": "mat223", "title": "MAT223", "type": "course"}}]
+
+        class Handler(BaseHTTPRequestHandler):
+            def log_message(self, *args):
+                pass
+
+            def _send(self, payload):
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(json.dumps(payload).encode())
+
+            def do_GET(self):  # noqa: N802
+                keys.append(self.headers.get("X-Knowledge-Key"))
+                self._send({"facts": facts, "total": len(facts)})
+
+            def do_POST(self):  # noqa: N802
+                keys.append(self.headers.get("X-Knowledge-Key"))
+                body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+                posted.append((self.path, body))
+                self._send({"id": UUID, "kind": body["kind"], "retyped": True})
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        key_file = os.path.join(self.tmp.name, "op.key")
+        with open(key_file, "w", encoding="utf-8") as f:
+            f.write("o" * 40 + "\n")
+        try:
+            api = f"http://127.0.0.1:{server.server_address[1]}"
+            code, out = self._main("--api", api, "--key-file", key_file)
+            self.assertEqual((code, posted), (0, []))                  # dry run: reads only
+            code, out = self._main("--api", api, "--key-file", key_file, "--apply")
+        finally:
+            server.shutdown()
+            server.server_close()
+        self.assertEqual(code, 0)
+        self.assertEqual(posted, [(f"/facts/{UUID}", {"kind": "mistake", "reason": "kind backfill (word rules)"})])
+        self.assertIn("applied: 1 stored, 0 unchanged, 0 failed", out)
+        self.assertTrue(all(k == "o" * 40 for k in keys))
+        self.assertNotIn("o" * 40, out)
+
+
 class _Sync:
     def __init__(self, target, args):
         self.target, self.args = target, args

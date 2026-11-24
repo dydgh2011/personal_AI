@@ -112,6 +112,63 @@ describe('pages, facts, links', () => {
   });
 });
 
+describe('fact kinds', () => {
+  it('upgrades an older database: existing facts stay valid and untyped', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kb-'));
+    const file = join(dir, 'k.db');
+    const old = openDatabase(file, { upTo: 2 });
+    const ts = '2026-11-01T00:00:00.000Z';
+    old.prepare('INSERT INTO pages (id, slug, title, type, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('p1', 'mat223', 'MAT223', 'course', ts, ts);
+    old.prepare('INSERT INTO facts (id, page_id, text, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)').run('f1', 'p1', 'Test 1: 47/50 (94%)', 'hermes', ts, ts);
+    assert.ok(!(old.prepare('PRAGMA table_info(facts)').all() as Array<{ name: string }>).some((c) => c.name === 'kind'));
+    old.close();
+
+    const db = openDatabase(file);
+    assert.equal((db.prepare('SELECT version FROM schema_version').get() as { version: number }).version, 3);
+    const kb = new Knowledge(db, { timeZone: 'America/Toronto', blobDir: join(dir, 'blobs'), documentsDir: null, embedder: null });
+    assert.deepEqual(kb.getPage('MAT223').facts.map((f) => [f.text, f.kind]), [['Test 1: 47/50 (94%)', null]]);
+    assert.equal(kb.listFacts(new URLSearchParams('kind=none')).total, 1);
+    assert.deepEqual(kb.changeFact('f1', { kind: 'score' }, 'operator'), { id: 'f1', kind: 'score', retyped: true });
+    db.close();
+    const again = openDatabase(file);   // reopening runs no migration twice
+    assert.equal((again.prepare('SELECT version FROM schema_version').get() as { version: number }).version, 3);
+    assert.equal((again.prepare('SELECT kind FROM facts WHERE id = ?').get('f1') as { kind: string }).kind, 'score');
+    again.close();
+  });
+
+  it('stores, validates, keeps and lists kinds', () => {
+    const { kb } = setup();
+    kb.savePage({ title: 'MAT223', type: 'course' }, 'hermes');
+    const score = kb.addFact({ page: 'MAT223', text: 'Test 1: 47/50 (94%)', kind: 'score' }, 'hermes');
+    assert.equal(score.kind, 'score');
+    const plain = kb.addFact({ page: 'MAT223', text: '교재: Liu 노트' }, 'hermes');
+    assert.equal(plain.kind, null);
+    assert.equal(kb.addFact({ page: 'MAT223', text: 'test 1: 47/50 (94%)', kind: 'other' }, 'hermes').kind, 'score', 'a duplicate keeps its kind');
+    assert.throws(() => kb.addFact({ page: 'MAT223', text: 'x', kind: 'grade' }, 'hermes'), /kind must be one of score, mistake/);
+    assert.throws(() => kb.addFact({ page: 'MAT223', text: 'x', kind: 3 }, 'hermes'), /kind must be one of/);
+
+    // a kind alone is set in place (same fact id, logged); a new text keeps the kind unless one is given
+    assert.deepEqual(kb.changeFact(plain.id, { kind: 'resource' }, 'operator'), { id: plain.id, kind: 'resource', retyped: true });
+    assert.deepEqual(kb.changeFact(plain.id, { kind: 'resource' }, 'operator'), { id: plain.id, kind: 'resource', retyped: false });
+    assert.ok(kb.changes(5).some((c) => c.action === 'retype' && c.entityId === plain.id && (c.detail as { before: unknown; after: unknown }).after === 'resource'));
+    const reworded = kb.changeFact(plain.id, { text: '교재: Liu 노트 1-4장' }, 'hermes');
+    assert.equal(reworded.kind, 'resource');
+    const cleared = kb.changeFact(reworded.id!, { text: '교재: Liu 노트 1-5장', kind: null }, 'hermes');
+    assert.equal(cleared.kind, null);
+    assert.throws(() => kb.changeFact(score.id, { kind: 'bogus' }, 'hermes'), /kind must be one of/);
+    assert.deepEqual(kb.getPage('MAT223').facts.map((f) => [f.text, f.kind]), [['Test 1: 47/50 (94%)', 'score'], ['교재: Liu 노트 1-5장', null]]);
+
+    const byKind = kb.listFacts(new URLSearchParams('kind=score'));
+    assert.equal(byKind.total, 1);
+    assert.deepEqual(byKind.facts[0].page, { slug: 'mat223', title: 'MAT223', type: 'course' });
+    assert.equal(kb.listFacts(new URLSearchParams('kind=none&type=course')).facts[0].text, '교재: Liu 노트 1-5장');
+    assert.equal(kb.listFacts(new URLSearchParams('page=MAT223&limit=1&offset=1')).facts.length, 1);
+    assert.throws(() => kb.listFacts(new URLSearchParams('kind=grade')), /kind must be one of/);
+    assert.throws(() => kb.listFacts(new URLSearchParams('limit=0')), /limit must be 1-500/);
+    assert.throws(() => kb.listFacts(new URLSearchParams('offset=-1')), /offset/);
+  });
+});
+
 describe('activities', () => {
   it('records, filters, changes and removes activities', () => {
     const { kb } = setup();
@@ -347,6 +404,13 @@ describe('API', () => {
     assert.equal((await call('/raw', { method: 'POST', body: '[1]' })).status, 400);
     assert.equal((await call('/raw/file', { method: 'POST', body: '{}' })).status, 403, 'imports are operator-only');
     assert.equal((await call(`/raw/by-sha/${'a'.repeat(64)}`)).status, 403);
+    const typed = await call('/facts', { method: 'POST', body: JSON.stringify({ page: 'CSC263', text: 'Test 2 12/15', kind: 'score' }) });
+    assert.equal(((await typed.json()) as { kind: string }).kind, 'score');
+    const badKind = await call('/facts', { method: 'POST', body: JSON.stringify({ page: 'CSC263', text: 'x', kind: 'grade' }) });
+    assert.equal(badKind.status, 400);
+    const listed = (await (await call('/facts?kind=score')).json()) as { facts: Array<{ text: string; kind: string }>; total: number };
+    assert.deepEqual([listed.total, listed.facts[0].text], [1, 'Test 2 12/15']);
+    assert.equal((await call('/facts?kind=grade')).status, 400);
     const change = (await (await call('/changes')).json()) as { changes: Array<{ actor: string }> };
     assert.equal(change.changes[0].actor, 'hermes');
   });

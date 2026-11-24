@@ -1,7 +1,7 @@
 ---
 name: personal-ai-knowledge
 description: Remember everything about the owner in the knowledge store - pages with facts and links, an activity timeline, raw originals - and find it again.
-version: 0.3.2
+version: 0.4.0
 author: dydgh2011, Hermes Agent
 license: MIT
 platforms: [linux]
@@ -35,14 +35,32 @@ The owner uses the store for exam prep. For a question about a course (exam date
 
 ## When to store (do it, then tell the owner in one line)
 
-- The owner states something lasting about themselves: courses, major, goals, habits, preferences, people, places, tools, health, plans that changed. → `fact_add` on the right page (create it with `page_save` title+type first if `page` says not_found). Short, self-contained facts in the owner's language ("월·수·금 아침 7시에 헬스", not "the user said they go").
+- The owner states something lasting about themselves: courses, major, goals, habits, preferences, people, places, tools, health, plans that changed. → `fact_add` on the right page (create it with `page_save` title+type first if `page` says not_found), always with a `fact_kind` (see below). Short, self-contained facts in the owner's language ("월·수·금 아침 7시에 헬스", not "the user said they go").
 - Something about the owner themselves (wake time, study style, likes) → page `me`.
 - A fact changed ("헬스 이제 저녁에 해") → find it (`page`) and `fact_change` with the new text; do not add a contradicting second fact.
 - The owner reports what they did ("CSC263 5장 1시간 반 했어, 어려웠어", "빨래 했어") → `activity_add` (kind, minutes, outcome, feeling, pages). Study progress on a todo also goes to `personal_ai_planner` `todo_progress`.
 - A new subject that connects to others (a course that serves a goal) → `link` (`relation`: related, part_of, prerequisite, goal_of, uses).
 - Not stored: small talk, one-off requests, anything already in the planner (schedules, todos, deadlines), passwords, keys, tokens.
 
-Ask before storing only when it is unclear whether something is true or lasting. Every change is logged (`changes`) and old facts are kept as history.
+Ask before storing only when it is unclear whether something is true or lasting.
+
+### Fact kinds (set one on every `fact_add`)
+
+Code picks facts by kind (weak points, scores, exam times, grading, where to practise), so a fact without the right kind can be left out of the course record. One fact = one kind; if a sentence holds two things (a score and a mistake), store two facts.
+
+| `fact_kind` | The fact records | Example |
+|---|---|---|
+| `score` | a test, quiz or assignment result | "Test 1: 47/50 (94%)" |
+| `mistake` | a lost point, a mistake, a weak point | "Test 1 5(c) 근거가 틀려 0/2.5" |
+| `exam` | an exam's date, time or place | "기말: 2026-12-16(수) 09:00–12:00, RA Gym A/B" |
+| `deadline` | a due date | "A2 마감 2026-11-28 23:59" |
+| `grading` | grading weights and rules | "배점: 시험 2개 각 20% · 기말 40%", "늦으면 10% 감점" |
+| `resource` | where to study or practise | "교재: Liu 노트", "장별 Exercise 109개" |
+| `habit` | a routine the owner keeps | "월·수·금 아침 7시에 헬스" |
+| `preference` | how the owner wants things (facts on `preferences`) | "선호: 답은 짧게" |
+| `other` | anything else | "전공: 컴퓨터과학" |
+
+A fact with the wrong kind → `fact_change fact_id=... fact_kind=...` (no text: only the kind changes, on the same fact). Every change is logged (`changes`) and old facts are kept as history.
 
 ## Feedback and preferences (the most important thing to remember)
 
@@ -56,7 +74,7 @@ The page `preferences` ("취향과 피드백") holds how the owner wants the sys
 ## Corrections and deletion (the owner says something is wrong)
 
 1. Find it: `search` or `page`, and show the owner the exact item (fact text, activity, page).
-2. "틀렸어 / 이렇게 바꿔줘" → `fact_change` (new text), `activity_change`, or `page_save` (title, summary, aliases). History is kept.
+2. "틀렸어 / 이렇게 바꿔줘" → `fact_change` (new text; it keeps its kind unless you give `fact_kind`), `activity_change`, or `page_save` (title, summary, aliases). History is kept.
 3. "지워줘" → `fact_change remove=true` / `activity_change remove=true` / `page_save archived=true`: hidden from recall and search, kept in history. This is the default.
 4. "완전히 지워줘 / 기록도 남기지 마" (wrong or private information) → `purge`: tell the owner exactly what will be erased permanently (the item, its older versions, its text in the change log; for an original also the stored file), get an explicit yes, then call with `confirmed_by_user=true` and a `reason`. Never purge on your own initiative, never several things at once without listing them.
 

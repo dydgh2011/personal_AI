@@ -91,6 +91,8 @@ KINDS = [
 FACT_DATE = re.compile(r"(\d{4})-(\d{2})-(\d{2})(?:\([^)]{1,3}\))?(?:\s*(\d{1,2}):(\d{2})(?:\s*[–-]\s*(\d{1,2}):(\d{2}))?)?")
 COURSE_CODE = re.compile(r"\b([A-Z]{3}\d{3})")
 LABEL = re.compile(r"^(할 일 마감|캘린더)\s*·\s*(마감:\s*)?")   # the same deadline as a todo and as a calendar event
+# Typed facts of these kinds are results, study material or routines, never upcoming items (even with a date in them).
+NOT_UPCOMING = {"score", "mistake", "resource", "habit", "preference"}
 EVENT_WORTH = re.compile(r"exam|test|quiz|final|midterm|시험|퀴즈|기말|중간|마감|due|deadline", re.I)
 
 _lock = threading.Lock()
@@ -141,6 +143,8 @@ def _course_items(client) -> list[dict[str, Any]]:
     for result in _courses(client):
         title = (result.get("page") or {}).get("title") or ""
         for f in result.get("facts") or []:
+            if f.get("kind") in NOT_UPCOMING:
+                continue
             text = str(f.get("text") or "")
             m = FACT_DATE.search(text)
             if not m:

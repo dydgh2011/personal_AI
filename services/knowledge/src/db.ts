@@ -155,6 +155,12 @@ const MIGRATIONS: string[] = [
   CREATE UNIQUE INDEX raw_blob_sha ON raw_items(sha256) WHERE blob IS NOT NULL;
   CREATE INDEX raw_source_kind ON raw_items(source, kind);
   `,
+  // 3: an optional kind per fact (score, mistake, exam, ...; FACT_KINDS in knowledge.ts) so code picks
+  //    facts by kind instead of matching words. NULL = untyped: every existing fact stays valid as it is.
+  `
+  ALTER TABLE facts ADD COLUMN kind TEXT;
+  CREATE INDEX facts_kind ON facts(kind, status) WHERE kind IS NOT NULL;
+  `,
 ];
 
 export interface OpenOptions {
@@ -162,6 +168,8 @@ export interface OpenOptions {
   vecExtension?: string;
   /** WAL (default) on a Docker volume; DELETE on a host bind mount. */
   journalMode?: 'WAL' | 'DELETE';
+  /** Tests: stop after this many migrations (to build an older database and upgrade it). */
+  upTo?: number;
 }
 
 export function openDatabase(file: string, options: OpenOptions = {}): DatabaseSync {
@@ -172,7 +180,7 @@ export function openDatabase(file: string, options: OpenOptions = {}): DatabaseS
   const row = db.prepare('SELECT version FROM schema_version').get() as { version: number } | undefined;
   let version = row?.version ?? 0;
   if (!row) db.prepare('INSERT INTO schema_version (version) VALUES (0)').run();
-  for (; version < MIGRATIONS.length; version++) {
+  for (; version < Math.min(MIGRATIONS.length, options.upTo ?? MIGRATIONS.length); version++) {
     db.exec('BEGIN');
     try {
       db.exec(MIGRATIONS[version]);

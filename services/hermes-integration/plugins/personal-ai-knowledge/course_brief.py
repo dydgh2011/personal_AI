@@ -32,12 +32,14 @@ PENDING_TTL = 900          # a brief older than this is not checked
 
 HEADING = "📌 저장소 기록 (답에서 빠진 내용을 코드가 붙임)"
 
-# What the owner asked about -> which facts must show up in the answer.
+# What the owner asked about -> which facts must show up in the answer: (question pattern, fact kinds,
+# word rule). A typed fact counts by its kind; an untyped one (stored before kinds) by the word rule.
 INTENTS = {
-    "weak": (re.compile(r"약점|약한|약해|틀린|틀렸|실수|부족|못하|weak", re.I), None),
-    "grading": (re.compile(r"비중|배점|성적|grading|weight", re.I), re.compile(r"배점|비중")),
-    "exam": (re.compile(r"기말|중간|시험\s*(날짜|일정|언제)|final|midterm", re.I), re.compile(r"\b\d{2}:\d{2}\s*[–-]\s*\d{2}:\d{2}")),   # 09:00–12:00, not 2.1:10
-    "practice": (re.compile(r"연습|문제는?\s*어디|어디서\s*풀|교재|exercise|practice", re.I),
+    "weak": (re.compile(r"약점|약한|약해|틀린|틀렸|실수|부족|못하|weak", re.I), ("mistake", "score"), None),   # rule: _weak_words
+    "grading": (re.compile(r"비중|배점|성적|grading|weight", re.I), ("grading",), re.compile(r"배점|비중")),
+    "exam": (re.compile(r"기말|중간|시험\s*(날짜|일정|언제)|final|midterm", re.I), ("exam",),
+             re.compile(r"\b\d{2}:\d{2}\s*[–-]\s*\d{2}:\d{2}")),   # 09:00–12:00, not 2.1:10
+    "practice": (re.compile(r"연습|문제는?\s*어디|어디서\s*풀|교재|exercise|practice", re.I), ("resource",),
                  re.compile(r"연습문제|Exercise|\d+\s*문제")),
 }
 TOTAL_SCORE = re.compile(r"\d+(?:\.\d+)?/\d+(?:\.\d+)?\s*\(\d+(?:\.\d+)?%")
@@ -140,9 +142,9 @@ def brief(client, query: str, session_id: str = "") -> str:
             continue
         blocks.append(_render(result))
         title = (result.get("page") or {}).get("title")
-        facts += [(title, f.get("text") or "") for f in result.get("facts") or []]
-        facts += [(g.get("page"), f.get("text") or "") for g in result.get("linkedFacts") or [] for f in g.get("facts") or []]
-        facts += [(m.get("page"), m.get("text") or "") for m in result.get("recordedMistakes") or []]
+        facts += [(title, f) for f in result.get("facts") or []]
+        facts += [(g.get("page"), f) for g in result.get("linkedFacts") or [] for f in g.get("facts") or []]
+        facts += [(m.get("page"), m) for m in result.get("recordedMistakes") or []]
     if not blocks:
         return ""
     required = _required(query, facts)
@@ -155,16 +157,20 @@ def brief(client, query: str, session_id: str = "") -> str:
             "use its specifics - scores, question numbers, mistakes, book names, counts)\n" + text)
 
 
-def _required(query: str, facts: list[tuple[str, str]]) -> list[tuple[str, str]]:
+def _weak_words(text: str) -> bool:
+    """Untyped facts: a mistake (same rule as recordedMistakes) or a test's total score."""
+    return bool(kc.MISTAKE.search(text)) or bool(TOTAL_SCORE.search(text))
+
+
+def _required(query: str, facts: list[tuple[str, dict[str, Any]]]) -> list[tuple[str, str]]:
+    """(page, text) of the facts the question asks about; facts are (page, {"text", "kind"?})."""
     out: list[tuple[str, str]] = []
-    for name, (ask, pick) in INTENTS.items():
+    for name, (ask, kinds, words) in INTENTS.items():
         if not ask.search(query):
             continue
-        for page, text in facts:
-            if name == "weak":
-                keep = bool(kc.MISTAKE.search(text)) or bool(TOTAL_SCORE.search(text))   # same rule as recordedMistakes
-            else:
-                keep = bool(pick.search(text))
+        for page, fact in facts:
+            text = str(fact.get("text") or "")
+            keep = kc.fact_is(fact, kinds, _weak_words if name == "weak" else words)
             if keep and (page, text) not in out:
                 out.append((page, text))
     return out
