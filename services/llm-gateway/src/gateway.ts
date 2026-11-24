@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
 import { ALIASES, listCost, POOLS, PROVIDERS, type ClientDef, type ProviderId, type RouteDef } from './config.js';
+import { parseSeriesQuery, SeriesError, usageSeries } from './series.js';
 import { estimatePromptTokens, redact, shapeBody } from './shape.js';
 import { dayIn, OWNER_TIME_ZONE, type Store } from './store.js';
 
@@ -384,6 +385,18 @@ export function createGateway(opts: GatewayOptions): Server {
       if (req.method === 'GET' && url.pathname === '/usage') {
         if (!client.usage) throw new HttpError(403, 'forbidden', 'Not allowed');
         return sendJson(res, 200, usage(url.searchParams));
+      }
+      if (req.method === 'GET' && url.pathname === '/usage/series') {
+        if (!client.usage) throw new HttpError(403, 'forbidden', 'Not allowed');
+        const at = now();
+        let query;
+        try {
+          query = parseSeriesQuery(url.searchParams, at);
+        } catch (err) {
+          if (err instanceof SeriesError) throw new HttpError(400, 'invalid_request', err.message);
+          throw err;
+        }
+        return sendJson(res, 200, usageSeries(opts.store.db, query, { paidDailyCapUsd: opts.paidDailyCapUsd, now: at }));
       }
       if (req.method === 'POST' && url.pathname === '/control/paid') {
         if (!client.control) throw new HttpError(403, 'forbidden', 'Not allowed');

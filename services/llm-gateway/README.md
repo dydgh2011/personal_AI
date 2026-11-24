@@ -53,6 +53,7 @@ LiteLLM 대신 직접 만든 이유 (2026-11-23 결정):
 | `POST /v1/chat/completions` | OpenAI 형식. `model` = 용도 이름. 응답 헤더 `X-Gateway-Route`에 실제 경로 |
 | `GET /v1/models` | 이 호출자가 쓸 수 있는 용도 이름 |
 | `GET /usage?days=7` | 무료 묶음별 오늘 사용량, 유료 승인·지출, 일별 합계, 최근 오류 |
+| `GET /usage/series?from=&to=&bucket=hour\|day&by=client\|alias\|model` | 그래프용 집계(읽기 전용, `/usage` 권한). 날짜는 토론토 기준 `YYYY-MM-DD`(기본: 최근 7일), 시간 단위는 31일까지·일 단위는 92일까지. 토큰(입력·캐시·출력)·호출·오류·429·비용을 구간×묶음별로, 지연 시간 p50/p95, 무료 묶음별 일일 사용률(묶음 자체 날짜 기준)과 멈추는 지점, 유료 일별 지출·상한·승인한 날, Kelly 호출당 입력 토큰 분포(2천 단위)와 메시지당 호출 수(호출 간격 20초 기준 **추정**). 합계·백분위만 주고 원본 행·오류 문구·본문은 주지 않습니다 |
 | `POST /control/paid` `{"enable": true\|false}` | 오늘(토론토 날짜) 유료 허용/끄기. hermes만 (Discord `/ai-paid`) |
 | `GET /health` | 상태 |
 
@@ -77,4 +78,4 @@ docker compose @F up -d --build --no-deps llm-gateway notifier hermes learning d
 cd services\llm-gateway; npm ci; npm run build; npm test
 ```
 
-Docker 빌드에서도 테스트가 돌고(12개), 실패하면 이미지가 만들어지지 않습니다.
+Docker 빌드에서도 테스트가 돌고(22개, `/usage/series` 10개 포함), 실패하면 이미지가 만들어지지 않습니다.

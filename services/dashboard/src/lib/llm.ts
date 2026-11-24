@@ -1,5 +1,6 @@
 import 'server-only';
 import { readSecret } from './server';
+import type { UsageSeries } from './usage-series';
 
 /** What the LLM gateway reports at GET /usage (dashboard key: read-only, no control). */
 export interface LlmUsage {
@@ -41,7 +42,7 @@ const settings = {
 };
 
 /** Server side only: the gateway key never reaches the browser. */
-export async function llmUsage(days = 14): Promise<LlmUsage> {
+async function gatewayGet<T>(path: string): Promise<T> {
   let key: string;
   try {
     key = readSecret(settings.keyFile);
@@ -50,7 +51,7 @@ export async function llmUsage(days = 14): Promise<LlmUsage> {
   }
   let res: Response;
   try {
-    res = await fetch(`${settings.url}/usage?days=${days}`, {
+    res = await fetch(`${settings.url}${path}`, {
       headers: { Authorization: `Bearer ${key}`, Accept: 'application/json' },
       cache: 'no-store',
       signal: AbortSignal.timeout(8000),
@@ -59,5 +60,16 @@ export async function llmUsage(days = 14): Promise<LlmUsage> {
     throw new Error('LLM gateway unreachable');
   }
   if (!res.ok) throw new Error(`LLM gateway answered ${res.status}`);
-  return (await res.json()) as LlmUsage;
+  return (await res.json()) as T;
+}
+
+export async function llmUsage(days = 14): Promise<LlmUsage> {
+  return gatewayGet<LlmUsage>(`/usage?days=${days}`);
+}
+
+/** Aggregates for the usage graphs (GET /usage/series): sums and percentiles only, no rows. */
+export async function llmUsageSeries(q: { from: string; to: string; bucket: 'hour' | 'day'; by: 'client' | 'alias' | 'model' }): Promise<UsageSeries> {
+  const data = await gatewayGet<UsageSeries>(`/usage/series?${new URLSearchParams(q).toString()}`);
+  if (!Array.isArray(data?.buckets) || !Array.isArray(data?.series)) throw new Error('LLM gateway sent an unexpected answer (is it updated?)');
+  return data;
 }
