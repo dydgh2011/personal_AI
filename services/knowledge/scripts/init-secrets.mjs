@@ -3,6 +3,8 @@
 //   secrets/knowledge-broker.key     key hermes-broker sends to the knowledge service as X-Knowledge-Key
 //   secrets/knowledge-operator.key   key of the operator CLI (scripts/kb.mjs) and the importer;
 //                                    accepted only while compose.knowledge-operator.yaml is in use
+//   secrets/knowledge-dashboard.key  key the Dashboard (graph page) sends as X-Knowledge-Key (client
+//                                    "dashboard": graph read and owner edits only)
 //
 //   node services/knowledge/scripts/init-secrets.mjs
 import { randomBytes } from 'node:crypto';
@@ -11,7 +13,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../../', import.meta.url));
-for (const name of ['knowledge-broker.key', 'knowledge-operator.key']) {
+for (const name of ['knowledge-broker.key', 'knowledge-operator.key', 'knowledge-dashboard.key']) {
   const file = join(root, 'secrets', name);
   if (existsSync(file)) console.log(`${file} already exists; kept`);
   else {

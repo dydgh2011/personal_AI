@@ -11,7 +11,7 @@
 | 2 위키 문서 (`pages`, `facts`, `links`) | 주제마다 한 장: 요약 + 날짜·출처가 있는 사실 + 다른 문서 링크 | Kelly `page_save`, `fact_add`, `fact_change`, `link` | 사실을 고치면 옛 사실은 `superseded`로 남음 |
 | 3 프로필 | `me` 문서(나에 대한 요약과 사실) + 문서 목록 | Kelly | Hermes 시스템 프롬프트에 짧게 들어감 |
 
-모든 변경은 `change_log`에 누가(hermes / operator), 무엇을, 이전 값과 이후 값까지 남습니다.
+모든 변경은 `change_log`에 누가(hermes / operator / system / dashboard), 무엇을, 이전 값과 이후 값까지 남습니다. `page_save`, `link`에도 선택으로 `reason`을 줄 수 있고, 주면 기록에 남습니다.
 
 ### 고치기와 지우기
 
@@ -72,16 +72,51 @@ Hermes의 메모리 제공자(`memory.provider: personal-ai-knowledge`, `data/he
 | `GET /facts?kind=&type=&page=&limit=&offset=` | 여러 문서의 사실 목록 (`kind=none`: 종류 없는 사실, 보관된 문서 제외, 최대 500개씩). broker에는 열려 있지 않음 |
 | `POST /links` | 문서 연결/해제 |
 | `POST /activities`, `POST /activities/:id`, `GET /timeline` | 활동 기록 |
-| `GET /profile`, `GET /search`, `GET /recall`, `GET /graph`, `GET /changes` | 프로필, 검색, 자동 회상, 그래프(대시보드용), 변경 기록 |
+| `GET /profile`, `GET /search`, `GET /recall`, `GET /graph`, `GET /changes` | 프로필, 검색, 자동 회상, 그래프(Kelly용 요약), 변경 기록 |
+| `GET /graph/view?facts=&archived=&type=&maxPages=&maxFacts=` | 그래프 뷰용 그래프 (아래 "대시보드 그래프 페이지") |
+| `GET /facts/:id` | 사실 하나 전체(글 전체, 상태, 출처 id, 새 버전 id) |
+| `POST /edit/facts/:id`, `POST /edit/facts/:id/archive`, `POST /edit/pages`, `POST /edit/links` | **dashboard 전용**: 주인이 그래프 페이지에서 고치기 (아래) |
 | `POST /purge` | 영구 삭제 (위 표) |
 | `GET /raw/by-sha/:sha`, `POST /raw/file` | **운영자 전용**: 대량 가져오기 (중복 확인, 이미 blob 폴더에 복사된 파일 등록 + 크기·해시 재확인) |
 
-`/graph`는 문서를 점으로, 링크와 "같은 활동에 함께 나온 문서"를 선으로 돌려줍니다(그래프 뷰 단계에서 사용).
+`/graph`는 문서를 점으로, 링크와 "같은 활동에 함께 나온 문서"를 선으로 돌려줍니다.
+
+## 대시보드 그래프 페이지 (client `dashboard`)
+
+Obsidian 그래프처럼 문서·사실·링크를 보고, 필요하면 주인이 직접 고치는 페이지(Dashboard)를 위한 길입니다. Dashboard 쪽 페이지는 아직 없습니다.
+
+**읽기** `GET /graph/view`
+
+| 매개변수 | 뜻 (기본) |
+|---|---|
+| `facts=1` | 사실도 점으로 (기본 0: 문서만) |
+| `archived=1` | 보관한 문서와 보관한 사실(`status: removed`)도 (기본 0) |
+| `type=course` | 이 종류의 문서만 |
+| `maxPages` / `maxFacts` | 최대 개수 (기본 500 / 2000, 최대 2000 / 5000). `me`가 맨 앞, 그다음 최근에 바뀐 문서 순 |
+
+돌려주는 것: `pages[]`(id, slug, title, type, aliases, archived, counts{facts, archivedFacts, activities}, updatedAt), `facts[]`(id, page=slug, text=200자 발췌, clipped, kind, status, observedOn, updatedAt; `facts=1`일 때만), `links[]`(source, target, relation, note: 둘 다 포함된 문서일 때만), `doneTogether[]`(source, target, weight: 같은 활동에 함께 나온 문서, 최대 2000), `totals`, `truncated`(잘렸는지), `vocab`(문서 종류, 사실 종류 목록). 옛 버전 사실(`superseded`)은 점이 아니고 기록에만 있습니다. 모르는 매개변수는 400.
+
+**고치기** (모두 `reason` 필수, 300자 이하; `change_log`에 actor `dashboard`와 이유가 남음; 완전 삭제 없음)
+
+| 경로 | 본문 | 하는 일 |
+|---|---|---|
+| `POST /edit/facts/:id` | `text?`, `kind?`(null = 비움), `reason` | 글을 바꾸면 새 사실(새 id)이 생기고 옛 사실은 `superseded`로 남음(관찰 날짜는 유지). `kind`만이면 같은 사실에서 종류만(`retype`) |
+| `POST /edit/facts/:id/archive` | `archived: true/false`, `reason` | 보관(`removed`, 검색·답에서 빠짐) / 되살리기(`restore`) |
+| `POST /edit/pages` | `page`(slug), `title?`, `aliases?`, `archived?`, `reason` | 제목·다른 이름 바꾸기, 보관/되살리기. `me`, `preferences`는 보관 불가 |
+| `POST /edit/links` | `from`, `to`(slug), `relation`, `note?`, `remove?`, `reason` | 링크 추가/삭제 (`done_together`는 계산값이라 불가) |
+
+- 문서는 slug로만 찾습니다(오타로 새 문서가 생기거나 다른 문서가 바뀌지 않게). 없으면 404.
+- 제목이나 다른 이름이 이미 다른 문서를 가리키면 409(이름으로 찾을 때 헷갈리지 않게). 같은 문서에 같은 글의 사실이 이미 있으면 409. 옛 버전·보관된 사실을 고치려 하면 409.
+- 바뀐 게 없으면 `changed: false`, 기록도 안 남깁니다. 결과에는 바뀐 사실/문서가 들어 있습니다.
+- 내부적으로 Kelly가 쓰는 `changeFact`, `savePage`, `link`를 그대로 거칩니다(검색 색인도 같이 갱신).
+
+**dashboard가 쓸 수 있는 것은 이것뿐**: `GET /status`, `GET /graph/view`, `GET /page?ref=`, `GET /facts/:id`, 위 네 고치기. 원본(`/raw*`), 검색·회상, 프로필, 타임라인, 변경 기록, 일반 쓰기(`POST /pages`, `/facts`, `/links`, `/activities`), `purge`, 운영자 경로는 모두 403(본문을 읽기 전에 거절). 본문은 64KB까지.
 
 ## 구성과 보안
 
-- 네트워크: `knowledge-internal`(broker, school과), `knowledge-egress`(이 PC의 Ollama, `host.docker.internal:11434`).
-- 호출자: `KNOWLEDGE_CLIENTS`(hermes-broker)에 compose 파일마다 `KNOWLEDGE_CLIENTS_<이름>`으로 더합니다(운영자, school). **school**은 원본 추가(`POST /raw`, `source: school`)와 `/status`만 할 수 있습니다(기록상 actor `system`). 학교 항목은 `externalId: school:<서비스>:<id>`로 한 번만 저장됩니다.
+- 네트워크: `knowledge-internal`(broker, school과), `knowledge-egress`(이 PC의 Ollama, `host.docker.internal:11434`), `knowledge-dashboard`(dashboard와만, `internal: true` = 인터넷으로 나갈 길 없음).
+- 호출자: `KNOWLEDGE_CLIENTS`(hermes-broker)에 compose 파일마다 `KNOWLEDGE_CLIENTS_<이름>`으로 더합니다(운영자, school, dashboard). 열쇠 하나 = 호출자 하나, 경로 허용 목록은 `src/api.ts`의 `CLIENT_ROUTES`. **school**은 원본 추가(`POST /raw`, `source: school`)와 `/status`만 할 수 있습니다(기록상 actor `system`). 학교 항목은 `externalId: school:<서비스>:<id>`로 한 번만 저장됩니다. **dashboard**는 위 "대시보드 그래프 페이지"의 경로만(actor `dashboard`).
+- `이름?=/열쇠파일`은 선택 호출자입니다: 열쇠 파일이 아직 없으면 그 호출자만 빠지고(접근 불가, 경고 로그) 서비스는 뜹니다. 파일이 있는데 짧거나 공백이 있으면 예전처럼 멈춥니다. dashboard가 이렇게 들어가 있습니다(Compose는 없는 secret 파일에 경고만 하고 컨테이너를 만들기 때문).
 - **저장 위치 (모두 D:)**: 원본 파일은 `data/knowledge/blobs/<sha256>.<확장자>`(호스트 폴더), DB는 `knowledge-data` 볼륨(Docker Desktop의 디스크 이미지 위치를 D:로 둬야 D:에 있음), 가져올 자료는 `data/knowledge-inbox/`.
 - Hermes의 첨부 폴더(`data/hermes/cache/documents`)만 읽기 전용으로 마운트합니다. Hermes의 다른 파일(.env, auth.json 등)은 보이지 않습니다. 첨부 폴더가 Hermes 사용자 전용(0700)이라 이 서비스도 같은 uid 10000으로 돕니다(root 아님).
 - 같은 내용의 파일은 원본을 한 번만 저장합니다(채팅 첨부와 가져오기 사이에도).
@@ -90,7 +125,7 @@ Hermes의 메모리 제공자(`memory.provider: personal-ai-knowledge`, `data/he
 ## 설정
 
 ```powershell
-node services\knowledge\scripts\init-secrets.mjs      # knowledge-broker.key, knowledge-operator.key
+node services\knowledge\scripts\init-secrets.mjs      # knowledge-broker.key, knowledge-operator.key, knowledge-dashboard.key (값은 출력 안 함, 있으면 그대로 둠)
 docker compose @F up -d --build --no-deps knowledge hermes-broker hermes
 ```
 
@@ -119,7 +154,7 @@ node services\knowledge\scripts\kb.mjs help
 
 - 매일 밤 정리(그날 원본 → 활동·사실 추출 → 일간/주간 요약): 지금은 Kelly가 대화 중에 바로 저장합니다.
 - 이미지 OCR, 강의 영상·음성 받아쓰기(로컬 whisper), 판만 다른 파일 묶기.
-- 숙련도 모델(`docs/knowledge/LEARNING_MODEL.md`), 대시보드 그래프 뷰, 학교 서비스 수집.
+- 숙련도 모델(`docs/knowledge/LEARNING_MODEL.md`), 대시보드 그래프 페이지 화면(이 서비스 쪽 API는 있음), 학교 서비스 수집.
 
 ## 테스트
 
