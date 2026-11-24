@@ -367,6 +367,51 @@ class ScheduleBriefTest(unittest.TestCase):
         self.assertIn("읽지 못한 곳: 플래너", text)
         self.assertIn("STA256", text)
 
+    def test_a_slow_source_never_holds_the_reply_past_the_budget(self):
+        import threading
+        import time as t
+        release = threading.Event()
+
+        def slow():
+            release.wait(5)
+            return []
+        self.sb._planner_items = slow
+        budget, self.sb.BUDGET = self.sb.BUDGET, 0.3
+        try:
+            started = t.monotonic()
+            text = self.sb.brief(self.client, "다음 시험 언제야", "s6")
+            took = t.monotonic() - started
+        finally:
+            self.sb.BUDGET = budget
+            release.set()
+        self.assertLess(took, 1.5)
+        self.assertIn("읽지 못한 곳: 플래너", text)
+        self.assertIn("STA256", text)
+
+    def test_planner_reads_run_at_the_same_time(self):
+        import time as t
+        from types import SimpleNamespace
+        calls = []
+
+        def get(_pc, path):
+            calls.append(path)
+            t.sleep(0.4)
+            if path.startswith("/todos"):
+                return {"todos": [{"title": "CSC207 A3 Submission", "deadline": "2026-12-04T23:59"}]}
+            return {"days": [{"date": "2026-11-26", "events": [{"title": "FAS Technical Test", "deadline": True, "allDay": True}]}]}
+        original = self.sb._planner
+        self.sb._planner = lambda: (SimpleNamespace(_get=get), object())
+        self.sb._planner_items = self._planner_items
+        try:
+            started = t.monotonic()
+            items = self.sb._planner_items()
+            took = t.monotonic() - started
+        finally:
+            self.sb._planner = original
+        self.assertEqual(len(calls), 3)                       # todos + two weeks
+        self.assertLess(took, 1.0)                            # not 3 x 0.4 s in a row
+        self.assertEqual([i["what"] for i in items], ["할 일 마감 · CSC207 A3 Submission", "캘린더 · FAS Technical Test", "캘린더 · FAS Technical Test"])
+
 
 class FactKindTest(unittest.TestCase):
     """Code picks facts by kind; untyped facts (stored before kinds) keep the old word rules."""

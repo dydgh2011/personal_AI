@@ -166,17 +166,20 @@ def _course_items(client) -> list[dict[str, Any]]:
 def _planner_items() -> list[dict[str, Any]]:
     def load():
         planner_client, pc = _planner()
+        start = now().date()
+        paths = ["/todos?status=open"] + [f"/week?start={(start + timedelta(days=w)).isoformat()}" for w in range(0, PLANNER_DAYS, 7)]
+        # One request each, at the same time: a week read takes 1-2 s (calendar sync), in a row they missed the budget.
+        with ThreadPoolExecutor(max_workers=len(paths)) as pool:
+            todos, *weeks = list(pool.map(lambda p: planner_client._get(pc, p), paths))
         items = []
-        for t in planner_client._get(pc, "/todos?status=open").get("todos", []):
+        for t in todos.get("todos", []):
             dl = str(t.get("deadline") or "")
             m = re.match(r"(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?", dl)
             if m:
                 y, mo, d, h, mi = m.groups()
                 items.append({"date": date(int(y), int(mo), int(d)), "start": f"{h}:{mi}" if h else None, "end": None,
                               "what": f"할 일 마감 · {t.get('title')}", "source": "플래너"})
-        start = now().date()
-        for week in range(0, PLANNER_DAYS, 7):
-            data = planner_client._get(pc, f"/week?start={(start + timedelta(days=week)).isoformat()}")
+        for data in weeks:
             for day in data.get("days", []) if isinstance(data, dict) else []:
                 for e in day.get("events", []):
                     title = str(e.get("title") or "")
@@ -208,15 +211,20 @@ def _merge(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def _gather(client) -> tuple[list[dict[str, Any]], list[str]]:
     missing = []
-    with ThreadPoolExecutor(max_workers=2) as pool:
+    pool = ThreadPoolExecutor(max_workers=2)
+    try:
         jobs = {pool.submit(_course_items, client): "지식 저장소", pool.submit(_planner_items): "플래너"}
-        done, not_done = wait(jobs, timeout=BUDGET)
+        done, _ = wait(jobs, timeout=BUDGET)
         items: list[dict[str, Any]] = []
         for job in jobs:
             if job in done and job.exception() is None:
                 items += job.result()
             else:
                 missing.append(jobs[job])
+    finally:
+        # Never wait past the budget: a slow source finishes in the background and fills the cache
+        # for the next message (a `with` block would block here until it is done).
+        pool.shutdown(wait=False)
     return _merge(items), missing
 
 
