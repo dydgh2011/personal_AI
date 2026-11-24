@@ -1,7 +1,7 @@
 # Personal AI OS — Roadmap
 
 상태 표기: ✅ 완료(검증됨) · 🟡 부분 완료 · ⬜ 미착수. 완료는 실제 Docker 환경에서 검증한 경우에만 표시합니다.
-마지막 갱신: 2026-11-04 (AI Learning OS L0 설계안 추가)
+마지막 갱신: 2026-11-23 (18절 AI 사용량 그래프 계획 추가)
 
 ```text
 사용자 ─ Telegram/hermes chat ─▶ Hermes ─▶ hermes-broker ─▶ Controller ◀─ claude-worker / codex-worker
@@ -430,3 +430,22 @@ Memory Agent, Finance Agent, Personal Assistant Agent, JARVIS TTS 연동, 자동
   - L4-03 Project Registry 연결: 개발 로드맵과 상태를 섞지 않고 참조로만 연결한다.
   - L4-04 Quest, 음성 어댑터: 선택 사항이며, 실패해도 핵심 기능에 영향이 없어야 한다.
 - **단계 게이트**: L0 승인 전에는 구현하지 않는다. 각 단계는 실제 Docker 검증과 테스트 근거가 있어야 ✅로 표시한다. `S/M/L`은 난이도이지 진행률이 아니다.
+
+## 18. AI 사용량 그래프 (Usage 화면) ⬜ (2026-11-23 계획 추가)
+
+Claude, ChatGPT의 사용량 화면처럼 AI 사용량의 **변화**를 그래프로 본다. 지금 Dashboard `/ai-usage`는 오늘 숫자와 일별 합계 표만 보여 준다(읽기 전용).
+
+- **데이터**: 새로 모으지 않는다. LLM 게이트웨이 `gateway.db`의 `calls` 표에 호출마다 시각, 호출자(hermes, school, learning, notifier), 별칭(kelly, kelly-aux, batch), 제공자·모델, 입력·캐시·출력 토큰, 비용, 지연 시간, 오류가 이미 남는다.
+- **보여줄 것**
+  - 기간 선택(오늘 / 7일 / 30일), 시간·일 단위 막대·선 그래프
+  - 토큰: 입력 / 캐시된 입력 / 출력을 나눠서, 호출자·모델별로 쌓아 보기
+  - 무료 한도: 묶음별 일일 사용률 추이와 80% 차단선
+  - 유료: 일별 지출과 일일 상한($0.30), 승인한 날 표시
+  - Kelly 대화 크기: 호출당 입력 토큰 분포(고정 비용 약 1만 1천~1만 4천, 압축 기준 4만 표시), 메시지 하나당 호출 수
+  - 오류·429·지연 시간 추이
+- **방식**
+  - 게이트웨이에 읽기 전용 집계 API(예: `GET /usage/series?from=&to=&bucket=hour|day&by=client|alias|model`)를 추가한다. 원본 행은 넘기지 않는다.
+  - Dashboard는 기존 로그인·CSRF를 그대로 쓰고, 서버에서 받아 그린다.
+  - 프롬프트·응답 본문은 게이트웨이에 저장하지 않는 원칙을 유지한다(토큰 수만).
+  - 데스크톱과 390px 모바일, 라이트·다크 모두 확인한다.
+- **수용 기준**: 실제 `gateway.db` 기준으로 그래프 합계가 `/usage` 일별 합계와 같다. 빈 기간과 게이트웨이 장애 때 화면이 깨지지 않는다. 실제 브라우저로 확인한다.

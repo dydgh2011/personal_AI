@@ -33,6 +33,8 @@ class FakeClient:
     def call(self, method, path, query=None, body=None, timeout=30.0):
         self.calls.append((method, path, query, body))
         answer = self.answers.get((method, path), {})
+        if callable(answer):
+            answer = answer(query)
         if isinstance(answer, Exception):
             raise answer
         return answer
@@ -114,6 +116,39 @@ class ToolTest(unittest.TestCase):
         self.run_tool(client, action="purge", target="page", page="옛 프로젝트", reason="필요 없음", confirmed_by_user=True)
         self.assertEqual(client.calls[-1][3], {"target": "page", "reason": "필요 없음", "page": "옛 프로젝트"})
 
+    def test_page_adds_facts_from_linked_pages_that_mention_it(self):
+        pages = {
+            "MAT223": {"page": {"slug": "mat223", "title": "MAT223", "type": "course", "aliases": ["MAT223H5", "선형대수"]},
+                       "facts": [{"id": UUID, "text": "Test 1 47/50", "observedOn": "2026-10-15"}],
+                       "links": [{"relation": "covers", "to": {"slug": "tf", "title": "정당화 T/F 문제", "type": "topic"}},
+                                 {"relation": "covers", "to": {"slug": "eig", "title": "고유값과 대각화", "type": "topic"}},
+                                 {"relation": "covers", "to": {"slug": "gone", "title": "없음", "type": "topic"}}],
+                       "linkedFrom": [{"relation": "part_of", "from": {"slug": "me", "title": "나", "type": "me"}}]},
+            "tf": {"page": {"slug": "tf"}, "facts": [
+                {"id": "a", "text": "MAT 223 Quiz 1 T/F 0/1, Test 1 5(c) 0점", "observedOn": "2026-11-23"},
+                {"id": "b", "text": "STA256 T/F도 있음", "observedOn": "2026-11-23"}]},
+            "eig": {"page": {"slug": "eig"}, "facts": [{"id": "c", "text": "선형대수 3.3절", "observedOn": "2026-09-02"}]},
+            "gone": kc.KnowledgeError("not_found", "No page", 404),
+        }
+        client = FakeClient({("GET", "/page"): lambda q: pages[q["ref"]]})
+        result = self.run_tool(client, action="page", page="MAT223")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["linkedFacts"], [
+            {"page": "정당화 T/F 문제", "type": "topic",
+             "facts": [{"id": "a", "text": "MAT 223 Quiz 1 T/F 0/1, Test 1 5(c) 0점", "observedOn": "2026-11-23"}]},
+            {"page": "고유값과 대각화", "type": "topic",
+             "facts": [{"id": "c", "text": "선형대수 3.3절", "observedOn": "2026-09-02"}]},
+        ])
+        self.assertIn("linkedFacts holds", result["note"])
+        self.assertIn("never name fields", result["note"])      # course pages get the answering note
+        self.assertEqual(result["recordedMistakes"], [
+            {"page": "정당화 T/F 문제", "text": "MAT 223 Quiz 1 T/F 0/1, Test 1 5(c) 0점"}])  # "47/50", "3.3절" are not mistakes
+        self.assertEqual([c[2]["ref"] for c in client.calls], ["MAT223", "tf", "eig", "gone"])   # never the owner page
+        plain = self.run_tool(FakeClient({("GET", "/page"): {"page": {"slug": "x", "title": "헬스"}, "facts": []}}),
+                              action="page", page="헬스")
+        self.assertNotIn("linkedFacts", plain)
+        self.assertNotIn("note", plain)
+
     def test_errors_come_back_as_results(self):
         client = FakeClient({("GET", "/page"): kc.KnowledgeError("not_found", 'No page "CSC26"', 404, {"similar": ["CSC263"]})})
         result = self.run_tool(client, action="page", page="CSC26")
@@ -147,12 +182,12 @@ class ProviderTest(unittest.TestCase):
 
     def test_prefetch_recalls_only_for_real_messages(self):
         self.assertEqual(self.provider.prefetch(""), "")
-        text = self.provider.prefetch("내 헬스 일정 알려줘")
+        text = self.provider.prefetch("내 헬스 루틴 알려줘")
         self.assertTrue(text.startswith("## Known about the owner"))
         self.assertIn("월수금", text)
         self.assertEqual(self.provider.recall_status().count, 1)
         self.client.answers[("GET", "/recall")] = kc.KnowledgeError("unavailable", "down")
-        self.assertEqual(self.provider.prefetch("내 헬스 일정"), "")
+        self.assertEqual(self.provider.prefetch("내 헬스 루틴"), "")
         self.assertIsNone(self.provider.recall_status())
 
     def test_sync_turn_keeps_turns_and_attachments_redacted(self):
@@ -202,6 +237,135 @@ class ProviderTest(unittest.TestCase):
 
         plugin.register(Ctx())
         self.assertIsInstance(seen[0], plugin.KnowledgeProvider)
+
+        hooks = []
+
+        class HookCtx(Ctx):
+            def register_hook(self, name, callback):
+                hooks.append((name, callback))
+
+        plugin.register(HookCtx())
+        self.assertEqual([h[0] for h in hooks], ["transform_llm_output"])
+
+
+class CourseBriefTest(unittest.TestCase):
+    """Code attaches the course record and appends asked-about facts the answer left out."""
+
+    def setUp(self):
+        cb = plugin.cb
+        cb._index.update(at=0.0, pages=[])
+        cb._pending.clear()
+        pages = {
+            "mat223": {"page": {"slug": "mat223", "title": "MAT223", "type": "course", "aliases": ["선형대수"],
+                                "summary": "기말 2026-12-19(토) 09:00–12:00"},
+                       "facts": [{"id": "1", "text": "Test 1: 47/50 (94%). Q2 9.5(2d A^{-1}b 셋째 성분 계산 실수 10→18)"},
+                                 {"id": "2", "text": "배점: 시험 2개 각 20% · 기말 40%"}],
+                       "links": [{"relation": "covers", "to": {"slug": "tf", "title": "정당화 T/F 문제", "type": "topic"}}]},
+            "tf": {"page": {"slug": "tf", "title": "정당화 T/F 문제", "type": "topic"},
+                   "facts": [{"id": "3", "text": "MAT223 Quiz 1 T/F 0/1, Test 1 5번 7.5/10 (c) 근거가 틀려 0점"}]},
+        }
+        self.client = FakeClient({
+            ("GET", "/pages"): {"pages": [{"slug": "mat223", "title": "MAT223", "type": "course"},
+                                          {"slug": "tf", "title": "정당화 T/F 문제", "type": "topic"},
+                                          {"slug": "x", "title": "헬스", "type": "habit"}]},
+            ("GET", "/page"): lambda q: pages[q["ref"]],
+        })
+        self.cb = cb
+
+    def test_brief_attaches_the_named_course_with_linked_facts(self):
+        text = self.cb.brief(self.client, "MAT 223 약한 주제 알려줘", "s1")
+        self.assertIn("## Course record", text)
+        self.assertIn("47/50 (94%)", text)
+        self.assertIn("[정당화 T/F 문제] MAT223 Quiz 1 T/F 0/1", text)
+        self.assertEqual(self.cb.brief(self.client, "선형대수 배점은?", "s2").count("### MAT223"), 1)   # alias
+        self.assertEqual(self.cb.brief(self.client, "오늘 헬스 갔어", "s3"), "")                     # not a course/topic
+
+    def test_check_appends_only_what_the_answer_left_out(self):
+        self.cb.brief(self.client, "MAT223 약한 주제 알려줘", "s1")
+        full = "Test 1 47/50(94%), Q2 9.5 계산 실수 10→18. Quiz 1 0/1, 5번 7.5/10."
+        self.assertIsNone(self.cb.check(full, "s1"))
+        self.cb.brief(self.client, "MAT223 약한 주제 알려줘", "s1")
+        out = self.cb.check("정당화 T/F가 약해요.", "s1")
+        self.assertTrue(out.startswith("정당화 T/F가 약해요.\n\n📌 저장소 기록"))
+        self.assertIn("[MAT223] Test 1: 47/50 (94%)", out)
+        self.assertIn("[정당화 T/F 문제] MAT223 Quiz 1", out)
+        self.assertNotIn("배점", out)                          # grading was not asked
+        self.assertIsNone(self.cb.check("다른 답", "s1"))       # pending is used once
+        self.assertIsNone(self.cb.check("아무 답", "other"))    # no brief for this session
+
+    def test_headline_count_and_total_score_are_never_optional(self):
+        fact = "장별 Exercise 109개: 1장 10 · 2장 18 · 3장 17 · 4장 25"
+        self.assertFalse(self.cb._covered(fact, "Mohammad notes: 1장 10, 2장 18, 3장 17, 4장 25"))
+        self.assertTrue(self.cb._covered(fact, "Exercise 109개 (10, 18, 17)"))
+        self.assertFalse(self.cb._covered("Test 1: 47/50 (94%), Q2 9.5, Q5 7.5", "Q2 9.5, Q5 7.5, 94%"))
+
+    def test_provider_hook_never_breaks_a_reply(self):
+        provider = plugin.KnowledgeProvider(env={"PERSONAL_AI_BROKER_URL": "http://broker"}, client=self.client)
+        self.assertIsNone(provider.check_answer(response_text="hi", session_id="none"))
+
+
+class ScheduleBriefTest(unittest.TestCase):
+    """Code lists every dated item, so 'first/next' never comes from one course."""
+
+    def setUp(self):
+        from datetime import date, datetime
+        sb = plugin.sb
+        self.sb = sb
+        sb._cache.clear()
+        sb._pending.clear()
+        self._now, self._planner_items = sb.now, sb._planner_items
+        sb.now = lambda: datetime(2026, 11, 24, 1, 2, tzinfo=sb.TZ)
+        sb._planner_items = lambda: [
+            {"date": date(2026, 11, 26), "start": None, "end": None, "what": "할 일 마감 · FAS Technical Test", "source": "플래너"},
+            {"date": date(2026, 11, 26), "start": None, "end": None, "what": "캘린더 · 마감: FAS Technical Test", "source": "플래너"},
+            {"date": date(2026, 12, 16), "start": "09:00", "end": "12:00", "what": "캘린더 · CSC236H5 Final Exam", "source": "플래너"},
+        ]
+        pages = {
+            "csc236": {"page": {"title": "CSC236", "summary": "계산 이론. 기말 12/16"},
+                       "facts": [{"text": "기말: 2026-12-16(수) 09:00–12:00, RA Gym A/B"}]},
+            "sta256": {"page": {"title": "STA256", "summary": "확률. 기말 12/10"},
+                       "facts": [{"text": "기말: 2026-12-10(목) 17:00–20:00, RA Gym A/B"},
+                                 {"text": "Term Test 2 (2026-11-14): 11.5/25"}]},
+        }
+        self.client = FakeClient({
+            ("GET", "/pages"): {"pages": [{"slug": "csc236"}, {"slug": "sta256"}]},
+            ("GET", "/page"): lambda q: pages[q["ref"]],
+        })
+
+    def tearDown(self):
+        self.sb.now, self.sb._planner_items = self._now, self._planner_items
+
+    def test_upcoming_lists_every_course_sorted_with_time_left(self):
+        text = self.sb.brief(self.client, "제일 처음에 있는 기말고사 언제야? 얼마나 남았어?", "s1")
+        lines = [l for l in text.splitlines() if l[:1].isdigit()]
+        self.assertIn("2026-11-24(화) 01:02 토론토", text)
+        self.assertTrue(lines[0].startswith("1. 2026-11-26(목) · 할 일 마감 · FAS Technical Test · 2일 남음"))
+        self.assertEqual(len(lines), 3)                                    # calendar copies merged, past test dropped
+        self.assertIn("2026-12-10(목) 17:00–20:00 · STA256", lines[1])
+        self.assertIn("16일 15시간 남음", lines[1])
+        self.assertIn("CSC236", lines[2])
+        self.assertEqual(self.sb._pending["s1"]["first"]["what"][:6], "STA256")   # "기말" picks finals only
+
+    def test_check_appends_the_first_item_when_the_answer_misses_its_date(self):
+        self.sb.brief(self.client, "제일 처음에 있는 기말고사 알려줘", "s1")
+        out = self.sb.check("가장 먼저는 CSC236, 2026-12-16이야.", "s1")
+        self.assertIn("📌 일정 기록", out)
+        self.assertIn("2026-12-10(목) 17:00–20:00 · STA256", out)
+        self.sb.brief(self.client, "제일 처음에 있는 기말고사 알려줘", "s1")
+        self.assertIsNone(self.sb.check("STA256, 12월 10일 17시야.", "s1"))
+
+    def test_all_courses_for_comparisons_only_without_a_named_course(self):
+        self.assertIn("- STA256: 확률", self.sb.brief(self.client, "어느 과목이 제일 약해?", "s2"))
+        self.assertEqual(self.sb.brief(self.client, "CSC236 과목별 연습문제", "s3"), "")
+        self.assertEqual(self.sb.brief(self.client, "오늘 기분 좋아", "s4"), "")
+
+    def test_a_slow_or_failing_source_is_left_out_and_said(self):
+        def boom():
+            raise RuntimeError("planner down")
+        self.sb._planner_items = boom
+        text = self.sb.brief(self.client, "다음 시험 언제야", "s5")
+        self.assertIn("읽지 못한 곳: 플래너", text)
+        self.assertIn("STA256", text)
 
 
 class _Sync:

@@ -43,10 +43,14 @@ except ImportError:  # tests outside the Hermes image
         return threading.Thread(target=target, args=args, kwargs=kwargs, name=name, daemon=daemon)
 
 try:
+    from . import course_brief as cb
     from . import knowledge_client as kc
+    from . import schedule_brief as sb
 except ImportError:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import course_brief as cb  # type: ignore[no-redef]
     import knowledge_client as kc  # type: ignore[no-redef]
+    import schedule_brief as sb  # type: ignore[no-redef]
 
 logger = logging.getLogger("personal_ai_knowledge")
 
@@ -63,7 +67,16 @@ RULES = (
     "lasting about themselves (courses, goals, habits, people, preferences, plans that changed), store it as a fact "
     "on the right page (create the page if needed) and tell them in one line; when they report what they did, add "
     "an activity. Correct outdated facts with fact_change instead of adding contradictions. Never store passwords, "
-    "keys or tokens. Schedules and todos belong to personal_ai_planner, not here."
+    "keys or tokens. Schedules and todos belong to personal_ai_planner, not here.\n"
+    "Recalled lines are short excerpts (a line ending in … is cut), not the full record. For a question about a "
+    "course, exam, grade or study material, open the course page with action page before answering (it also "
+    "carries test results and weak points kept on topic pages) and follow the note in its result: keep scores, "
+    "dates, question numbers, every recorded mistake, book names and exercise counts. Search with the store's "
+    "words (Korean, course codes). Never name tool fields to the owner.\n"
+    "Questions of order, comparison or time (first, next, earliest, which course, how long left): compare every "
+    "candidate, never decide from one course or one page - use the code-made 'Upcoming' / 'All courses' blocks "
+    "when they are attached. 'Now' is the time stamped on the owner's latest message (Toronto), never the time of "
+    "an earlier message."
 )
 
 
@@ -126,16 +139,47 @@ class KnowledgeProvider(MemoryProvider):
         self._last_count = 0
         if not self._client or is_trivial_prompt(query):
             return ""
+        parts = []
+        try:
+            course = cb.brief(self._client, query[:2000], session_id)
+        except kc.KnowledgeError as err:
+            logger.info("course brief skipped: %s", err.code)
+            course = ""
         try:
             result = self._client.call("GET", "/recall", {"q": query[:2000]}, timeout=RECALL_TIMEOUT)
         except kc.KnowledgeError as err:
             logger.info("knowledge recall skipped: %s", err.code)
-            return ""
+            result = {}
         text = str(result.get("text") or "").strip()
-        if not text:
-            return ""
-        self._last_count = int(result.get("count") or 0)
-        return "## Known about the owner (knowledge store; check with personal_ai_knowledge if it matters)\n" + text
+        if text:
+            self._last_count = int(result.get("count") or 0)
+            parts.append("## Known about the owner (knowledge store excerpts; lines ending in … are cut. For courses, "
+                         "exams or details, read the page with personal_ai_knowledge before answering)\n" + text)
+        if course:
+            self._last_count = self._last_count or 1
+            parts.append(course)
+        try:
+            schedule = sb.brief(self._client, query[:2000], session_id)
+        except Exception as err:  # never block a reply
+            logger.info("schedule brief skipped: %s", type(err).__name__)
+            schedule = ""
+        if schedule:
+            self._last_count = self._last_count or 1
+            parts.append(schedule)
+        return "\n\n".join(parts)
+
+    def check_answer(self, response_text: str = "", session_id: str = "", **_: Any) -> str | None:
+        """transform_llm_output hook: append what the answer left out (course facts, the first upcoming item)."""
+        text, changed = response_text, False
+        for check in (cb.check, sb.check):
+            try:
+                out = check(text, session_id)
+            except Exception as err:  # never break a reply
+                logger.warning("answer check skipped: %s", type(err).__name__)
+                out = None
+            if out:
+                text, changed = out, True
+        return text if changed else None
 
     def recall_status(self):
         return RecallStatus("knowledge", self._last_count) if self._last_count else None
@@ -211,4 +255,7 @@ def _document_client():
 
 
 def register(ctx) -> None:
-    ctx.register_memory_provider(KnowledgeProvider())
+    provider = KnowledgeProvider()
+    ctx.register_memory_provider(provider)
+    if hasattr(ctx, "register_hook"):
+        ctx.register_hook("transform_llm_output", provider.check_answer)

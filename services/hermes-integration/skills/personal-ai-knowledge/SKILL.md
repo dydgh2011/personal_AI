@@ -1,7 +1,7 @@
 ---
 name: personal-ai-knowledge
 description: Remember everything about the owner in the knowledge store - pages with facts and links, an activity timeline, raw originals - and find it again.
-version: 0.3.1
+version: 0.3.2
 author: dydgh2011, Hermes Agent
 license: MIT
 platforms: [linux]
@@ -22,7 +22,16 @@ The owner wants an assistant that knows them, even things they forgot to mention
 | 2 pages | one page per subject (course, topic, goal, project, person, habit, place, org) with a summary, dated facts and links | you: `page_save`, `fact_add`, `fact_change`, `link` |
 | 3 profile | the page `me` (who the owner is) and the page index | you: `page_save page="me"`, `fact_add page="me"` |
 
-Lines under "Known about the owner" in a message were recalled automatically for that message. They can be outdated: when it matters, check the page (`page`).
+Lines under "Known about the owner" in a message were recalled automatically for that message. They are short excerpts (a line ending in … is cut, at most 6 lines) and can be outdated: when it matters, check the page (`page`).
+
+## Courses, exams and study material
+
+The owner uses the store for exam prep. For a question about a course (exam date, grading, scores, weak points, where to practise):
+
+1. `page` the course (title or code, e.g. "MAT223"). Its result has the course facts and `linkedFacts`: facts on linked topic pages that mention the course. Test results per question and weak points ("Test 1 5(c) 0/2.5 ...") are usually kept on the topic pages, so read `linkedFacts` before naming weak points. `recordedMistakes` (course pages) lists every fact that records a lost point or a mistake, picked by code; cover each one, after each test's total score. Never say these field names to the owner.
+2. Answer with the specifics the store holds: scores with totals (e.g. 18/20, 90%), dates and places, question numbers, what exactly went wrong, book names (Liu's notes), exercise counts per chapter. Do not shorten them to "calculation mistakes" or "the textbook".
+3. A topic linked to a course is not automatically a weak point; say it is weak only when a fact says so.
+4. `search` with the store's words: Korean and course codes ("MAT223 정당화 T/F 약점"), not an English paraphrase.
 
 ## When to store (do it, then tell the owner in one line)
 
