@@ -485,6 +485,7 @@ class BackfillTest(unittest.TestCase):
             ("기말 12/16 09:00–12:00", course, "exam"),
             ("과제 A2 마감 2026-11-28 23:59", course, "deadline"),
             ("배점: 시험 2개 각 20% · 기말 40%", course, "grading"),
+            ("배점: 랩 5% · A1 10%(10/10 마감) · Midterm (2026-11-06) 30% · 기말 12/11 17:00–20:00 40%", course, "grading"),
             ("늦으면 하루 10% 감점", course, "grading"),
             ("장별 Exercise 109개: 1장 10 · 2장 18", course, "resource"),
             ("교재: Liu 노트", course, "resource"),

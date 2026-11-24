@@ -46,6 +46,7 @@ PREFERENCES_SLUG = "preferences"
 EXAM_WORD = re.compile(r"기말|중간|시험|퀴즈|exam|test|quiz|final|midterm", re.I)
 DEADLINE_WORD = re.compile(r"마감|제출|due|deadline|과제|assignment|\bA\d\b|\bPS\d\b", re.I)
 GRADING = re.compile(r"배점|비중|감점|성적\s*(산출|구성|비율)|grading|weight|late\s*penalty", re.I)
+GRADING_HEADER = re.compile(r"\s*(배점|비중|성적\s*(산출|구성|비율)|grading)\b", re.I)
 RESOURCE = re.compile(r"연습문제|Exercise|\d+\s*문제|교재|textbook|노트|notes|강의\s*자료|슬라이드|slides|문제집|practice", re.I)
 HABIT_WORD = re.compile(r"매일|매주|아침마다|저녁마다|루틴|습관|every\s*(day|week)", re.I)
 PREFERENCE_WORD = re.compile(r"^\s*선호|좋아해|싫어해|원해|prefers?\b", re.I)
@@ -76,6 +77,8 @@ RULES: list[tuple[str, str, Callable[[str, dict[str, Any]], bool]]] = [
     ("preference", "preferences-page", lambda t, p: p.get("slug") == PREFERENCES_SLUG),
     ("habit", "habit-page", lambda t, p: p.get("type") == "habit"),
     ("mistake", "mistake-words", lambda t, p: bool(kc.MISTAKE.search(t))),
+    # "배점: ... A1 10%(10/10 마감) ... Midterm 2026-11-06" lists dates and fractions but is grading.
+    ("grading", "grading-header", lambda t, p: bool(GRADING_HEADER.match(t))),
     ("score", "score", lambda t, p: _score(t)),
     ("exam", "exam-date", lambda t, p: bool(EXAM_WORD.search(t)) and bool(TIME_RANGE.search(t) or DATED.search(t))),
     ("deadline", "deadline-date", lambda t, p: bool(DEADLINE_WORD.search(t)) and bool(DATED.search(t))),
