@@ -26,6 +26,24 @@
 문서 종류: course, topic, goal, project, person, habit, place, org, other (+ `me`).
 활동 종류: study, class, assignment, exam, project, coding, reading, experiment, exercise, chore, errand, social, work, rest, health, other.
 
+### 사실 종류 (`facts.kind`, 스키마 3)
+
+사실마다 무엇을 기록했는지 종류를 하나 붙일 수 있습니다. 플러그인 코드는 단어(정규식) 대신 이 종류로 사실을 고릅니다(약점 → `mistake`, 점수 → `score`, 시험 시간 → `exam` …). 비어 있으면(`null`, 종류가 생기기 전 사실) 예전 단어 규칙을 그대로 씁니다.
+
+| 종류 | 뜻 |
+|---|---|
+| `score` | 시험·퀴즈·과제 결과 (47/50 (94%)) |
+| `mistake` | 잃은 점수, 실수, 약점 |
+| `exam` | 시험 날짜·시간·장소 |
+| `deadline` | 마감일 |
+| `grading` | 배점, 비중, 감점 규칙 |
+| `resource` | 교재, 노트, 연습문제 목록 |
+| `habit` / `preference` / `other` | 습관, 선호·피드백, 그 밖 |
+
+- `POST /facts`에 `kind`(선택). 틀린 값은 400.
+- `POST /facts/:id`에 `kind`만 보내면 같은 사실의 종류만 바꿉니다(`retype`으로 기록). 글을 바꿀 때 `kind`를 안 주면 예전 종류를 이어받고, `kind: null`이면 비웁니다.
+- 기존 사실에 종류 붙이기: `services/hermes-integration/scripts/backfill_fact_kinds.py` (LLM 없이 단어 규칙, 기본은 dry-run).
+
 ## 검색
 
 - **키워드**: SQLite FTS5. 단어 앞부분 검색이라 "CSC263은", "헬스를"처럼 조사가 붙어도 찾습니다(질문 쪽 조사도 떼어 냅니다).
@@ -50,7 +68,8 @@ Hermes의 메모리 제공자(`memory.provider: personal-ai-knowledge`, `data/he
 | `GET /status` | 개수, 벡터 수, 의미 검색 모델 |
 | `POST /raw`, `POST /raw/document`, `GET /raw`, `GET /raw/:id` | 원본 저장·목록·읽기 (긴 원본은 8천 자씩) |
 | `GET /pages`, `POST /pages`, `GET /page?ref=` | 문서 목록·만들기/고치기·보기 |
-| `POST /facts`, `POST /facts/:id` | 사실 추가, 고치기(옛 사실 보존)/빼기 |
+| `POST /facts`, `POST /facts/:id` | 사실 추가, 고치기(옛 사실 보존)/빼기, 종류(`kind`) 붙이기 |
+| `GET /facts?kind=&type=&page=&limit=&offset=` | 여러 문서의 사실 목록 (`kind=none`: 종류 없는 사실, 보관된 문서 제외, 최대 500개씩). broker에는 열려 있지 않음 |
 | `POST /links` | 문서 연결/해제 |
 | `POST /activities`, `POST /activities/:id`, `GET /timeline` | 활동 기록 |
 | `GET /profile`, `GET /search`, `GET /recall`, `GET /graph`, `GET /changes` | 프로필, 검색, 자동 회상, 그래프(대시보드용), 변경 기록 |
@@ -93,7 +112,7 @@ node services\knowledge\scripts\kb.mjs help
 
 - 가져오기(`services/knowledge-importer`): 파일마다 해시 → 이미 있으면 건너뜀(다시 돌려도 이어서 진행) → 원본을 blob 폴더에 복사 → 텍스트 추출(PDF, DOCX, PPTX 슬라이드·노트, XLSX, ipynb, HTML, 코드·텍스트) → 등록. zip은 안의 파일을 하나씩. 이미지는 OCR, 영상·음성은 받아쓰기 대기(`pending`)로 원본만 보관.
 - ChatGPT/Claude 내보내기(`conversations.json`): 대화 하나 = 원본 1건(`chatgpt-conversation`, `claude-conversation`), Claude 프로젝트 문서도 1건씩. 내보내기 파일 자체도 원본으로 보관. 메모리 항목은 바로 사실로 넣지 않고 Claude Code가 확인해서 넣습니다.
-- `kb.mjs`: `search`, `page`, `pages`, `timeline`, `raw-list`, `raw`, `page-save`, `fact-add`, `fact-change`, `link`, `activity-add`, `activity-change`, `note`, `purge`(`--yes` 필요), `changes`. 본문은 `--json` 또는 `--file`(배열이면 항목마다 한 번).
+- `kb.mjs`: `search`, `page`, `pages`, `facts`, `timeline`, `raw-list`, `raw`, `page-save`, `fact-add`, `fact-change`, `link`, `activity-add`, `activity-change`, `note`, `purge`(`--yes` 필요), `changes`. 본문은 `--json` 또는 `--file`(배열이면 항목마다 한 번).
 - 끝나면 `compose.knowledge-operator.yaml`을 빼고 `up -d --no-deps knowledge`로 닫습니다.
 
 ## 아직 없는 것 (다음 단계)

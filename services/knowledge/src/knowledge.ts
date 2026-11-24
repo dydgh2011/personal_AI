@@ -28,6 +28,21 @@ export const ACTIVITY_KINDS = [
   'study', 'class', 'assignment', 'exam', 'project', 'coding', 'reading', 'experiment', 'exercise',
   'chore', 'errand', 'social', 'work', 'rest', 'health', 'other',
 ] as const;
+/**
+ * What a fact records, so code picks facts by kind instead of matching words. Optional: null = untyped
+ * (facts stored before kinds existed, or when nothing fits); readers fall back to their old rules for those.
+ *   score       a test/quiz/assignment result (47/50 (94%), Term Test 2 11.5/25)
+ *   mistake     a lost point, mistake or weak point (Test 1 5(c) 근거가 틀려 0점)
+ *   exam        an exam's date, time or place (기말 2026-12-16 09:00–12:00, RA Gym)
+ *   deadline    a due date (A2 마감 2026-11-28)
+ *   grading     grading rules and weights (배점, 비중, 늦으면 10% 감점)
+ *   resource    where to study or practise (textbook, notes, exercise lists)
+ *   habit       a routine the owner keeps
+ *   preference  how the owner wants things done (likes, feedback)
+ *   other       anything else
+ */
+export const FACT_KINDS = ['score', 'mistake', 'exam', 'deadline', 'grading', 'resource', 'habit', 'preference', 'other'] as const;
+export type FactKind = (typeof FACT_KINDS)[number];
 const RAW_SOURCES = ['chat', 'note', 'import', 'system', 'school'] as const;
 const SEARCH_KINDS = ['page', 'fact', 'activity', 'raw'] as const;
 type SearchKind = (typeof SEARCH_KINDS)[number];
@@ -60,6 +75,7 @@ interface FactRow {
   id: string;
   page_id: string;
   text: string;
+  kind: FactKind | null;
   observed_on: string | null;
   source_raw_id: string | null;
   source_note: string | null;
@@ -148,6 +164,13 @@ function str(body: Record<string, unknown>, key: string, max: number, required =
 function only(body: Record<string, unknown>, allowed: string[]) {
   const extra = Object.keys(body).filter((k) => !allowed.includes(k));
   if (extra.length) throw bad(`Unexpected fields: ${extra.join(', ')} (allowed: ${allowed.join(', ')})`);
+}
+
+/** A fact kind: undefined = not given, null = untyped (clears it on a change). */
+function factKind(value: unknown): FactKind | null | undefined {
+  if (value === undefined) return undefined;
+  if (value === null || value === '') return null;
+  return oneOf(value, 'kind', FACT_KINDS);
 }
 
 function oneOf<T extends string>(value: unknown, key: string, allowed: readonly T[]): T {
@@ -709,8 +732,8 @@ export class Knowledge {
   getPage(ref: string) {
     const p = this.page(ref);
     const facts = this.db
-      .prepare("SELECT id, text, observed_on, source_raw_id, source_note, created_at FROM facts WHERE page_id = ? AND status = 'active' ORDER BY coalesce(observed_on, substr(created_at, 1, 10)), created_at")
-      .all(p.id) as Array<{ id: string; text: string; observed_on: string | null; source_raw_id: string | null; source_note: string | null; created_at: string }>;
+      .prepare("SELECT id, text, kind, observed_on, source_raw_id, source_note, created_at FROM facts WHERE page_id = ? AND status = 'active' ORDER BY coalesce(observed_on, substr(created_at, 1, 10)), created_at")
+      .all(p.id) as Array<{ id: string; text: string; kind: FactKind | null; observed_on: string | null; source_raw_id: string | null; source_note: string | null; created_at: string }>;
     const out = this.db
       .prepare('SELECT l.relation, l.note, p.slug, p.title, p.type FROM links l JOIN pages p ON p.id = l.to_page WHERE l.from_page = ? AND p.archived = 0')
       .all(p.id) as Array<{ relation: string; note: string | null; slug: string; title: string; type: string }>;
@@ -725,7 +748,7 @@ export class Knowledge {
     const activityCount = (this.db.prepare("SELECT count(*) AS n FROM activity_pages ap JOIN activities a ON a.id = ap.activity_id WHERE ap.page_id = ? AND a.status = 'active'").get(p.id) as { n: number }).n;
     return {
       page: this.pageView(p.id),
-      facts: facts.map((f) => ({ id: f.id, text: f.text, observedOn: f.observed_on, source: f.source_raw_id ? { rawId: f.source_raw_id } : f.source_note ?? null })),
+      facts: facts.map((f) => ({ id: f.id, text: f.text, kind: f.kind, observedOn: f.observed_on, source: f.source_raw_id ? { rawId: f.source_raw_id } : f.source_note ?? null })),
       links: out.map((l) => ({ relation: l.relation, to: { slug: l.slug, title: l.title, type: l.type }, note: l.note })),
       linkedFrom: incoming.map((l) => ({ relation: l.relation, from: { slug: l.slug, title: l.title, type: l.type }, note: l.note })),
       recentActivities: activities.map((a) => this.activityView(a)),
@@ -745,6 +768,47 @@ export class Knowledge {
     return rows.map((r) => ({ slug: r.slug, title: r.title, type: r.type, summary: clip(r.summary, 140), facts: r.facts }));
   }
 
+  /**
+   * Active facts across pages, oldest first: by kind (or kind=none for untyped ones), page and page type.
+   * For the kind backfill and the graph view; a page's own facts come with getPage.
+   */
+  listFacts(query: URLSearchParams) {
+    const kind = query.get('kind');
+    if (kind && kind !== 'none') oneOf(kind, 'kind', FACT_KINDS);
+    const type = query.get('type');
+    if (type) oneOf(type, 'type', PAGE_TYPES);
+    const pageRef = query.get('page');
+    const page = pageRef ? this.page(pageRef) : null;
+    const limit = query.get('limit') === null ? 100 : Number(query.get('limit'));
+    if (!(Number.isInteger(limit) && limit >= 1 && limit <= 500)) throw bad('limit must be 1-500');
+    const offset = query.get('offset') === null ? 0 : Number(query.get('offset'));
+    if (!(Number.isInteger(offset) && offset >= 0)) throw bad('offset must be 0 or more');
+    const where = ["f.status = 'active'", 'p.archived = 0'];
+    const args: string[] = [];
+    if (kind === 'none') where.push('f.kind IS NULL');
+    else if (kind) {
+      where.push('f.kind = ?');
+      args.push(kind);
+    }
+    if (type) {
+      where.push('p.type = ?');
+      args.push(type);
+    }
+    if (page) {
+      where.push('f.page_id = ?');
+      args.push(page.id);
+    }
+    const from = `FROM facts f JOIN pages p ON p.id = f.page_id WHERE ${where.join(' AND ')}`;
+    const total = (this.db.prepare(`SELECT count(*) AS n ${from}`).get(...args) as { n: number }).n;
+    const rows = this.db
+      .prepare(`SELECT f.id, f.text, f.kind, f.observed_on, p.slug, p.title, p.type ${from} ORDER BY f.created_at, f.id LIMIT ${limit} OFFSET ${offset}`)
+      .all(...args) as Array<{ id: string; text: string; kind: FactKind | null; observed_on: string | null; slug: string; title: string; type: string }>;
+    return {
+      facts: rows.map((r) => ({ id: r.id, text: r.text, kind: r.kind, observedOn: r.observed_on, page: { slug: r.slug, title: r.title, type: r.type } })),
+      total,
+    };
+  }
+
   private rawRef(value: unknown): string | null {
     if (value === undefined || value === null || value === '') return null;
     if (typeof value !== 'string' || !this.db.prepare('SELECT 1 FROM raw_items WHERE id = ?').get(value)) throw bad('sourceRawId must be the id of a stored raw item');
@@ -752,30 +816,37 @@ export class Knowledge {
   }
 
   addFact(body: Record<string, unknown>, actor: Actor) {
-    only(body, ['page', 'text', 'observedOn', 'sourceRawId', 'sourceNote']);
+    only(body, ['page', 'text', 'kind', 'observedOn', 'sourceRawId', 'sourceNote']);
     const p = this.page(str(body, 'page', 200, true)!);
     const text = str(body, 'text', 1000, true)!;
+    const kind = factKind(body.kind) ?? null;
     const observedOn = dateStr(body.observedOn, 'observedOn') ?? this.localDate();
     const sourceRawId = this.rawRef(body.sourceRawId);
     const sourceNote = str(body, 'sourceNote', 200) ?? (actor === 'hermes' ? 'owner said in chat' : null);
-    const same = this.db.prepare("SELECT id FROM facts WHERE page_id = ? AND status = 'active' AND lower(text) = lower(?)").get(p.id, text) as { id: string } | undefined;
-    if (same) return { id: same.id, duplicate: true, page: p.title };
+    const same = this.db.prepare("SELECT id, kind FROM facts WHERE page_id = ? AND status = 'active' AND lower(text) = lower(?)").get(p.id, text) as
+      | { id: string; kind: FactKind | null }
+      | undefined;
+    if (same) return { id: same.id, duplicate: true, page: p.title, kind: same.kind };
     const id = randomUUID();
     const ts = this.iso();
     transaction(this.db, () => {
       this.db
-        .prepare('INSERT INTO facts (id, page_id, text, observed_on, source_raw_id, source_note, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(id, p.id, text, observedOn, sourceRawId, sourceNote, 'active', actor, ts, ts);
+        .prepare('INSERT INTO facts (id, page_id, text, kind, observed_on, source_raw_id, source_note, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(id, p.id, text, kind, observedOn, sourceRawId, sourceNote, 'active', actor, ts, ts);
       this.db.prepare('UPDATE pages SET updated_at = ? WHERE id = ?').run(ts, p.id);
       this.indexFact(id);
-      this.log(actor, 'add', 'fact', id, { page: p.slug, text, observedOn, sourceRawId, sourceNote });
+      this.log(actor, 'add', 'fact', id, { page: p.slug, text, kind, observedOn, sourceRawId, sourceNote });
     });
-    return { id, duplicate: false, page: p.title };
+    return { id, duplicate: false, page: p.title, kind };
   }
 
-  /** Replaces a fact (the old one stays as superseded, so the history is kept) or removes it. */
+  /**
+   * Replaces a fact (the old one stays as superseded, so the history is kept) or removes it.
+   * Only a kind (no text): the kind is set in place (same fact, logged), because it describes the fact
+   * rather than changing what it says. A new text keeps the old kind unless a kind is given.
+   */
   changeFact(id: string, body: Record<string, unknown>, actor: Actor) {
-    only(body, ['text', 'observedOn', 'remove', 'reason']);
+    only(body, ['text', 'kind', 'observedOn', 'remove', 'reason']);
     const f = this.db.prepare('SELECT * FROM facts WHERE id = ?').get(id) as unknown as FactRow | undefined;
     if (!f || f.status !== 'active') throw notFound('No active fact with this id');
     const reason = str(body, 'reason', 300);
@@ -788,19 +859,29 @@ export class Knowledge {
       });
       return { removed: true };
     }
+    const kind = factKind(body.kind);
+    if (kind !== undefined && body.text === undefined && body.observedOn === undefined) {
+      if (kind === f.kind) return { id, kind, retyped: false };
+      transaction(this.db, () => {
+        this.db.prepare('UPDATE facts SET kind = ?, updated_at = ? WHERE id = ?').run(kind, ts, id);
+        this.log(actor, 'retype', 'fact', id, { before: f.kind, after: kind, reason });
+      });
+      return { id, kind, retyped: true };
+    }
     const text = str(body, 'text', 1000, true)!;
     const observedOn = dateStr(body.observedOn, 'observedOn') ?? this.localDate();
+    const newKind = kind === undefined ? f.kind : kind;
     const newId = randomUUID();
     transaction(this.db, () => {
       this.db
-        .prepare('INSERT INTO facts (id, page_id, text, observed_on, source_raw_id, source_note, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .run(newId, f.page_id, text, observedOn, null, reason ?? (actor === 'hermes' ? 'owner said in chat' : null), 'active', actor, ts, ts);
+        .prepare('INSERT INTO facts (id, page_id, text, kind, observed_on, source_raw_id, source_note, status, created_by, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .run(newId, f.page_id, text, newKind, observedOn, null, reason ?? (actor === 'hermes' ? 'owner said in chat' : null), 'active', actor, ts, ts);
       this.db.prepare("UPDATE facts SET status = 'superseded', superseded_by = ?, updated_at = ? WHERE id = ?").run(newId, ts, id);
       this.indexFact(id);
       this.indexFact(newId);
-      this.log(actor, 'supersede', 'fact', id, { before: f.text, after: text, newId, reason });
+      this.log(actor, 'supersede', 'fact', id, { before: f.text, after: text, ...(newKind !== f.kind ? { kindBefore: f.kind, kind: newKind } : {}), newId, reason });
     });
-    return { id: newId, replaced: id };
+    return { id: newId, replaced: id, kind: newKind };
   }
 
   link(body: Record<string, unknown>, actor: Actor) {

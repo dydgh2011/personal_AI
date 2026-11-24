@@ -71,6 +71,7 @@ export function createApi(kb: Knowledge, clientKeys: Array<{ name: string; key: 
         return kb.getPage(ref);
       },
     },
+    { method: 'GET', pattern: /^\/facts$/, name: 'facts.list', handler: ({ query }) => kb.listFacts(query) },
     { method: 'POST', pattern: /^\/facts$/, name: 'facts.add', handler: ({ body, actor }) => kb.addFact(body, actor) },
     { method: 'POST', pattern: new RegExp(`^/facts/(${UUID})$`), name: 'facts.change', handler: ({ body, params, actor }) => kb.changeFact(params[0], body, actor) },
     { method: 'POST', pattern: /^\/links$/, name: 'links.save', handler: ({ body, actor }) => kb.link(body, actor) },

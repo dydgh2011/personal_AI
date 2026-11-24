@@ -20,6 +20,9 @@ PAGE_TYPES = ["course", "topic", "goal", "project", "person", "habit", "place", 
 ACTIVITY_KINDS = ["study", "class", "assignment", "exam", "project", "coding", "reading", "experiment", "exercise",
                   "chore", "errand", "social", "work", "rest", "health", "other"]
 SEARCH_KINDS = ["page", "fact", "activity", "raw"]
+# What a fact records (knowledge service FACT_KINDS). Code picks facts by kind; untyped facts (stored
+# before kinds existed) fall back to the word rules below (MISTAKE, course_brief.INTENTS).
+FACT_KINDS = ["score", "mistake", "exam", "deadline", "grading", "resource", "habit", "preference", "other"]
 ACTIONS = ("search", "page", "pages", "page_save", "fact_add", "fact_change", "link", "activity_add",
            "activity_change", "timeline", "profile", "note", "raw", "raw_list", "changes", "purge")
 LINKED_PAGES_MAX = 8      # page: linked pages scanned for facts that mention the page
@@ -107,8 +110,11 @@ SCHEMA: dict[str, Any] = {
         "search (q, kinds?): keyword + meaning search (use the store's words: Korean, course codes); use it before "
         "saying you don't know. page (page): one page with facts, links, recent activities, and linkedFacts (facts "
         "on linked pages that mention it). pages (type?): the index. page_save (page or title+type, summary?, "
-        "aliases?): create/update a page. fact_add (page, text, observed_on?): a new fact. fact_change (fact_id, "
-        "text | remove+reason): correct or drop a fact (history is kept). link (from_page, to_page, relation?). "
+        "aliases?): create/update a page. fact_add (page, text, fact_kind, observed_on?): a new fact; fact_kind says "
+        "what it records: score (test result), mistake (lost point, weak point), exam (exam date/time/place), "
+        "deadline, grading (weights, rules), resource (book, notes, exercises), habit, preference, other. "
+        "fact_change (fact_id, text and/or fact_kind | remove+reason): correct, re-kind or drop a fact (history is "
+        "kept). link (from_page, to_page, relation?). "
         "activity_add (title, kind, at?, minutes?, detail?, outcome?, feeling?, pages?): something the owner did. "
         "activity_change (activity_id, fields | remove). timeline (date_from?, date_to?, page?, kind?). "
         "profile: the owner page and index. note (text, title?): keep a free-form original. raw (raw_id, offset?) / "
@@ -132,6 +138,7 @@ SCHEMA: dict[str, Any] = {
             "aliases": {"type": "array", "items": {"type": "string"}, "description": "page_save: other names (e.g. course code)."},
             "archived": {"type": "boolean", "description": "page_save: true hides a page that no longer matters."},
             "text": {"type": "string", "description": "fact_add/fact_change: one short fact. note: the text to keep."},
+            "fact_kind": {"type": "string", "enum": FACT_KINDS, "description": "fact_add/fact_change: what the fact records."},
             "observed_on": {"type": "string", "description": "fact_add/fact_change: YYYY-MM-DD the fact was true (default today)."},
             "source_raw_id": {"type": "string", "description": "fact_add/activity_add: id of the raw original it came from."},
             "fact_id": {"type": "string"},
@@ -189,6 +196,27 @@ def _date(args: dict[str, Any], key: str) -> str | None:
     return value
 
 
+def _fact_kind(args: dict[str, Any]) -> str | None:
+    value = args.get("fact_kind")
+    if value in (None, ""):
+        return None
+    if value not in FACT_KINDS:
+        raise _usage(f"fact_kind must be one of {', '.join(FACT_KINDS)}")
+    return value
+
+
+def fact_is(fact: dict[str, Any], kinds: tuple[str, ...], fallback=None) -> bool:
+    """Kind first: a typed fact counts only when its kind is one of kinds. An untyped fact (no kind yet)
+    falls back to the old word rule: fallback is a compiled pattern or a function of the text."""
+    kind = fact.get("kind")
+    if kind:
+        return kind in kinds
+    if fallback is None:
+        return False
+    text = str(fact.get("text") or "")
+    return bool(fallback.search(text)) if hasattr(fallback, "search") else bool(fallback(text))
+
+
 def _pick(args: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
     return {api: args[key] for key, api in mapping.items() if key in args and args[key] is not None}
 
@@ -215,7 +243,8 @@ COURSE_NOTE = ("Answering about this course: keep the specifics written here ins
                "records a lost point or a mistake: for weak points, first give each test's total score and percent as context, then cover each of them with its own detail (which "
                "question, what exactly went wrong, what was miscalculated); a linked topic is weak only if a fact says "
                "so. Before replying, check that every number in the facts you used (total score and percent, per-question points, per-chapter exercise counts) is in your reply. Tell the owner in plain words: never name fields or tools (linkedFacts, recordedMistakes, page, ids).")
-# A fact that records a lost point or a mistake (Korean store text): "계산 실수", "정당화 실패", "0/2.5", "0점", "잘못" ...
+# Untyped facts only (typed ones go by kind == "mistake"): a fact that records a lost point or a mistake
+# (Korean store text): "계산 실수", "정당화 실패", "0/2.5", "0점", "잘못" ...
 # Not "감점"/"0점" alone: rules such as "늦으면 10% 감점" or "근거 없는 T/F는 0점" are not the owner's mistakes.
 MISTAKE = re.compile(r"실수|실패|못\s?함|못했|약함|약점|잘못|틀림|틀렸|근거가 틀|누락|빠짐|(?<![\d.])0/\d")
 MISTAKES_MAX = 12
@@ -228,9 +257,9 @@ def _mistakes(result: dict[str, Any]) -> list[dict[str, Any]]:
     for title, facts in groups:
         for f in facts:
             text = str(f.get("text") or "")
-            if MISTAKE.search(text) and text not in seen:
+            if fact_is(f, ("mistake",), MISTAKE) and text not in seen:
                 seen.add(text)
-                out.append({"page": title, "text": text})
+                out.append({"page": title, "text": text, **({"kind": f["kind"]} if f.get("kind") else {})})
     return out[:MISTAKES_MAX]
 
 
@@ -264,7 +293,8 @@ def _linked_facts(client: Client, result: dict[str, Any]) -> list[dict[str, Any]
             linked = client.call("GET", "/page", {"ref": slug})
         except KnowledgeError:
             continue
-        facts = [{"id": f.get("id"), "text": f.get("text"), "observedOn": f.get("observedOn")}
+        facts = [{"id": f.get("id"), "text": f.get("text"), "observedOn": f.get("observedOn"),
+                  **({"kind": f["kind"]} if f.get("kind") else {})}
                  for f in linked.get("facts") or [] if any(n in _squash(str(f.get("text") or "")) for n in names)]
         facts = facts[:max(0, LINKED_FACTS_MAX - total)]
         if facts:
@@ -321,17 +351,24 @@ def run(client: Client, args: dict[str, Any]) -> dict[str, Any]:
     if action == "fact_add":
         _need(args, "page", "text")
         body = {"page": args["page"], "text": redact(str(args["text"]))}
+        if _fact_kind(args):
+            body["kind"] = args["fact_kind"]
         body.update(_pick(args, {"source_raw_id": "sourceRawId"}))
         if _date(args, "observed_on"):
             body["observedOn"] = args["observed_on"]
         return {"ok": True, **client.call("POST", "/facts", body=body)}
     if action == "fact_change":
         fact_id = _uuid(args, "fact_id")
+        kind = _fact_kind(args)
         if args.get("remove") is True:
             body: dict[str, Any] = {"remove": True}
+        elif kind and args.get("text") in (None, ""):
+            body = {"kind": kind}   # only the kind: set in place on the same fact
         else:
             _need(args, "text")
             body = {"text": redact(str(args["text"]))}
+            if kind:
+                body["kind"] = kind
             if _date(args, "observed_on"):
                 body["observedOn"] = args["observed_on"]
         if args.get("reason"):
