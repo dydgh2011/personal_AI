@@ -169,6 +169,7 @@ powershell -ExecutionPolicy Bypass -File scripts\stack.ps1 backup knowledge     
 | 합친 뒤 Dashboard 테스트 실패 | 세션 저장(관리자 비밀번호 해시로 키를 만듦)과 세션을 만드는 새 테스트가 만남 | 테스트마다 임시 해시·세션 파일 경로를 준다 |
 | Kelly 첫 일정 질문에 플래너 항목 누락 | 플래너 호출 3개를 차례로 불러 3초 제한 초과, `with` 블록이 늦은 호출을 기다림 | 동시 호출, 제한 넘으면 기다리지 않음 |
 | 사실 종류 미리보기에서 배점이 시험으로 분류 | 배점 문장 안의 날짜·분수가 먼저 걸림 | 규칙 순서(배점 머리말 우선)와 미리보기의 "빠지는 사실" 확인 |
+| 게시 테스트가 "artifact missing"으로 중단, Authorize 버튼 없음 | worker 결과물 볼륨(`publisher-artifacts-claude`)이 root 소유라 bundle 쓰기 실패(`EPERM chmod /artifacts`) | 볼륨 루트를 uid 1000으로(2026-11-24 수정), `export-artifact`로 다시 만듦 |
 | git merge가 `index.lock`으로 실패 | 앱의 백그라운드 git이 잠깐 잠금 | 잠시 뒤 다시 시도 |
 
 ---

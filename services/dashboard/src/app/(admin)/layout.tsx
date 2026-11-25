@@ -1,4 +1,4 @@
-import { NavLinks, ThemeToggle } from '@/components/client';
+import { NavLinks, ScrollKeeper, ThemeToggle } from '@/components/client';
 import { CsrfField } from '@/components/ui';
 import { requireSession } from '@/lib/server';
 import { MODULES } from '@/modules/registry';
@@ -25,6 +25,7 @@ export default async function AdminLayout({ children }: { children: React.ReactN
         <div className="who">{session.user}</div>
       </aside>
       <main>{children}</main>
+      <ScrollKeeper />
     </div>
   );
 }
