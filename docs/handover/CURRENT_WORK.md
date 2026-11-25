@@ -9,7 +9,7 @@
 - **비어 있음** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
 
 ## 지금 진행 중 (맡은 범위는 `docs/handover/CODEX_PLAN.md` 1절)
-- **C · Claude Code**: 1부 완료·배포(2026-11-24): 커밋 작성자 = 주인, AI 흔적 차단, GitHub App 게시 경로(아직 꺼짐). 남은 것: 주인의 GitHub App·토큰 설정 → App 연결과 실제 게시 시험, CI 결과 읽기(10), 비공개 저장소 확인(14). 브랜치 `claude/publish`, `D:personal_ai-wtclaude-publish`.
+- **C · Claude Code**: 1부 완료·배포(2026-11-24): 커밋 작성자 = 주인, AI 흔적 차단, GitHub App 게시 경로(아직 꺼짐). 남은 것: 주인의 GitHub App·토큰 설정 → App 연결과 실제 게시 시험, CI 결과 읽기(10), 비공개 저장소 확인(14). 브랜치 `claude/publish`, `D:\personal_ai-wt\claude-publish`.
 - **A · Codex**: Learning L3 + 플래너 연결 — 브랜치 `codex/learning-l3`, `D:\personal_ai-wt\codex-learning-l3`. (시작 전)
 - **B · Codex**: Kelly 학습 도구 + Hermes 보안 마무리 + 서비스 지도 파서 — 브랜치 `codex/kelly-learning`, `D:\personal_ai-wt\codex-kelly-learning`. (시작 전)
 - 각자 자기 줄만 고친다.
