@@ -686,5 +686,59 @@ class HttpClientTest(unittest.TestCase):
             os.unlink(f.name)
 
 
+class ReviewAndMediaTest(unittest.TestCase):
+    def test_review_reads_only_a_known_summary_from_existing_routes(self):
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, method, path, query=None, **kwargs):
+                self.calls.append((method, path, query))
+                if path == "/raw":
+                    return {"items": [
+                        {"kind": "daily-review", "id": "00000000-0000-4000-8000-000000000001"},
+                        {"kind": "weekly-review", "id": "00000000-0000-4000-8000-000000000002"},
+                    ]}
+                return {"text": "주간 활동"}
+
+        client = Client()
+        result = kc.run_tool({"action": "review", "review_period": "weekly", "date_to": "2026-11-22"}, client=client)
+        self.assertEqual(result["review"]["text"], "주간 활동")
+        self.assertEqual(client.calls[0], ("GET", "/raw", {"source": "system", "from": "2026-11-22", "to": "2026-11-22", "limit": 30}))
+        self.assertTrue(client.calls[1][1].endswith("0002"))
+
+    def test_media_submit_accepts_plain_names_and_refuses_to_guess_between_files(self):
+        class Client:
+            def __init__(self):
+                self.calls = []
+
+            def call(self, method, path, **kwargs):
+                self.calls.append((method, path, kwargs["body"]))
+                return {"id": "fixture"}
+
+        client = Client()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            images = root / "images"
+            images.mkdir()
+            (images / "my slide.png").write_bytes(b"fixture")
+            env = {"PERSONAL_AI_KNOWLEDGE_CACHE_ROOT": directory}
+            self.assertTrue(kc.run_tool({"action": "media_submit", "media_cache": "images"}, env, client)["ok"])
+            self.assertEqual(client.calls[-1], ("POST", "/raw/document", {"file": "my slide.png", "cache": "images", "text": ""}))
+            (images / "other.png").write_bytes(b"fixture")
+            ambiguous = kc.run_tool({"action": "media_submit", "media_cache": "images"}, env, client)
+            self.assertFalse(ambiguous["ok"])
+            self.assertEqual(ambiguous["error"]["code"], "select_attachment")
+            escaped = kc.run_tool({"action": "media_submit", "media_cache": "images", "media_file": "../test.png"}, env, client)
+            self.assertFalse(escaped["ok"])
+            self.assertEqual(len(client.calls), 1)
+
+    def test_attachment_paths_support_native_cache_and_spaces(self):
+        owner = "[The user sent a video attachment: 'Lecture 2.mp4'. It is saved at: /opt/data/cache/documents/Lecture 2.mp4.]\\n" \
+                "[User sent an image: /opt/data/cache/images/img_abc.png]\\n" \
+                "[User sent audio: /opt/data/cache/audio/recording.ogg]"
+        matched = set(plugin.ATTACHMENT_PATH.findall(owner.replace("\\n", "\n")))
+        self.assertEqual(matched, {("documents", "Lecture 2.mp4"), ("images", "img_abc.png"), ("audio", "recording.ogg")})
+
 if __name__ == "__main__":
     unittest.main()

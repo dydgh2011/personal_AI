@@ -145,16 +145,23 @@ docker compose @F --profile tools run --rm knowledge-importer scan courses\STA25
 node services\knowledge\scripts\kb.mjs help
 ```
 
-- 가져오기(`services/knowledge-importer`): 파일마다 해시 → 이미 있으면 건너뜀(다시 돌려도 이어서 진행) → 원본을 blob 폴더에 복사 → 텍스트 추출(PDF, DOCX, PPTX 슬라이드·노트, XLSX, ipynb, HTML, 코드·텍스트) → 등록. zip은 안의 파일을 하나씩. 이미지는 OCR, 영상·음성은 받아쓰기 대기(`pending`)로 원본만 보관.
+- 가져오기(`services/knowledge-importer`): 파일마다 해시 → 이미 있으면 건너뜀(다시 돌려도 이어서 진행) → 원본을 blob 폴더에 복사 → 텍스트 추출(PDF, DOCX, PPTX 슬라이드·노트, XLSX, ipynb, HTML, 코드·텍스트) → 등록. zip은 안의 파일을 하나씩. 이미지·음성·영상은 로컬 처리 대기(`pending`)로 원본만 보관.
 - ChatGPT/Claude 내보내기(`conversations.json`): 대화 하나 = 원본 1건(`chatgpt-conversation`, `claude-conversation`), Claude 프로젝트 문서도 1건씩. 내보내기 파일 자체도 원본으로 보관. 메모리 항목은 바로 사실로 넣지 않고 Claude Code가 확인해서 넣습니다.
 - `kb.mjs`: `search`, `page`, `pages`, `facts`, `timeline`, `raw-list`, `raw`, `page-save`, `fact-add`, `fact-change`, `link`, `activity-add`, `activity-change`, `note`, `purge`(`--yes` 필요), `changes`. 본문은 `--json` 또는 `--file`(배열이면 항목마다 한 번).
 - 끝나면 `compose.knowledge-operator.yaml`을 빼고 `up -d --no-deps knowledge`로 닫습니다.
 
-## 아직 없는 것 (다음 단계)
+## 매일 밤 지식 정리와 활동 기록
 
-- 매일 밤 정리(그날 원본 → 활동·사실 추출 → 일간/주간 요약): 지금은 Kelly가 대화 중에 바로 저장합니다.
-- 이미지 OCR, 강의 영상·음성 받아쓰기(로컬 whisper), 판만 다른 파일 묶기.
-- 숙련도 모델(`docs/knowledge/LEARNING_MODEL.md`), 대시보드 그래프 페이지 화면(이 서비스 쪽 API는 있음), 학교 서비스 수집.
+Toronto 현지 시각 매일 00:15에 지난 날을 정리한다. 일요일이 지난 뒤에는 월~일 주간 보고서도 만든다. 서비스가 멈춰 있던 경우 최근 7일 안의 빠진 날짜를 이어서 정리한다. 최초 실행은 마지막으로 마감된 하루부터 시작한다. `KNOWLEDGE_NIGHTLY_AT`는 `HH:MM` 또는 `off`를 받는다.
+
+- Kelly가 이미 저장한 활동을 사용한다. 추가로 주인 대화와 메모에서 `오늘 CSC207 45분 공부했어`, `활동: 어제 30분 운동`처럼 실제로 했다고 보고한 작업을 기록한다. 시간은 보고한 만큼만 넣고, 관련 과목 문서가 있으면 연결한다. 가까운 시점에 Kelly가 같은 활동을 이미 기록했다면 중복을 줄인다.
+- `사실 [CSC207]: 시험은 강의실에서 본다`처럼 명시한 사실을 기존 문서에 연결한다. 주제 생략 시 `me`에 기록한다. 생성한 활동과 사실에는 원본 ID가 남는다.
+- Kelly에게 어제 지식 정리나 지난주 활동 요약을 요청할 수 있다. `personal_ai_knowledge`의 `review`가 보고서를 연다. 상세 내용은 현재 활동·사실에서 계산하므로 이후에 수정하거나 숨긴 내용도 반영된다.
+- 이미지와 강의 음성·영상은 별도 로컬 처리 서비스에서 OCR 또는 받아쓰기를 하고 같은 원본과 연결한다. [형식, 모델 설치, 검증](../knowledge-media/README.md)
+
+## 이후 후보
+
+- 판만 다른 파일 묶기와 숙련도 모델(`docs/knowledge/LEARNING_MODEL.md`).
 
 ## 테스트
 

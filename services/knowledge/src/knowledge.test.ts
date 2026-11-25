@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import type { AddressInfo } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -33,7 +33,7 @@ function fakeEmbedder(): Embedder & { calls: number } {
   };
 }
 
-function setup(options: { embedder?: Embedder | null; documentsDir?: string | null } = {}) {
+function setup(options: { embedder?: Embedder | null; documentsDir?: string | null; now?: () => Date } = {}) {
   const dir = mkdtempSync(join(tmpdir(), 'kb-'));
   const db = openDatabase(join(dir, 'k.db'));
   let clock = new Date('2026-11-22T15:00:00Z');
@@ -42,7 +42,7 @@ function setup(options: { embedder?: Embedder | null; documentsDir?: string | nu
     blobDir: join(dir, 'blobs'),
     documentsDir: options.documentsDir === undefined ? null : options.documentsDir,
     embedder: options.embedder === undefined ? null : options.embedder,
-    now: () => clock,
+    now: options.now ?? (() => clock),
   });
   return { kb, db, dir, tick: (ms: number) => (clock = new Date(clock.getTime() + ms)) };
 }
@@ -124,14 +124,14 @@ describe('fact kinds', () => {
     old.close();
 
     const db = openDatabase(file);
-    assert.equal((db.prepare('SELECT version FROM schema_version').get() as { version: number }).version, 3);
+    assert.equal((db.prepare('SELECT version FROM schema_version').get() as { version: number }).version, 4);
     const kb = new Knowledge(db, { timeZone: 'America/Toronto', blobDir: join(dir, 'blobs'), documentsDir: null, embedder: null });
     assert.deepEqual(kb.getPage('MAT223').facts.map((f) => [f.text, f.kind]), [['Test 1: 47/50 (94%)', null]]);
     assert.equal(kb.listFacts(new URLSearchParams('kind=none')).total, 1);
     assert.deepEqual(kb.changeFact('f1', { kind: 'score' }, 'operator'), { id: 'f1', kind: 'score', retyped: true });
     db.close();
     const again = openDatabase(file);   // reopening runs no migration twice
-    assert.equal((again.prepare('SELECT version FROM schema_version').get() as { version: number }).version, 3);
+    assert.equal((again.prepare('SELECT version FROM schema_version').get() as { version: number }).version, 4);
     assert.equal((again.prepare('SELECT kind FROM facts WHERE id = ?').get('f1') as { kind: string }).kind, 'score');
     again.close();
   });
@@ -204,7 +204,7 @@ describe('raw originals', () => {
     assert.throws(() => kb.addRaw({ source: 'chat', kind: 'xx', text: 'y', externalId: 'bad id' }, 'hermes'), /externalId/);
   });
 
-  it('copies attached documents by hash from the attachment folder only', () => {
+  it('copies attached documents by hash from the attachment folder only', async () => {
     const docs = mkdtempSync(join(tmpdir(), 'kb-docs-'));
     mkdirSync(join(docs, 'native-inputs', 'aa'), { recursive: true });
     writeFileSync(join(docs, 'native-inputs', 'aa', 'doc_0123456789ab_MAT223.pdf'), '%PDF-1.4 fake');
@@ -212,23 +212,157 @@ describe('raw originals', () => {
     const outside = join(tmpdir(), `kb-outside-${process.pid}.txt`);
     writeFileSync(outside, 'secret');
     const { kb, dir } = setup({ documentsDir: docs });
-    const stored = kb.addDocument({ file: 'doc_0123456789ab_MAT223.pdf', text: 'Term Test 1: Oct 15 (20%)', contentType: 'application/pdf', pageCount: 14 }, 'hermes');
+    const stored = await kb.addDocument({ file: 'doc_0123456789ab_MAT223.pdf', text: 'Term Test 1: Oct 15 (20%)', contentType: 'application/pdf', pageCount: 14 }, 'hermes');
     assert.equal(stored.title, 'MAT223.pdf');
-    assert.equal(kb.addDocument({ file: 'doc_0123456789ab_MAT223.pdf', text: 'again' }, 'hermes').duplicate, true);
+    assert.equal((await kb.addDocument({ file: 'doc_0123456789ab_MAT223.pdf', text: 'again' }, 'hermes')).duplicate, true);
     const raw = kb.getRaw(stored.id, new URLSearchParams());
     assert.equal(raw.storedOriginal, true);
     assert.equal(raw.meta.pageCount, 14);
     for (const name of ['../k.db', '..', join(dir, 'k.db'), 'nope.pdf']) {
-      assert.throws(() => kb.addDocument({ file: name, text: '' }, 'hermes'), /plain file name|No attached file/);
+      await assert.rejects(() => kb.addDocument({ file: name, text: '' }, 'hermes'), /plain file name|No attached file/);
     }
     try {
       symlinkSync(outside, join(docs, 'doc_0123456789ab_link.txt'));
-      assert.throws(() => kb.addDocument({ file: 'doc_0123456789ab_link.txt', text: '' }, 'hermes'), /No attached file/);
+      await assert.rejects(() => kb.addDocument({ file: 'doc_0123456789ab_link.txt', text: '' }, 'hermes'), /No attached file/);
     } catch (error) {
       if (!['EPERM', 'EACCES'].includes((error as NodeJS.ErrnoException).code ?? '')) throw error;
     }
     rmSync(outside, { force: true });
-    assert.throws(() => setup().kb.addDocument({ file: 'a.pdf', text: '' }, 'hermes'), /not mounted/);
+    await assert.rejects(() => setup().kb.addDocument({ file: 'a.pdf', text: '' }, 'hermes'), /not mounted/);
+  });
+
+  it('keeps one original when identical attachments arrive concurrently with different names and extensions', async () => {
+    const docs = mkdtempSync(join(tmpdir(), 'kb-duplicate-media-'));
+    writeFileSync(join(docs, 'one.png'), 'same image content');
+    writeFileSync(join(docs, 'two.jpg'), 'same image content');
+    const { kb, dir } = setup({ documentsDir: docs });
+    const archived = await Promise.all(
+      ['one.png', 'two.jpg'].map((file) => kb.addDocument({ file, text: '' }, 'hermes')),
+    );
+    assert.equal(archived[0].id, archived[1].id);
+    assert.equal(archived.filter((entry) => !entry.duplicate).length, 1);
+    assert.equal(readdirSync(join(dir, 'blobs')).length, 1);
+  });
+});
+
+describe('nightly knowledge review', () => {
+  it('uses the closed Toronto day and keeps source-linked completed work and explicit facts once', () => {
+    let now = new Date('2026-11-25T05:16:00Z'); // 00:16 Toronto
+    const { kb, db } = setup({ now: () => now });
+    kb.savePage({ title: 'CSC207', type: 'course' }, 'hermes');
+    const raw = kb.addRaw({
+      source: 'chat', kind: 'discord-turn', occurredAt: '2026-11-25T04:59:00Z',
+      text: 'owner: 오늘 CSC207 45분 공부했어\n사실 [CSC207]: 시험은 강의실에서 본다\n내일 수업 들을 예정이야\n\nkelly: 오늘 60분 운동했어',
+    }, 'hermes');
+    kb.addRaw({
+      source: 'import', kind: 'text', occurredAt: '2026-11-25T04:00:00Z',
+      text: '활동: 운동 90분\n사실 [CSC207]: 다른 자료에서 본 문장',
+    }, 'operator');
+    kb.addRaw({
+      source: 'chat', kind: 'discord-turn', occurredAt: '2026-11-25T04:10:00Z',
+      text: "owner: [The user sent a text document: 'notes.txt'. The file is also saved at: /opt/data/cache/documents/notes.txt]\n활동: 45분 운동\n사실 [CSC207]: 첨부 파일 문장\n\nkelly: 파일을 읽었어요.",
+    }, 'hermes');
+    const result = kb.runNightlyReview('00:15');
+    assert.deepEqual(result, { days: 1, weeks: 1, activities: 1, facts: 1 });
+    const timeline = kb.timeline(new URLSearchParams({ from: '2026-11-24', to: '2026-11-24' }));
+    assert.equal(timeline.totalMinutes, 45);
+    assert.deepEqual(timeline.activities[0].pages, ['CSC207']);
+    assert.equal((db.prepare('SELECT source_raw_id FROM activities').get() as { source_raw_id: string }).source_raw_id, raw.id);
+    assert.equal(kb.getPage('CSC207').facts[0].text, '시험은 강의실에서 본다');
+    const summaries = kb.listRaw(new URLSearchParams({ source: 'system' }));
+    const daily = summaries.find((item) => item.kind === 'daily-review')!;
+    assert.equal(daily.date, '2026-11-24');
+    assert.match(kb.getRaw(daily.id, new URLSearchParams()).text, /활동 1건.*45분/);
+    assert.deepEqual(kb.runNightlyReview('00:15'), { days: 0, weeks: 0, activities: 0, facts: 0 });
+    kb.changeActivity(timeline.activities[0].id, { remove: true }, 'hermes');
+    assert.match(kb.getRaw(daily.id, new URLSearchParams()).text, /활동 0건/);
+    now = new Date('2026-11-26T05:14:59Z');
+    assert.equal(kb.runNightlyReview('00:15').days, 0);
+    now = new Date('2026-11-26T05:15:00Z');
+    assert.equal(kb.runNightlyReview('00:15').days, 1);
+  });
+
+  it('reuses a matching activity Kelly already recorded around the same report', () => {
+    let now = new Date('2026-11-25T00:00:00Z');
+    const { kb } = setup({ now: () => now });
+    kb.addActivity({ kind: 'exercise', title: '운동', minutes: 25 }, 'hermes');
+    kb.addRaw({ source: 'chat', kind: 'discord-turn', text: 'owner: 오늘 25분 운동했어\n\nkelly: 기록했어요.' }, 'hermes');
+    now = new Date('2026-11-25T05:16:00Z');
+    assert.equal(kb.runNightlyReview('00:15').activities, 0);
+    assert.equal(kb.timeline(new URLSearchParams()).activities.length, 1);
+    assert.throws(() => kb.addRaw({ source: 'system', kind: 'daily-review', text: '가짜 요약' }, 'hermes'), /nightly job/);
+  });
+});
+
+describe('local media extraction', () => {
+  it('holds audio while its model is missing and indexes derived OCR without modifying the original', async () => {
+    const docs = mkdtempSync(join(tmpdir(), 'kb-media-'));
+    const { kb, db } = setup({ documentsDir: docs });
+    const png = 'doc_0123456789ab_slide.png';
+    const wav = 'doc_0123456789ab_lecture.wav';
+    writeFileSync(join(docs, png), 'fixture image');
+    writeFileSync(join(docs, wav), 'fixture audio');
+    const image = await kb.addDocument({ file: png, text: '' }, 'hermes');
+    const audio = await kb.addDocument({ file: wav, text: '' }, 'hermes');
+    const job = kb.nextMediaJob(false)!;
+    assert.equal(job.id, image.id);
+    assert.deepEqual(kb.getRaw(audio.id, new URLSearchParams()).extraction, { method: 'transcription', status: 'waiting_model' });
+    kb.finishMediaJob(job, { status: 'complete', text: 'Quicksort lecture' });
+    assert.equal((db.prepare('SELECT text FROM raw_items WHERE id = ?').get(image.id) as { text: string }).text, '');
+    assert.equal(kb.getRaw(image.id, new URLSearchParams()).text, 'Quicksort lecture');
+    assert.equal((await kb.search('Quicksort', { kinds: ['raw'] }))[0].id, image.id);
+    assert.equal(kb.nextMediaJob(false), null);
+    assert.equal(kb.nextMediaJob(true)?.id, audio.id);
+    kb.purge({ target: 'raw', id: image.id, reason: 'remove fixture' }, 'operator');
+    assert.equal(db.prepare('SELECT * FROM media_extractions WHERE raw_id = ?').get(image.id), undefined);
+    assert.equal((await kb.search('Quicksort', { kinds: ['raw'] })).length, 0);
+  });
+
+  it('processes pending importer originals written with schema v3', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'kb-before-media-'));
+    const dbFile = join(dir, 'knowledge.db');
+    const blobDir = join(dir, 'blobs');
+    const before = openDatabase(dbFile, { upTo: 3 });
+    const options = { timeZone: 'America/Toronto', blobDir, documentsDir: null, embedder: null };
+    let storedId: string;
+    try {
+      const kb = new Knowledge(before, options);
+      const bytes = Buffer.from('fixture old image');
+      const sha = createHash('sha256').update(bytes).digest('hex');
+      const blob = sha + '.png';
+      writeFileSync(join(blobDir, blob), bytes);
+      storedId = (await kb.addRawFile({
+        sha256: sha, blob, size: bytes.length, title: 'An older page.png', kind: 'image',
+        text: '', meta: { extract: 'pending:ocr' },
+      }, 'operator')).id;
+    } finally {
+      before.close();
+    }
+    const after = openDatabase(dbFile);
+    try {
+      const migrated = new Knowledge(after, options);
+      assert.equal(migrated.nextMediaJob(false)?.id, storedId);
+      assert.equal(migrated.getRaw(storedId, new URLSearchParams()).storedOriginal, true);
+    } finally {
+      after.close();
+    }
+  });
+
+  it('defers transient extractor failures and keeps permanent failures out of the queue', async () => {
+    let now = new Date('2026-11-25T10:00:00Z');
+    const docs = mkdtempSync(join(tmpdir(), 'kb-media-'));
+    const { kb } = setup({ documentsDir: docs, now: () => now });
+    writeFileSync(join(docs, 'fake.mp4'), 'fixture video');
+    const video = await kb.addDocument({ file: 'fake.mp4', text: '' }, 'hermes');
+    const job = kb.nextMediaJob(true)!;
+    kb.finishMediaJob(job, { status: 'failed', code: 'timeout' });
+    assert.equal(kb.getRaw(video.id, new URLSearchParams()).extraction?.status, 'retrying');
+    assert.equal(kb.nextMediaJob(true), null);
+    now = new Date('2026-11-25T10:05:00Z');
+    assert.equal(kb.nextMediaJob(true)?.id, video.id);
+    kb.finishMediaJob(job, { status: 'failed', code: 'no_audio' });
+    assert.deepEqual(kb.getRaw(video.id, new URLSearchParams()).extraction, { method: 'transcription', status: 'failed', code: 'no_audio' });
+    assert.equal(kb.nextMediaJob(true), null);
   });
 });
 
@@ -347,7 +481,7 @@ describe('imports and permanent deletion', () => {
     assert.equal(kb.timeline(new URLSearchParams()).activities.length, 0);
     assert.throws(() => kb.purge({ target: 'page', page: 'me', reason: 'x' }, 'hermes'), /owner page/);
 
-    const doc = kb.addDocument({ file: 'doc_0123456789ab_private.txt', text: 'private notes' }, 'hermes');
+    const doc = await kb.addDocument({ file: 'doc_0123456789ab_private.txt', text: 'private notes' }, 'hermes');
     kb.savePage({ title: '메모', type: 'other' }, 'hermes');
     const fact = kb.addFact({ page: '메모', text: '메모가 있음', sourceRawId: doc.id }, 'hermes');
     const blobs = join(dir, 'blobs');
