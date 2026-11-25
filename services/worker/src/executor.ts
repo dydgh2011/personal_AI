@@ -3,6 +3,7 @@ import type { WorkerConfig } from './config.js';
 import { ControllerError, type ControllerClient, type RegistryProject, type Task } from './controller-client.js';
 import type { Logger } from './logger.js';
 import { runProcess, type RunResult } from './process-runner.js';
+import { buildProjectPrompt, extractCommitSubject } from './project-settings.js';
 import type { AgentOutcome, AgentRunner } from './runners/agent-runner.js';
 import type { WorkerState } from './state.js';
 import { WorkspaceError, type PreparedWorkspace, type Workspace, type WorkspaceSummary } from './workspace.js';
@@ -109,6 +110,9 @@ export class TaskExecutor {
           instruction: task.instruction,
           cwd: prepared.cwd,
           mode: prepared.mode,
+          projectPrompt: prepared.settings
+            ? buildProjectPrompt(prepared.settings, prepared.styleAnalysis ?? null, prepared.mode === 'write')
+            : '',
         });
         log('info', 'Agent started', { mode: prepared.mode, cwd: prepared.cwd, branch: prepared.branch });
         run = await runProcess(invocation.command, invocation.args, {
@@ -132,18 +136,30 @@ export class TaskExecutor {
       }
 
       const outcome = run ? this.deps.runner.interpret(run) : null;
-      const finalOutcome = this.decide(stopReason, run, outcome);
+      let finalOutcome = this.decide(stopReason, run, outcome);
+      // The agent's proposed subject is used only for a successful run of a project with a commit style.
+      const subject =
+        finalOutcome === 'completed' && outcome && prepared.settings && prepared.settings.commitStyle.mode !== 'off'
+          ? extractCommitSubject(outcome.summary)
+          : null;
 
       let summary: WorkspaceSummary | null = null;
       let workspaceError: string | null = null;
       try {
-        summary = await this.deps.workspace.finalize(prepared, commitMessage(config.workerId, task, finalOutcome));
+        summary = await this.deps.workspace.finalize(prepared, commitMessage(config.workerId, task, finalOutcome, subject));
       } catch (error) {
         workspaceError = (error as Error).message;
         log('error', 'Could not commit task changes', { error: workspaceError });
       }
 
-      const message = this.messageFor(finalOutcome, run, outcome);
+      let message = this.messageFor(finalOutcome, run, outcome);
+      if (summary?.blockedPaths?.length) {
+        log('warn', 'Agent changed forbidden paths; nothing committed', { paths: summary.blockedPaths.length });
+        if (finalOutcome === 'completed') finalOutcome = 'failed';
+        message =
+          `Nothing was committed: the agent changed paths this project forbids (${summary.blockedPaths.join(', ')}). ` +
+          `The changes stay uncommitted in the task worktree.\n\n${message}`;
+      }
       const report = this.report(task, finalOutcome, message, run, outcome, summary, workspaceError);
       return await this.deliver(task, finalOutcome, report);
     } catch (error) {
@@ -315,7 +331,13 @@ export class TaskExecutor {
   }
 }
 
-function commitMessage(workerId: string, task: Task, outcome: ExecutionOutcome): string {
+/**
+ * Without a subject: the fixed worker format. With one (project commit style, successful run): the
+ * agent's one-line subject, then the same task facts in the body. Either way the worker makes the
+ * commit as itself (POLICY B: author and committer stay the worker identity).
+ */
+function commitMessage(workerId: string, task: Task, outcome: ExecutionOutcome, subject: string | null = null): string {
+  if (subject) return `${subject}\n\n${workerId}: task ${task.id} (${outcome})\n\n${truncate(task.instruction, 2000)}\n`;
   return `${workerId}: task ${task.id} (${outcome})\n\n${truncate(task.instruction, 2000)}\n`;
 }
 

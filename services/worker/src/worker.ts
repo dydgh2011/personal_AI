@@ -138,7 +138,11 @@ export class Worker {
       workerId: config.workerId,
       attempt: 0,
       outcome: 'interrupted',
-      message: `The worker restarted while this task was running (started ${record.startedAt}). It was not retried.`,
+      message:
+        `The worker restarted while this task was running (started ${record.startedAt}). It was not retried.` +
+        (summary?.blockedPaths?.length
+          ? ` Nothing was committed: the agent changed paths this project forbids (${summary.blockedPaths.join(', ')}).`
+          : ''),
       exitCode: null,
       signal: null,
       durationMs: null,

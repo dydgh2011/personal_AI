@@ -1,0 +1,135 @@
+.layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 16px;
+  align-items: start;
+}
+
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.group {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  padding: 12px;
+  margin: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.group legend {
+  padding: 0 6px;
+  font-weight: 600;
+}
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.field textarea {
+  resize: vertical;
+  line-height: 1.45;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.pair {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.help {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 0;
+}
+
+.modes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.mode {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 2px 8px;
+  align-items: baseline;
+  cursor: pointer;
+}
+
+.mode input {
+  width: auto;
+}
+
+.mode small {
+  grid-column: 2;
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.side {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.side h2 {
+  margin-top: 0;
+}
+
+.examples {
+  margin: 6px 0 0;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
+.policy {
+  border-left: 3px solid var(--warn);
+  padding: 6px 10px;
+  background: var(--panel-2);
+  border-radius: 0 4px 4px 0;
+  font-size: 12px;
+}
+
+@media (max-width: 900px) {
+  .layout {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .pair {
+    grid-template-columns: 1fr;
+  }
+}

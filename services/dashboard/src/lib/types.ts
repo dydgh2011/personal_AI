@@ -46,6 +46,38 @@ export interface Project {
   cachedHeadSha: string | null;
   lastSyncError: string | null;
   description: string | null;
+  /** Registry v7 (ROADMAP 11-12). Absent from an older controller. */
+  commitAuthor?: CommitAuthor | null;
+  commitStyle?: CommitStyle;
+  agentInstructions?: AgentInstructions;
+}
+
+export interface CommitAuthor {
+  name: string;
+  email: string;
+}
+
+export type CommitStyleMode = 'off' | 'auto' | 'manual';
+
+export interface CommitStyle {
+  mode: CommitStyleMode;
+  guide: string | null;
+}
+
+export interface AgentInstructions {
+  rules: string;
+  forbiddenPaths: string[];
+}
+
+/** What a worker derived from a project's recent commit subjects (commit style "auto"). */
+export interface CommitStyleAnalysis {
+  sampleSize: number;
+  conventional: number;
+  types: string[];
+  language: string;
+  medianLength: number;
+  examples: string[];
+  guide: string;
 }
 
 export interface Review {
@@ -106,7 +138,7 @@ export interface WorkerReport {
   durationMs?: number | null;
   timedOut?: boolean;
   stderrTail?: string;
-  workspace?: { branch?: string | null; baseCommit?: string | null; commit?: string | null; changedFiles?: Array<{ status: string; path: string }>; path?: string; notes?: string[] } | null;
+  workspace?: { branch?: string | null; baseCommit?: string | null; commit?: string | null; changedFiles?: Array<{ status: string; path: string }>; path?: string; notes?: string[]; commitStyle?: CommitStyleAnalysis; blockedPaths?: string[] } | null;
   workspaceError?: string | null;
 }
 

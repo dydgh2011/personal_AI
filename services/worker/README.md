@@ -113,6 +113,14 @@ Get-Content -Raw services\worker\scripts\codex-sandbox-probe.mjs | docker exec -
 - 결과는 Worker가 직접 커밋(`core.hooksPath=/dev/null`, `--no-verify`). **merge, push, worktree 삭제는 하지 않음**
 - `sandbox`가 없으면 첫 시작 시 `git init -b main` + README 커밋으로 생성
 
+### 프로젝트별 설정 (Registry v7, `src/project-settings.ts`)
+
+- `agentInstructions.rules`: 고정 프롬프트(`UNATTENDED_PROMPT`) **뒤에** 붙입니다(Claude는 `--append-system-prompt`, Codex는 stdin의 작업 앞).
+- `agentInstructions.forbiddenPaths`: 커밋 직전에 기준 커밋과 비교해 바뀐 경로를 검사합니다. 하나라도 걸리면 `git reset` 후 **커밋하지 않고** 작업을 실패로 보고합니다(`workspace.blockedPaths`). 읽기는 막지 못합니다(프롬프트로만 요청).
+- `commitStyle`: `auto`는 작업 기준 커밋까지의 최근 제목 50개를 읽어(읽기 전용) 코드가 정해진 문장으로 스타일을 설명합니다. 저장소의 커밋 문구는 프롬프트에 넣지 않습니다(보고서 `workspace.commitStyle.examples`에만). 에이전트가 마지막 줄에 `COMMIT_MESSAGE: …`를 쓰면 성공한 작업에 한해 그 한 줄(100자 이내)을 커밋 제목으로 씁니다. `off`(기본)는 예전 메시지 그대로입니다.
+- 커밋 작성자·커미터는 항상 `<agent>-worker`입니다(POLICY B). Registry의 `commitAuthor`는 Worker에 오지 않습니다. 자세한 내용: `docs/coding-agent-settings.md`.
+- Registry 값이 범위를 벗어나면 실행하지 않습니다(fail-closed). 옛 Controller가 값을 보내지 않으면 "설정 없음"입니다.
+
 ### GitHub 프로젝트 (Registry `source: github`)
 
 ```text

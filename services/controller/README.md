@@ -88,9 +88,9 @@ delegator에게는 `/internal/*`(403), 토큰 조회/변경, Docker, DB 직접 �
 | `GET` | `/projects/:id` | admin, delegator(활성만) | |
 | `GET` | `/projects/:id/status?refresh=true` | admin, delegator(활성만) | 작업 수, 동기화 상태, GitHub 원격 기본 브랜치 HEAD와 캐시 비교(60초 캐시) |
 | `POST` | `/projects` | admin | `{ id, source: "local"\|"github", fullName?, allowedAgents, enabled?, allowCodeChanges?, defaultBranch?, description? }` |
-| `PATCH` | `/projects/:id` | admin | `enabled, allowCodeChanges, allowedAgents, defaultBranch, description` 및 동기화 결과 필드 |
+| `PATCH` | `/projects/:id` | admin | `enabled, allowCodeChanges, allowedAgents, defaultBranch, description`, 동기화 결과 필드, `testCommands`, 그리고 v7의 `commitAuthor`(null로 지움, 저장만), `commitStyle { mode: off\|auto\|manual, guide }`, `agentInstructions { rules, forbiddenPaths }` (각각 통째로 교체, docs/coding-agent-settings.md) |
 | `GET` | `/github/repositories?owner=\|org=` | admin | 저장소 Discovery (읽기 전용 GitHub API, 페이지네이션·rate limit 처리) |
-| `GET` | `/internal/projects` | worker | 자기 agent가 쓸 수 있는 활성 프로젝트 (`id, source, defaultBranch, allowCodeChanges, cachedHeadSha, syncStatus`) |
+| `GET` | `/internal/projects` | worker | 자기 agent가 쓸 수 있는 활성 프로젝트 (`id, source, defaultBranch, allowCodeChanges, cachedHeadSha, syncStatus, commitStyle, agentInstructions`; `commitAuthor`는 보내지 않음) |
 
 - GitHub 프로젝트는 GitHub API로 확인해 `githubRepositoryId`, 기본 브랜치, clone URL(인증 정보 없음), visibility를 **GitHub에서** 가져옵니다. 요청으로 remote URL을 받지 않습니다
 - 새 프로젝트는 기본 `enabled: false`, `allowCodeChanges: false`. 같은 id, 같은 저장소(대소문자 무시), 같은 GitHub id는 409

@@ -1,5 +1,5 @@
 import type { RunResult } from '../process-runner.js';
-import { agentEnvironment, type AgentInput, type AgentInvocation, type AgentOutcome, type AgentRunner } from './agent-runner.js';
+import { agentEnvironment, systemPrompt, type AgentInput, type AgentInvocation, type AgentOutcome, type AgentRunner } from './agent-runner.js';
 
 const WRITE_TOOLS = 'Read,Edit,Write,Glob,Grep';
 const READ_TOOLS = 'Read,Glob,Grep';
@@ -48,7 +48,7 @@ export class ClaudeRunner implements AgentRunner {
       '--strict-mcp-config',
       '--disable-slash-commands',
       '--session-id', input.taskId,
-      '--append-system-prompt', UNATTENDED_PROMPT,
+      '--append-system-prompt', systemPrompt(UNATTENDED_PROMPT, input.projectPrompt),
     ];
     if (this.model) args.push('--model', this.model);
 

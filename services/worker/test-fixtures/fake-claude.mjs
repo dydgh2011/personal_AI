@@ -2,7 +2,8 @@
 // follows directives on their own lines, then prints a result object shaped
 // like `claude -p --output-format json`:
 //
-//   @write <file>=<content>   create a file in the working directory
+//   @write <file>=<content>   create a file in the working directory (and its parent directories)
+//   @say <text>               add a line to the final answer
 //   @sleep <ms>               wait before answering
 //   @exit <code>              exit with this code after printing
 //   @error                    report is_error: true / subtype error_during_execution
@@ -11,8 +12,8 @@
 //   @ignore-term              ignore SIGTERM (must be SIGKILLed)
 //   @grandchild <file>        spawn a long-lived child and write its pid to <file>
 import { spawn } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 
 let input = '';
 process.stdin.setEncoding('utf8');
@@ -22,6 +23,7 @@ const directives = input.split('\n').map((l) => l.trim()).filter((l) => l.starts
 let exitCode = 0;
 let isError = false;
 let garbage = false;
+const said = [];
 
 for (const line of directives) {
   const [name, ...rest] = line.split(' ');
@@ -29,9 +31,13 @@ for (const line of directives) {
   switch (name) {
     case '@write': {
       const eq = arg.indexOf('=');
+      mkdirSync(dirname(join(process.cwd(), arg.slice(0, eq))), { recursive: true });
       writeFileSync(join(process.cwd(), arg.slice(0, eq)), arg.slice(eq + 1));
       break;
     }
+    case '@say':
+      said.push(arg);
+      break;
     case '@sleep':
       await new Promise((r) => setTimeout(r, Number(arg)));
       break;
@@ -66,7 +72,7 @@ if (garbage) {
       type: 'result',
       subtype: isError ? 'error_during_execution' : 'success',
       is_error: isError,
-      result: isError ? 'Something went wrong' : `Done: ${directives.length} directive(s)`,
+      result: isError ? 'Something went wrong' : [`Done: ${directives.length} directive(s)`, ...said].join('\n'),
       num_turns: 1,
       duration_ms: 5,
       session_id: process.argv[process.argv.indexOf('--session-id') + 1] ?? null,

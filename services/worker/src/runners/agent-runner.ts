@@ -7,6 +7,16 @@ export interface AgentInput {
   instruction: string;
   cwd: string;
   mode: WorkspaceMode;
+  /**
+   * The project's rules, forbidden paths and commit-style request (project-settings.ts), appended
+   * after the runner's fixed unattended prompt. Empty when the project configures nothing.
+   */
+  projectPrompt?: string;
+}
+
+/** Fixed worker rules first; the project's part can only add to them. */
+export function systemPrompt(base: string, projectPrompt: string | undefined): string {
+  return projectPrompt ? `${base}\n\n${projectPrompt}` : base;
 }
 
 export interface AgentInvocation {

@@ -26,6 +26,9 @@ export interface RegistryProject {
   /** GitHub projects: commit of the default branch last fetched into the repository cache. */
   cachedHeadSha: string | null;
   syncStatus: 'not_synced' | 'synced' | 'error';
+  /** Registry v7 (absent from older controllers = nothing configured). Checked by project-settings.ts. */
+  commitStyle?: { mode: 'off' | 'auto' | 'manual'; guide: string | null };
+  agentInstructions?: { rules: string; forbiddenPaths: string[] };
 }
 
 export class ControllerError extends Error {

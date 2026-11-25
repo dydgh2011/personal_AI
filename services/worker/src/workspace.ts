@@ -5,6 +5,15 @@ import { pathToFileURL } from 'node:url';
 import { PROJECT_ID_PATTERN, type WorkerConfig } from './config.js';
 import type { RegistryProject, Task } from './controller-client.js';
 import { runProcess } from './process-runner.js';
+import {
+  analyzeCommitSubjects,
+  forbiddenMatcher,
+  readProjectSettings,
+  SettingsError,
+  STYLE_SAMPLE,
+  type CommitStyleAnalysis,
+  type ProjectSettings,
+} from './project-settings.js';
 
 /** A problem with the task's project or workspace. The task fails; the worker keeps running. */
 export class WorkspaceError extends Error {}
@@ -24,6 +33,10 @@ export interface PreparedWorkspace {
   /** Things about the checkout worth telling the user (symlinks neutralised, submodules skipped). */
   notes?: string[];
   taskId?: string;
+  /** The registry's agent settings for this project (checked); absent in records of older workers. */
+  settings?: ProjectSettings;
+  /** commitStyle "auto": what the code derived from the project's recent commit subjects. */
+  styleAnalysis?: CommitStyleAnalysis | null;
 }
 
 export interface ChangedFile {
@@ -46,6 +59,13 @@ export interface WorkspaceSummary {
   /** Git bundle written for the GitHub Publisher (GitHub projects with a commit, if configured). */
   artifact?: { bundleSha256: string; bundleBytes: number };
   artifactError?: string;
+  /** commitStyle "auto": the analysis the agent's commit-style instruction came from. */
+  commitStyle?: CommitStyleAnalysis;
+  /**
+   * Changed paths that match the project's forbidden paths. When set, nothing was committed
+   * (the changes stay uncommitted in the task worktree, which is never published).
+   */
+  blockedPaths?: string[];
 }
 
 /**
@@ -181,10 +201,35 @@ export class Workspace {
     }
     const writable =
       project.allowCodeChanges && (this.config.writableProjects === null || this.config.writableProjects.includes(project.id));
+    let settings: ProjectSettings;
+    try {
+      settings = readProjectSettings(project);
+    } catch (error) {
+      if (error instanceof SettingsError) throw new WorkspaceError(error.message);
+      throw error;
+    }
 
-    return project.source === 'github'
-      ? this.prepareGitHub(task, project, writable)
-      : this.prepareLocal(task, project.id, writable);
+    const prepared = project.source === 'github'
+      ? await this.prepareGitHub(task, project, writable)
+      : await this.prepareLocal(task, project.id, writable);
+    prepared.settings = settings;
+    if (prepared.mode === 'write' && prepared.baseCommit && settings.commitStyle.mode === 'auto') {
+      prepared.styleAnalysis = await this.analyzeCommitStyle(prepared.cwd, prepared.baseCommit);
+    }
+    return prepared;
+  }
+
+  /**
+   * Reads the subjects of the newest commits up to `base` (read-only, local: this worker's checkout of
+   * the repository cache) and derives the project's commit style. A failure only means no analysis.
+   */
+  private async analyzeCommitStyle(cwd: string, base: string): Promise<CommitStyleAnalysis | null> {
+    try {
+      const log = await this.git(cwd, ['log', '-n', String(STYLE_SAMPLE), '--no-merges', '--format=%s', base]);
+      return analyzeCommitSubjects(log.split('\n'));
+    } catch {
+      return null;
+    }
   }
 
   private async prepareLocal(task: Task, projectId: string, writable: boolean): Promise<PreparedWorkspace> {
@@ -319,7 +364,15 @@ export class Workspace {
     };
     if (prepared.mode !== 'write' || !prepared.baseCommit) return summary;
 
+    if (prepared.styleAnalysis) summary.commitStyle = prepared.styleAnalysis;
     await this.git(prepared.cwd, ['add', '-A']);
+    const blocked = await this.forbiddenChanges(prepared);
+    if (blocked.length) {
+      // Unstage and stop: no commit, so nothing can reach a review or the publisher.
+      await this.git(prepared.cwd, ['reset', '-q']);
+      summary.blockedPaths = blocked;
+      return summary;
+    }
     const pending = (await this.git(prepared.cwd, ['status', '--porcelain'])).trim();
     if (pending) {
       await this.git(prepared.cwd, [...GIT_IDENTITY(this.config.workerId), 'commit', '-q', '--no-verify', '-m', message]);
@@ -347,6 +400,15 @@ export class Workspace {
       }
     }
     return summary;
+  }
+
+  /** Staged changes (against the base commit) whose path matches a forbidden path of the project. */
+  private async forbiddenChanges(prepared: PreparedWorkspace): Promise<string[]> {
+    const patterns = prepared.settings?.forbiddenPaths ?? [];
+    if (!patterns.length || !prepared.baseCommit) return [];
+    const isForbidden = forbiddenMatcher(patterns);
+    const staged = await this.git(prepared.cwd, ['diff', '--cached', '--name-only', '--no-renames', '-z', prepared.baseCommit]);
+    return staged.split('\0').filter(Boolean).filter(isForbidden).slice(0, 100);
   }
 
   /**

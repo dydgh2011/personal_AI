@@ -1,6 +1,6 @@
 import 'server-only';
 import { readSecret, settings } from './server';
-import type { DiffResponse, Project, Publication, PublicationStatus, PublishAuthorization, Review, ReviewResponse, SystemStatus, Task, TaskList, TestValidation } from './types';
+import type { AgentInstructions, CommitAuthor, CommitStyle, DiffResponse, Project, Publication, PublicationStatus, PublishAuthorization, Review, ReviewResponse, SystemStatus, Task, TaskList, TestValidation } from './types';
 
 export class ControllerError extends Error {
   constructor(message: string, readonly status: number | null, readonly code: string | null = null) {
@@ -12,7 +12,7 @@ export class ControllerError extends Error {
  * The dashboard's only way to reach the controller. Runs on the server; the token (a dedicated
  * dashboard admin token, Docker secret) is read here and never sent to the browser.
  */
-async function call<T>(method: 'GET' | 'POST', path: string, body?: unknown, extra: Record<string, string> = {}): Promise<{ data: T; ms: number }> {
+async function call<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: unknown, extra: Record<string, string> = {}): Promise<{ data: T; ms: number }> {
   let token: string;
   try {
     token = readSecret(settings.controllerTokenFile);
@@ -59,6 +59,10 @@ export const controller = {
   task: (id: string) => call<Task>('GET', `/tasks/${encodeURIComponent(id)}`).then((r) => r.data),
   cancel: (id: string) => call<{ outcome: string; message: string }>('POST', `/tasks/${encodeURIComponent(id)}/cancel`).then((r) => r.data),
   projects: () => call<{ items: Project[] }>('GET', '/projects').then((r) => r.data.items),
+  project: (id: string) => call<Project>('GET', `/projects/${encodeURIComponent(id)}`).then((r) => r.data),
+  /** Admin PATCH of the agent settings only (ROADMAP 11-13); each value replaces the whole setting. */
+  updateProjectSettings: (id: string, patch: { commitAuthor: CommitAuthor | null; commitStyle: CommitStyle; agentInstructions: AgentInstructions }) =>
+    call<Project>('PATCH', `/projects/${encodeURIComponent(id)}`, patch).then((r) => r.data),
   reviews: (status?: string) => call<{ items: Review[] }>('GET', `/reviews${q({ status, limit: '100' })}`).then((r) => r.data.items),
   diff: (id: string) => call<DiffResponse>('GET', `/tasks/${encodeURIComponent(id)}/diff`).then((r) => r.data),
   review: (id: string) => call<ReviewResponse>('GET', `/tasks/${encodeURIComponent(id)}/review`).then((r) => r.data),

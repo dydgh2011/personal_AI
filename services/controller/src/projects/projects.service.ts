@@ -23,6 +23,7 @@ import {
   type RateLimit,
 } from '../github/github-client.js';
 import { AGENT_TYPES, type AgentType } from '../tasks/task.model.js';
+import { DEFAULT_COMMIT_STYLE } from './agent-settings.js';
 import type { CreateProjectDto, UpdateProjectDto } from './dto/project.dto.js';
 import { delegatorView, workerView, type DelegatorProjectView, type Project, type WorkerProjectView } from './project.model.js';
 import { DuplicateProjectError, ProjectRepository } from './project.repository.js';
@@ -92,6 +93,9 @@ export class ProjectsService implements OnModuleInit {
         cachedHeadSha: null,
         lastSyncError: null,
         testCommands: [],
+        commitAuthor: null,
+        commitStyle: { ...DEFAULT_COMMIT_STYLE },
+        agentInstructions: { rules: '', forbiddenPaths: [] },
         createdAt: now,
         updatedAt: now,
       });
@@ -175,6 +179,9 @@ export class ProjectsService implements OnModuleInit {
       cachedHeadSha: null,
       lastSyncError: null,
       testCommands: [],
+      commitAuthor: null,
+      commitStyle: { ...DEFAULT_COMMIT_STYLE },
+      agentInstructions: { rules: '', forbiddenPaths: [] },
       createdAt: now,
       updatedAt: now,
     };
@@ -216,6 +223,17 @@ export class ProjectsService implements OnModuleInit {
     if (!this.repository.findById(id)) throw new NotFoundException(`Project ${id} not found`);
     const patch = Object.fromEntries(Object.entries(dto).filter(([, v]) => v !== undefined));
     if (Object.keys(patch).length === 0) throw new BadRequestException('Nothing to update');
+    if (dto.commitStyle) {
+      const guide = dto.commitStyle.guide?.trim() || null;
+      if (dto.commitStyle.mode === 'manual' && !guide) throw new BadRequestException('commitStyle.guide is required for mode "manual"');
+      patch.commitStyle = { mode: dto.commitStyle.mode, guide };
+    }
+    if (dto.agentInstructions) {
+      const paths = dto.agentInstructions.forbiddenPaths;
+      if (new Set(paths).size !== paths.length) throw new BadRequestException('agentInstructions.forbiddenPaths contains duplicates');
+      patch.agentInstructions = { rules: dto.agentInstructions.rules.trim(), forbiddenPaths: [...paths] };
+    }
+    if (dto.commitAuthor) patch.commitAuthor = { name: dto.commitAuthor.name.trim(), email: dto.commitAuthor.email };
     const updated = this.repository.update(id, { ...patch, updatedAt: this.clock.now().toISOString() });
     if (!updated) throw new NotFoundException(`Project ${id} not found`);
     this.remoteCache.delete(id);

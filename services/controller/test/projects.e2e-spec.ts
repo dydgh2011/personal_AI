@@ -159,6 +159,8 @@ describe('Project registry and GitHub discovery', () => {
       expect(forClaude[0]).toEqual({
         id: 'hello-world', source: 'github', defaultBranch: 'master', allowCodeChanges: false, cachedHeadSha: null,
         syncStatus: 'not_synced',
+        commitStyle: { mode: 'off', guide: null },
+        agentInstructions: { rules: '', forbiddenPaths: [] },
       });
       await http.get('/internal/projects').set(hermes).expect(403);
     });
@@ -166,6 +168,81 @@ describe('Project registry and GitHub discovery', () => {
     it('system status lists enabled projects from the registry', async () => {
       await registerHello({ enabled: true }).expect(201);
       expect((await http.get('/system/status').set(hermes).expect(200)).body.projects).toEqual(['hello-world', 'personal-ai', 'sandbox']);
+    });
+  });
+
+  describe('agent settings (ROADMAP 11, 12)', () => {
+    const settings = {
+      commitAuthor: { name: 'Dev Owner', email: 'owner@example.com' },
+      commitStyle: { mode: 'manual', guide: 'Conventional Commits, lowercase, no period.' },
+      agentInstructions: { rules: 'Use TypeScript strict mode.\r\nNo new dependencies.', forbiddenPaths: ['secrets/', '*.pem', 'config/prod/**'] },
+    };
+
+    it('starts empty, is set by the admin, and reaches workers without the commit author', async () => {
+      const created = (await registerHello({ enabled: true }).expect(201)).body;
+      expect(created).toMatchObject({ commitAuthor: null, commitStyle: { mode: 'off', guide: null }, agentInstructions: { rules: '', forbiddenPaths: [] } });
+
+      const updated = (await http.patch('/projects/hello-world').set(admin).send(settings).expect(200)).body;
+      expect(updated).toMatchObject({
+        commitAuthor: { name: 'Dev Owner', email: 'owner@example.com' },
+        commitStyle: { mode: 'manual', guide: 'Conventional Commits, lowercase, no period.' },
+        // CRLF from a browser textarea is normalised
+        agentInstructions: { rules: 'Use TypeScript strict mode.\nNo new dependencies.', forbiddenPaths: ['secrets/', '*.pem', 'config/prod/**'] },
+      });
+      expect((await http.get('/projects/hello-world').set(admin).expect(200)).body).toMatchObject({ commitAuthor: settings.commitAuthor });
+
+      const forClaude = (await http.get('/internal/projects').set(claude).expect(200)).body.items[0];
+      expect(forClaude.commitStyle).toEqual({ mode: 'manual', guide: 'Conventional Commits, lowercase, no period.' });
+      expect(forClaude.agentInstructions.forbiddenPaths).toEqual(['secrets/', '*.pem', 'config/prod/**']);
+      expect(forClaude).not.toHaveProperty('commitAuthor');
+      expect(JSON.stringify(forClaude)).not.toContain('owner@example.com');
+
+      const forHermes = (await http.get('/projects/hello-world').set(hermes).expect(200)).body;
+      for (const key of ['commitAuthor', 'commitStyle', 'agentInstructions']) expect(forHermes).not.toHaveProperty(key);
+      expect(JSON.stringify((await http.get('/projects').set(hermes).expect(200)).body)).not.toContain('owner@example.com');
+
+      // other settings are untouched; null clears only the author
+      const cleared = (await http.patch('/projects/hello-world').set(admin).send({ commitAuthor: null }).expect(200)).body;
+      expect(cleared.commitAuthor).toBeNull();
+      expect(cleared.commitStyle.mode).toBe('manual');
+      expect(cleared.agentInstructions.forbiddenPaths).toHaveLength(3);
+      const auto = (await http.patch('/projects/hello-world').set(admin).send({ commitStyle: { mode: 'auto' } }).expect(200)).body;
+      expect(auto.commitStyle).toEqual({ mode: 'auto', guide: null });
+    });
+
+    it('only the admin may change them', async () => {
+      await registerHello({ enabled: true }).expect(201);
+      await http.patch('/projects/hello-world').set(hermes).send(settings).expect(403);
+      await http.patch('/projects/hello-world').set(claude).send(settings).expect(403);
+      await http.patch('/projects/hello-world').send(settings).expect(401);
+    });
+
+    it.each([
+      ['manual style without a guide', { commitStyle: { mode: 'manual', guide: '   ' } }],
+      ['unknown style mode', { commitStyle: { mode: 'mimic' } }],
+      ['style set to null', { commitStyle: null }],
+      ['instructions set to null', { agentInstructions: null }],
+      ['guide too long', { commitStyle: { mode: 'manual', guide: 'x'.repeat(1001) } }],
+      ['control characters in rules', { agentInstructions: { rules: 'a\u0007b', forbiddenPaths: [] } }],
+      ['rules too long', { agentInstructions: { rules: 'x'.repeat(4001), forbiddenPaths: [] } }],
+      ['too many forbidden paths', { agentInstructions: { rules: '', forbiddenPaths: Array.from({ length: 51 }, (_, i) => `p${i}`) } }],
+      ['absolute forbidden path', { agentInstructions: { rules: '', forbiddenPaths: ['/etc/passwd'] } }],
+      ['".." forbidden path', { agentInstructions: { rules: '', forbiddenPaths: ['../outside'] } }],
+      ['"." segment', { agentInstructions: { rules: '', forbiddenPaths: ['a/./b'] } }],
+      ['backslash path', { agentInstructions: { rules: '', forbiddenPaths: ['a\\b'] } }],
+      ['empty path', { agentInstructions: { rules: '', forbiddenPaths: [''] } }],
+      ['duplicate paths', { agentInstructions: { rules: '', forbiddenPaths: ['a/', 'a/'] } }],
+      ['missing forbiddenPaths', { agentInstructions: { rules: 'x' } }],
+      ['unknown nested field', { agentInstructions: { rules: '', forbiddenPaths: [], allowedPaths: ['x'] } }],
+      ['author name with <>', { commitAuthor: { name: 'A <b>', email: 'a@example.com' } }],
+      ['author name with newline', { commitAuthor: { name: 'A\nB', email: 'a@example.com' } }],
+      ['author email invalid', { commitAuthor: { name: 'A', email: 'not an email' } }],
+      ['author email with >', { commitAuthor: { name: 'A', email: 'a>@example.com' } }],
+    ])('rejects %s', async (_label, body) => {
+      await registerHello().expect(201);
+      const before = (await http.get('/projects/hello-world').set(admin).expect(200)).body;
+      await http.patch('/projects/hello-world').set(admin).send(body).expect(400);
+      expect((await http.get('/projects/hello-world').set(admin).expect(200)).body).toEqual(before);
     });
   });
 

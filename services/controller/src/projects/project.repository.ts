@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import type { Database } from 'better-sqlite3';
 import { SQLITE_CONNECTION } from '../database/database.module.js';
 import type { AgentType } from '../tasks/task.model.js';
+import { DEFAULT_AGENT_INSTRUCTIONS, DEFAULT_COMMIT_STYLE, type AgentInstructions, type CommitAuthor, type CommitStyle } from './agent-settings.js';
 import type { AuthMode, Project, ProjectSource, SyncStatus, TestCommand, Visibility } from './project.model.js';
 
 interface ProjectRow {
@@ -23,6 +24,10 @@ interface ProjectRow {
   last_sync_error: string | null;
   /** JSON TestCommand[] (schema v6). Not written on insert: new projects start with none. */
   test_commands?: string;
+  /** JSON (schema v7). Not written on insert: new projects start with the column defaults. */
+  commit_author?: string | null;
+  commit_style?: string;
+  agent_instructions?: string;
   created_at: string;
   updated_at: string;
 }
@@ -41,6 +46,9 @@ export type ProjectPatch = Partial<
     | 'cachedHeadSha'
     | 'lastSyncError'
     | 'testCommands'
+    | 'commitAuthor'
+    | 'commitStyle'
+    | 'agentInstructions'
   >
 > & { updatedAt: string };
 
@@ -55,8 +63,13 @@ const PATCH_COLUMNS: Record<keyof ProjectPatch, string> = {
   cachedHeadSha: 'cached_head_sha',
   lastSyncError: 'last_sync_error',
   testCommands: 'test_commands',
+  commitAuthor: 'commit_author',
+  commitStyle: 'commit_style',
+  agentInstructions: 'agent_instructions',
   updatedAt: 'updated_at',
 };
+
+const JSON_COLUMNS = new Set<keyof ProjectPatch>(['allowedAgents', 'testCommands', 'commitAuthor', 'commitStyle', 'agentInstructions']);
 
 export class DuplicateProjectError extends Error {}
 
@@ -132,7 +145,7 @@ export class ProjectRepository {
     const assignments = keys.map((key) => {
       const value = patch[key];
       params[`set_${key}`] =
-        key === 'allowedAgents' || key === 'testCommands' ? JSON.stringify(value) : typeof value === 'boolean' ? Number(value) : value;
+        value === null ? null : JSON_COLUMNS.has(key) ? JSON.stringify(value) : typeof value === 'boolean' ? Number(value) : value;
       return `${PATCH_COLUMNS[key]} = @set_${key}`;
     });
     const row = this.db
@@ -161,6 +174,11 @@ function toProject(row: ProjectRow): Project {
     cachedHeadSha: row.cached_head_sha,
     lastSyncError: row.last_sync_error,
     testCommands: row.test_commands ? (JSON.parse(row.test_commands) as TestCommand[]) : [],
+    commitAuthor: row.commit_author ? (JSON.parse(row.commit_author) as CommitAuthor) : null,
+    commitStyle: row.commit_style ? (JSON.parse(row.commit_style) as CommitStyle) : { ...DEFAULT_COMMIT_STYLE },
+    agentInstructions: row.agent_instructions
+      ? (JSON.parse(row.agent_instructions) as AgentInstructions)
+      : { ...DEFAULT_AGENT_INSTRUCTIONS, forbiddenPaths: [] },
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
