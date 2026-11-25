@@ -49,3 +49,38 @@ export function NavLinks({ items }: { items: Array<{ href: string; title: string
     </nav>
   );
 }
+
+/**
+ * Dashboard forms post and come back through a redirect, a full page load that would start at the
+ * top. Just before a POST form on this page submits, the scroll position is remembered for this
+ * path; when the redirect lands on the same path (within a minute) it is restored once. Kept only
+ * in this tab's sessionStorage; nothing is sent anywhere.
+ */
+const SCROLL_KEY = 'pai-scroll';
+
+export function ScrollKeeper() {
+  const pathname = usePathname();
+  useEffect(() => {
+    try {
+      const saved = JSON.parse(sessionStorage.getItem(SCROLL_KEY) || 'null') as { path: string; y: number; at: number } | null;
+      sessionStorage.removeItem(SCROLL_KEY);
+      if (saved && saved.path === window.location.pathname && Date.now() - saved.at < 60_000 && saved.y > 0) {
+        requestAnimationFrame(() => window.scrollTo({ top: saved.y, behavior: 'instant' as ScrollBehavior }));
+      }
+    } catch {
+      // storage blocked: just keep the browser's default
+    }
+    const onSubmit = (event: SubmitEvent) => {
+      const form = event.target;
+      if (!(form instanceof HTMLFormElement) || form.method.toLowerCase() !== 'post' || event.defaultPrevented) return;
+      try {
+        sessionStorage.setItem(SCROLL_KEY, JSON.stringify({ path: window.location.pathname, y: window.scrollY, at: Date.now() }));
+      } catch {
+        // ignore
+      }
+    };
+    document.addEventListener('submit', onSubmit);
+    return () => document.removeEventListener('submit', onSubmit);
+  }, [pathname]);
+  return null;
+}
