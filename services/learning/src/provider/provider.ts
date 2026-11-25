@@ -83,7 +83,7 @@ const RESPONSE_SCHEMA = {
 
 /**
  * AI provider access: configuration gate, monthly budget, call log (tokens, cost, errors), timeouts
- * and one retry. Produces drafts only - it never writes roadmaps.
+ * and one retry. Produces drafts and evaluation opinions only - it never writes learning data.
  */
 @Injectable()
 export class ProviderService {
@@ -129,18 +129,37 @@ export class ProviderService {
   }
 
   async draftRoadmap(request: DraftRequest): Promise<DraftResult> {
+    return this.callJson({ purpose: 'roadmap.draft', promptVersion: PROMPT_VERSION, system: SYSTEM, schema: RESPONSE_SCHEMA, prompt: JSON.stringify(request), temperature: 0.4 });
+  }
+
+  /**
+   * Refuses (409) before anything is recorded when AI is not configured or the worst case of a
+   * call with this prompt size would pass the monthly cap. Callers that keep their own job record
+   * (evaluations) check this first, so a refusal leaves no trace but the error.
+   */
+  preflight(promptChars: number, systemChars = 0): void {
     const ai = this.config.ai;
     const missing = this.missingSettings();
     if (missing.length) throw conflict('PROVIDER_NOT_CONFIGURED', `AI generation is not configured yet (missing: ${missing.join(', ')})`);
-    const prompt = JSON.stringify(request);
     // Worst case of this call must still fit the monthly budget (hard cap, never exceeded).
-    const inPrice = ai.inputUsdPerMTok ?? 0;
-    const outPrice = ai.outputUsdPerMTok ?? 0;
-    const worstCase = cost(Math.ceil((SYSTEM.length + prompt.length) / 3), MAX_OUTPUT_TOKENS, inPrice, outPrice);
+    const worstCase = cost(Math.ceil((systemChars + promptChars) / 3), MAX_OUTPUT_TOKENS, ai.inputUsdPerMTok ?? 0, ai.outputUsdPerMTok ?? 0);
     const { spentUsd } = this.usage();
     if (ai.monthlyBudgetUsd !== null && spentUsd + worstCase > ai.monthlyBudgetUsd) {
       throw conflict('AI_BUDGET_EXCEEDED', `Monthly AI budget reached (${spentUsd.toFixed(4)} of ${ai.monthlyBudgetUsd} USD spent; this call could cost up to ${worstCase.toFixed(4)})`);
     }
+  }
+
+  /**
+   * One structured-output call: configuration and budget gate, key from the key file (header only),
+   * timeout, one retry on network errors / 429 / 5xx, every attempt logged in ai_calls.
+   * Returns the parsed JSON (or null when the text was not JSON); callers validate it.
+   */
+  async callJson(call: { purpose: string; promptVersion: string; system: string; schema: unknown; prompt: string; temperature: number }): Promise<DraftResult> {
+    const ai = this.config.ai;
+    const { purpose, promptVersion, system, schema, prompt } = call;
+    this.preflight(prompt.length, system.length);
+    const inPrice = ai.inputUsdPerMTok ?? 0;
+    const outPrice = ai.outputUsdPerMTok ?? 0;
     const key = (await readFile(ai.keyFile!, 'utf8').catch(() => '')).trim();
     if (!key) throw conflict('PROVIDER_NOT_CONFIGURED', 'AI key file is missing or empty');
 
@@ -149,23 +168,25 @@ export class ProviderService {
       ? {
           model: ai.model,
           messages: [
-            { role: 'system', content: `${SYSTEM}
-JSON shape (OpenAPI subset): ${JSON.stringify(RESPONSE_SCHEMA)}` },
+            { role: 'system', content: `${system}
+JSON shape (OpenAPI subset): ${JSON.stringify(schema)}` },
             { role: 'user', content: prompt },
           ],
           response_format: { type: 'json_object' },
-          temperature: 0.4,
+          temperature: call.temperature,
           max_tokens: MAX_OUTPUT_TOKENS,
         }
       : {
-          systemInstruction: { parts: [{ text: SYSTEM }] },
+          systemInstruction: { parts: [{ text: system }] },
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: 'application/json', responseSchema: RESPONSE_SCHEMA, temperature: 0.4, maxOutputTokens: MAX_OUTPUT_TOKENS },
+          generationConfig: { responseMimeType: 'application/json', responseSchema: schema, temperature: call.temperature, maxOutputTokens: MAX_OUTPUT_TOKENS },
         };
     const url = gateway ? `${ai.apiUrl}/chat/completions` : `${ai.apiUrl}/models/${encodeURIComponent(ai.model!)}:generateContent`;
     const headers: Record<string, string> = gateway
       ? { 'Content-Type': 'application/json', Authorization: `Bearer ${key}` }
       : { 'Content-Type': 'application/json', 'x-goog-api-key': key };
+    const log = (status: 'ok' | 'error', inTok: number | null, outTok: number | null, c: number, error: string | null) =>
+      this.record(purpose, promptVersion, status, inTok, outTok, c, error);
     let lastError = 'unknown error';
     for (let attempt = 1; attempt <= 2; attempt++) {
       let res: Response;
@@ -183,7 +204,7 @@ JSON shape (OpenAPI subset): ${JSON.stringify(RESPONSE_SCHEMA)}` },
           await sleep(1000);
           continue;
         }
-        this.record('error', null, null, 0, lastError);
+        log('error', null, null, 0, lastError);
         throw unavailable(lastError === 'timeout' ? 'AI_PROVIDER_TIMEOUT' : 'AI_PROVIDER_ERROR', `AI provider ${lastError}`);
       }
       const raw = (await res.json().catch(() => null)) as (GeminiResponse & ChatResponse) | null;
@@ -192,7 +213,7 @@ JSON shape (OpenAPI subset): ${JSON.stringify(RESPONSE_SCHEMA)}` },
       const callCost = cost(inTok ?? 0, outTok ?? 0, inPrice, outPrice);
       if (res.status === 429 || res.status >= 500) {
         lastError = `HTTP ${res.status}`;
-        this.record('error', inTok, outTok, callCost, lastError);
+        log('error', inTok, outTok, callCost, lastError);
         if (attempt === 1) {
           await sleep(1000);
           continue;
@@ -200,7 +221,7 @@ JSON shape (OpenAPI subset): ${JSON.stringify(RESPONSE_SCHEMA)}` },
         throw unavailable(res.status === 429 ? 'AI_RATE_LIMITED' : 'AI_PROVIDER_ERROR', `AI provider answered ${res.status}`, res.status === 429 ? 429 : 503);
       }
       if (!res.ok) {
-        this.record('error', inTok, outTok, callCost, `HTTP ${res.status}`);
+        log('error', inTok, outTok, callCost, `HTTP ${res.status}`);
         throw unavailable('AI_PROVIDER_ERROR', `AI provider answered ${res.status}`, 502);
       }
       const text = gateway
@@ -212,17 +233,17 @@ JSON shape (OpenAPI subset): ${JSON.stringify(RESPONSE_SCHEMA)}` },
       } catch {
         output = null;
       }
-      this.record('ok', inTok, outTok, callCost, output === null ? 'output was not JSON' : null);
+      log('ok', inTok, outTok, callCost, output === null ? 'output was not JSON' : null);
       return { output, provider: ai.provider, model: ai.model!, inputTokens: inTok, outputTokens: outTok, costUsd: callCost };
     }
     throw unavailable('AI_PROVIDER_ERROR', `AI provider failed: ${lastError}`);
   }
 
-  private record(status: 'ok' | 'error', inTok: number | null, outTok: number | null, costUsd: number, error: string | null): void {
+  private record(purpose: string, promptVersion: string, status: 'ok' | 'error', inTok: number | null, outTok: number | null, costUsd: number, error: string | null): void {
     const now = this.clock.now();
     this.db.prepare(`INSERT INTO ai_calls (id, at, month, provider, model, prompt_version, purpose, status, input_tokens, output_tokens, cost_usd, error)
-      VALUES (?, ?, ?, ?, ?, ?, 'roadmap.draft', ?, ?, ?, ?, ?)`).run(
-      randomUUID(), now.toISOString(), this.month(), this.config.ai.provider, this.config.ai.model ?? '', PROMPT_VERSION, status, inTok, outTok, costUsd, error,
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      randomUUID(), now.toISOString(), this.month(), this.config.ai.provider, this.config.ai.model ?? '', promptVersion, purpose, status, inTok, outTok, costUsd, error,
     );
     if (status === 'error') this.logger.warn(`AI call failed: ${error}`);
   }

@@ -1,4 +1,5 @@
-/** @type {import('next').NextConfig} */
+import { LEARNING_FILE_CSP } from './src/lib/learning-file-csp.mjs';
+
 const securityHeaders = [
   // React escapes all rendered text; the CSP is a second layer (Next.js needs inline bootstrap scripts).
   { key: 'Content-Security-Policy', value: "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'" },
@@ -16,6 +17,13 @@ export default {
   poweredByHeader: false,
   reactStrictMode: true,
   async headers() {
-    return [{ source: '/:path*', headers: securityHeaders }];
+    return [
+      { source: '/:path*', headers: securityHeaders },
+      {
+        // Apply the sandbox here as well because Next's configured headers take precedence.
+        source: '/api/learning-files/:submissionId/:fileId',
+        headers: [{ key: 'Content-Security-Policy', value: LEARNING_FILE_CSP }],
+      },
+    ];
   },
 };

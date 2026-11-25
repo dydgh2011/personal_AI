@@ -142,6 +142,230 @@ export const MIGRATIONS: readonly string[] = [
   ) STRICT;
   CREATE INDEX idx_audit_entity ON audit_events (entity_type, entity_id);
   `,
+
+  // v2: L2 - rubrics (immutable versions), milestones (user-fixed vs suggested deadlines),
+  // assignments (definition versions), submissions (immutable revisions + stored files, never
+  // executed), evaluations (+ evidence; failures kept), skill mastery (self vs verified), gaps.
+  // Triggers make the "immutable" rules hold even against a future code bug.
+  `
+  CREATE TRIGGER roadmap_versions_immutable BEFORE UPDATE ON roadmap_versions
+  BEGIN SELECT RAISE(ABORT, 'roadmap versions are immutable'); END;
+  CREATE TRIGGER roadmap_versions_no_delete BEFORE DELETE ON roadmap_versions
+  BEGIN SELECT RAISE(ABORT, 'roadmap versions are immutable'); END;
+
+  CREATE TABLE rubrics (
+    id          TEXT PRIMARY KEY,
+    title       TEXT NOT NULL,
+    status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'archived')),
+    created_by  TEXT NOT NULL,
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE rubric_versions (
+    id            TEXT PRIMARY KEY,
+    rubric_id     TEXT NOT NULL REFERENCES rubrics (id),
+    version       INTEGER NOT NULL CHECK (version >= 1),
+    criteria      TEXT NOT NULL,
+    passing_score REAL NOT NULL CHECK (passing_score >= 0),
+    max_score     REAL NOT NULL CHECK (max_score > 0),
+    content_hash  TEXT NOT NULL CHECK (length(content_hash) = 64),
+    created_by    TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    UNIQUE (rubric_id, version)
+  ) STRICT;
+  CREATE TRIGGER rubric_versions_immutable BEFORE UPDATE ON rubric_versions
+  BEGIN SELECT RAISE(ABORT, 'rubric versions are immutable'); END;
+  CREATE TRIGGER rubric_versions_no_delete BEFORE DELETE ON rubric_versions
+  BEGIN SELECT RAISE(ABORT, 'rubric versions are immutable'); END;
+
+  CREATE TABLE milestones (
+    id                        TEXT PRIMARY KEY,
+    roadmap_id                TEXT NOT NULL REFERENCES roadmaps (id),
+    node_key                  TEXT,
+    title                     TEXT NOT NULL,
+    description               TEXT,
+    passing_criteria          TEXT,
+    rubric_version_id         TEXT REFERENCES rubric_versions (id),
+    skill_ids                 TEXT NOT NULL DEFAULT '[]',
+    weight                    INTEGER NOT NULL DEFAULT 1 CHECK (weight BETWEEN 0 AND 100),
+    status                    TEXT NOT NULL CHECK (status IN ('planned', 'active', 'completed', 'archived')),
+    fixed_deadline            TEXT,
+    fixed_deadline_set_by     TEXT,
+    fixed_deadline_set_at     TEXT,
+    suggested_deadline        TEXT,
+    suggested_deadline_source TEXT CHECK (suggested_deadline_source IN ('ai', 'planner')),
+    suggested_deadline_reason TEXT,
+    suggested_at              TEXT,
+    created_by                TEXT NOT NULL,
+    created_at                TEXT NOT NULL,
+    updated_at                TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX idx_milestones_roadmap ON milestones (roadmap_id, created_at);
+
+  CREATE TABLE assignments (
+    id                 TEXT PRIMARY KEY,
+    milestone_id       TEXT NOT NULL REFERENCES milestones (id),
+    title              TEXT NOT NULL,
+    kind               TEXT NOT NULL CHECK (kind IN ('text', 'file', 'code', 'photo', 'experiment')),
+    instructions       TEXT NOT NULL,
+    rubric_version_id  TEXT REFERENCES rubric_versions (id),
+    definition_version INTEGER NOT NULL DEFAULT 1 CHECK (definition_version >= 1),
+    status             TEXT NOT NULL CHECK (status IN ('planned', 'available', 'submitted', 'evaluated', 'passed', 'revision_required', 'archived')),
+    decided_by         TEXT,
+    decided_at         TEXT,
+    decision_evaluation_id TEXT,
+    created_by         TEXT NOT NULL,
+    created_at         TEXT NOT NULL,
+    updated_at         TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX idx_assignments_milestone ON assignments (milestone_id, created_at);
+
+  CREATE TABLE assignment_definitions (
+    assignment_id     TEXT NOT NULL REFERENCES assignments (id),
+    version           INTEGER NOT NULL CHECK (version >= 1),
+    title             TEXT NOT NULL,
+    kind              TEXT NOT NULL,
+    instructions      TEXT NOT NULL,
+    rubric_version_id TEXT,
+    created_by        TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    PRIMARY KEY (assignment_id, version)
+  ) STRICT;
+  CREATE TRIGGER assignment_definitions_immutable BEFORE UPDATE ON assignment_definitions
+  BEGIN SELECT RAISE(ABORT, 'assignment definitions are immutable'); END;
+
+  CREATE TABLE submissions (
+    id                 TEXT PRIMARY KEY,
+    assignment_id      TEXT NOT NULL REFERENCES assignments (id),
+    revision           INTEGER NOT NULL CHECK (revision >= 1),
+    definition_version INTEGER NOT NULL,
+    body               TEXT,
+    note               TEXT,
+    content_hash       TEXT NOT NULL CHECK (length(content_hash) = 64),
+    submitted_by       TEXT NOT NULL,
+    submitted_at       TEXT NOT NULL,
+    UNIQUE (assignment_id, revision)
+  ) STRICT;
+  CREATE TRIGGER submissions_immutable BEFORE UPDATE ON submissions
+  BEGIN SELECT RAISE(ABORT, 'submissions are immutable'); END;
+  CREATE TRIGGER submissions_no_delete BEFORE DELETE ON submissions
+  BEGIN SELECT RAISE(ABORT, 'submissions are immutable'); END;
+
+  CREATE TABLE submission_files (
+    id            TEXT PRIMARY KEY,
+    submission_id TEXT NOT NULL REFERENCES submissions (id),
+    position      INTEGER NOT NULL,
+    name          TEXT NOT NULL,
+    media_type    TEXT NOT NULL,
+    category      TEXT NOT NULL CHECK (category IN ('text', 'image', 'pdf')),
+    size          INTEGER NOT NULL CHECK (size >= 0),
+    sha256        TEXT NOT NULL CHECK (length(sha256) = 64),
+    content       BLOB NOT NULL,
+    UNIQUE (submission_id, position)
+  ) STRICT;
+  CREATE TRIGGER submission_files_immutable BEFORE UPDATE ON submission_files
+  BEGIN SELECT RAISE(ABORT, 'submission files are immutable'); END;
+  CREATE TRIGGER submission_files_no_delete BEFORE DELETE ON submission_files
+  BEGIN SELECT RAISE(ABORT, 'submission files are immutable'); END;
+
+  CREATE TABLE evaluations (
+    id                TEXT PRIMARY KEY,
+    submission_id     TEXT NOT NULL REFERENCES submissions (id),
+    rubric_version_id TEXT REFERENCES rubric_versions (id),
+    evaluator_type    TEXT NOT NULL CHECK (evaluator_type IN ('ai', 'owner')),
+    evaluator         TEXT NOT NULL,
+    status            TEXT NOT NULL CHECK (status IN ('pending', 'completed', 'failed')),
+    outcome           TEXT CHECK (outcome IN ('meets_rubric', 'below_rubric', 'inconclusive')),
+    scores            TEXT NOT NULL DEFAULT '[]',
+    total_score       REAL,
+    max_score         REAL,
+    feedback          TEXT,
+    confidence        REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+    limitations       TEXT NOT NULL DEFAULT '[]',
+    suggestions       TEXT NOT NULL DEFAULT '{}',
+    error_code        TEXT,
+    error_message     TEXT,
+    provider          TEXT,
+    model             TEXT,
+    prompt_version    TEXT,
+    input_tokens      INTEGER,
+    output_tokens     INTEGER,
+    cost_usd          REAL,
+    requested_by      TEXT NOT NULL,
+    created_at        TEXT NOT NULL,
+    completed_at      TEXT
+  ) STRICT;
+  CREATE INDEX idx_evaluations_submission ON evaluations (submission_id, created_at);
+  CREATE INDEX idx_evaluations_created ON evaluations (created_at);
+  -- Only a pending evaluation may change (once, to completed or failed); results are history.
+  CREATE TRIGGER evaluations_final BEFORE UPDATE ON evaluations WHEN OLD.status <> 'pending'
+  BEGIN SELECT RAISE(ABORT, 'finished evaluations are immutable'); END;
+  CREATE TRIGGER evaluations_no_delete BEFORE DELETE ON evaluations
+  BEGIN SELECT RAISE(ABORT, 'evaluations are kept as history'); END;
+
+  CREATE TABLE evaluation_evidence (
+    id            TEXT PRIMARY KEY,
+    evaluation_id TEXT NOT NULL REFERENCES evaluations (id),
+    type          TEXT NOT NULL CHECK (type IN ('criterion_score', 'excerpt', 'owner_check', 'reference')),
+    criterion     TEXT,
+    source_ref    TEXT NOT NULL,
+    excerpt       TEXT,
+    hash          TEXT CHECK (hash IS NULL OR length(hash) = 64),
+    verified      INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
+    score         REAL,
+    note          TEXT,
+    limitations   TEXT,
+    created_at    TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX idx_evidence_evaluation ON evaluation_evidence (evaluation_id);
+  CREATE TRIGGER evaluation_evidence_immutable BEFORE UPDATE ON evaluation_evidence
+  BEGIN SELECT RAISE(ABORT, 'evidence is immutable'); END;
+  CREATE TRIGGER evaluation_evidence_no_delete BEFORE DELETE ON evaluation_evidence
+  BEGIN SELECT RAISE(ABORT, 'evidence is immutable'); END;
+
+  -- Self-assessment and verified level are separate columns and never derived from each other.
+  CREATE TABLE skill_mastery (
+    skill_id               TEXT PRIMARY KEY REFERENCES skills (id),
+    self_level             INTEGER CHECK (self_level BETWEEN 0 AND 4),
+    self_note              TEXT,
+    self_assessed_at       TEXT,
+    verified_level         INTEGER CHECK (verified_level BETWEEN 0 AND 4),
+    verified_evaluation_id TEXT REFERENCES evaluations (id),
+    verified_by            TEXT,
+    verified_at            TEXT,
+    confidence             REAL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+    updated_at             TEXT NOT NULL
+  ) STRICT;
+
+  CREATE TABLE mastery_events (
+    id            TEXT PRIMARY KEY,
+    skill_id      TEXT NOT NULL REFERENCES skills (id),
+    kind          TEXT NOT NULL CHECK (kind IN ('self', 'verified')),
+    level         INTEGER NOT NULL CHECK (level BETWEEN 0 AND 4),
+    evaluation_id TEXT REFERENCES evaluations (id),
+    note          TEXT,
+    actor         TEXT NOT NULL,
+    at            TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX idx_mastery_events_skill ON mastery_events (skill_id, at);
+  CREATE TRIGGER mastery_events_immutable BEFORE UPDATE ON mastery_events
+  BEGIN SELECT RAISE(ABORT, 'mastery history is append-only'); END;
+
+  CREATE TABLE gaps (
+    id            TEXT PRIMARY KEY,
+    skill_id      TEXT REFERENCES skills (id),
+    title         TEXT NOT NULL,
+    description   TEXT,
+    source        TEXT NOT NULL CHECK (source IN ('owner', 'ai')),
+    evaluation_id TEXT REFERENCES evaluations (id),
+    status        TEXT NOT NULL CHECK (status IN ('suggested', 'open', 'addressed', 'dismissed')),
+    created_by    TEXT NOT NULL,
+    created_at    TEXT NOT NULL,
+    updated_at    TEXT NOT NULL
+  ) STRICT;
+  CREATE INDEX idx_gaps_status ON gaps (status, created_at);
+  `,
 ];
 
 export function migrate(db: Database): number {

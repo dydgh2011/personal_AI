@@ -8,7 +8,7 @@ ENV NEXT_TELEMETRY_DISABLED=1
 COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 
-COPY tsconfig.json next.config.mjs vitest.config.mts next-env.d.ts server-entry.cjs ./
+COPY tsconfig.json next.config.mjs vitest.config.mts server-entry.cjs ./
 COPY src ./src
 COPY test ./test
 # next-env.d.ts references generated route types, so the standalone typecheck runs after the build.
