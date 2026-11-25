@@ -32,6 +32,9 @@ services:
     environment:
       LEARNING_DB_PATH: /var/lib/learning/learning.db
       LEARNING_AI_KEY_FILE: /run/secrets/ai_key
+      LEARNING_PLANNER_URL: ${LEARNING_PLANNER_URL:-}
+      LEARNING_PLANNER_KEY_FILE: ${LEARNING_PLANNER_KEY_FILE:-}
+      LEARNING_BROKER_KEY_FILE: ${LEARNING_BROKER_KEY_FILE:-}
     secrets:
       - source: learning_ai_key
         target: ai_key

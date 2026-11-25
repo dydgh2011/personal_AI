@@ -121,6 +121,46 @@ export interface ProposalDiff {
   } | null;
 }
 
+
+export type SchedulePeriod = 'day' | 'week';
+export interface ScheduleWindow { weekday: number; start: string; end: string }
+export interface ScheduleItem {
+  id: string;
+  kind: 'assignment' | 'review';
+  title: string;
+  domain: string | null;
+  deadline: string | null;
+  dueDate: string | null;
+}
+export interface ScheduleBlock extends ScheduleItem {
+  start: string;
+  end: string;
+  minutes: number;
+}
+export interface ScheduleDay {
+  date: string;
+  availableMinutes: number;
+  plannedMinutes: number;
+  blocks: ScheduleBlock[];
+}
+export interface ScheduleReview extends ScheduleItem {
+  kind: 'review';
+  dueDate: string;
+  verifiedDate: string;
+  minutes: number;
+  method: 'practice' | 'revalidate';
+}
+export interface StudyPlan {
+  date: string;
+  period: SchedulePeriod;
+  timeZone: 'America/Toronto';
+  availability: { windows: ScheduleWindow[]; isDefault: boolean };
+  calendar: 'connected' | 'disconnected' | 'unconfigured' | 'unavailable';
+  reviews: ScheduleReview[];
+  days: ScheduleDay[];
+  remaining: Array<ScheduleItem & { remainingMinutes: number }>;
+}
+
 export interface LearningStatus {
   schemaVersion: number;
   supportedSchema?: number;

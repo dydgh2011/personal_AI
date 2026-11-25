@@ -85,7 +85,7 @@ export default async function LearningOverview({ searchParams }: { searchParams:
         <Tile label="Roadmap progress" na={weightTotal === 0} value={weightTotal ? `${Math.round((weightDone / weightTotal) * 100)}%` : 'N/A'}
           note={weightTotal ? `${weightDone} of ${weightTotal} milestone weight completed` : 'no weighted milestones yet'} />
         <Tile label="Verified skills" value={`${c.skillsVerified ?? 0} / ${c.skills ?? 0}`} note={`${c.skillsSelfOnly ?? 0} self-rated only (unverified)`} />
-        <Tile label="Study time" na value="N/A" note="learning sessions are tracked from L3" />
+        <Tile label="Study time" na value="N/A" note={<a href="/learning/planner">View planned study time</a>} />
         <Tile label="Freshness" na={verified.length === 0} value={verified.length ? (stale.length ? `${stale.length} to re-check` : 'all fresh') : 'N/A'}
           note={verified.length ? `verified levels older than 90 days need a re-check` : 'no verified levels yet'} />
       </div>

@@ -49,7 +49,12 @@ function main(): void {
       if (!name || !/^[a-z][a-z0-9-]{1,40}$/.test(name) || !file) throw new Error(`Invalid PLANNER_CLIENTS entry "${entry}"`);
       return { name, key: secret(file, `the key for ${name}`) };
     });
+  const learningKeyFile = process.env.PLANNER_LEARNING_KEY_FILE?.trim();
+  if (learningKeyFile) clients.push({ name: 'learning', key: secret(learningKeyFile, 'the key for learning') });
   if (!clients.length) throw new Error('PLANNER_CLIENTS must name at least one caller');
+  if (new Set(clients.map((c) => c.name)).size !== clients.length || new Set(clients.map((c) => c.key)).size !== clients.length) {
+    throw new Error('PLANNER_CLIENTS requires distinct caller names and keys');
+  }
 
   const notifierUrl = (process.env.NOTIFIER_URL ?? '').trim().replace(/\/+$/, '');
   if (!/^https?:\/\/[^\s/]+/.test(notifierUrl)) throw new Error('NOTIFIER_URL must be an http(s) URL');

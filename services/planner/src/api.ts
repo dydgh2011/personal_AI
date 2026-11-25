@@ -32,6 +32,7 @@ interface Route {
   method: 'GET' | 'POST';
   pattern: RegExp;
   name: string;
+  learning?: true;
   handler: Handler;
 }
 
@@ -62,6 +63,17 @@ export function createApi(planner: Planner, notify: Notify, clientKeys: Array<{ 
           settings: planner.settings(),
         };
       },
+    },
+    {
+      method: 'GET', pattern: /^\/learning\/availability$/, name: 'learning.availability', learning: true,
+      handler: ({ query }) => {
+        const days = Number(query.get('days') ?? 1);
+        if (!Number.isInteger(days) || days < 1 || days > 7) throw new HttpError(400, 'invalid_request', 'days must be 1-7');
+        return planner.learningAvailability(dateParam(query, 'date', planner.today()), days);
+      },
+    },
+    { method: 'POST', pattern: /^\/learning\/proposals$/, name: 'learning.proposals.create', learning: true,
+      handler: ({ body }) => ({ proposal: planner.createLearningProposal(body) }),
     },
     { method: 'GET', pattern: /^\/day$/, name: 'day', handler: ({ query }) => planner.day(dateParam(query, 'date', planner.today())) },
     {
@@ -230,6 +242,8 @@ export function createApi(planner: Planner, notify: Notify, clientKeys: Array<{ 
       if (!candidates.length) throw new HttpError(404, 'not_found', 'Not found');
       const route = candidates.find((r) => r.method === req.method);
       if (!route) throw new HttpError(405, 'method_not_allowed', 'Method not allowed');
+      const learning = client.name === 'learning';
+      if (learning !== (route.learning === true)) throw new HttpError(403, 'forbidden', 'Planner key does not have access to this route');
       audit.op = route.name;
       const params = (url.pathname.match(route.pattern) ?? []).slice(1);
       const body = req.method === 'POST' ? await readJson(req) : {};

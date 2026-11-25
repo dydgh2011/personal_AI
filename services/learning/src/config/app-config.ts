@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+
 export const APP_CONFIG = Symbol('APP_CONFIG');
 
 /**
@@ -23,15 +25,47 @@ export interface AppConfig {
   databasePath: string;
   /** Admin Dashboard server token (owner role). */
   dashboardToken: string;
+  brokerKey?: string;
+  planner?: { url: string; key: string };
   ai: AiConfig;
 }
 
 export class ConfigError extends Error {}
 
+function optionalKey(path: string | undefined, name: string, problems: string[]): string | undefined {
+  if (!path?.trim()) return undefined;
+  let key: string;
+  try {
+    key = readFileSync(path.trim(), 'utf8').trim();
+  } catch {
+    problems.push(`${name} cannot be read`);
+    return undefined;
+  }
+  if (key.length < 32 || /\s/.test(key)) {
+    problems.push(`${name} must be at least 32 characters without spaces`);
+    return undefined;
+  }
+  return key;
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   const problems: string[] = [];
   const dashboardToken = env.LEARNING_DASHBOARD_TOKEN?.trim() ?? '';
   if (dashboardToken.length < 32) problems.push('LEARNING_DASHBOARD_TOKEN is required (>= 32 characters)');
+
+  const brokerKey = optionalKey(env.LEARNING_BROKER_KEY_FILE, 'LEARNING_BROKER_KEY_FILE', problems);
+  if (brokerKey === dashboardToken) problems.push('Learning requires separate dashboard and broker credentials');
+
+  const plannerUrl = env.LEARNING_PLANNER_URL?.trim().replace(/\/+$/, '') || undefined;
+  const plannerKey = optionalKey(env.LEARNING_PLANNER_KEY_FILE, 'LEARNING_PLANNER_KEY_FILE', problems);
+  if (plannerUrl || plannerKey) {
+    try {
+      const url = new URL(plannerUrl ?? '');
+      if (!plannerKey || !['http:', 'https:'].includes(url.protocol) || url.origin !== plannerUrl) throw new Error();
+    } catch {
+      problems.push('LEARNING_PLANNER_URL must be an http(s) origin and requires LEARNING_PLANNER_KEY_FILE');
+    }
+  }
 
   const port = Number(env.PORT ?? 3000);
   if (!Number.isInteger(port) || port < 1 || port > 65535) problems.push('PORT must be 1-65535');
@@ -61,6 +95,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     port,
     databasePath: env.LEARNING_DB_PATH?.trim() || './data/learning.db',
     dashboardToken,
+    brokerKey,
+    planner: plannerUrl && plannerKey ? { url: plannerUrl, key: plannerKey } : undefined,
     ai: {
       provider,
       model,

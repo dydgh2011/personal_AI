@@ -39,6 +39,12 @@ Discord 메시지에도 같은 색 점(🔵🩵🟡🔴🟢🟣🩷)이 붙습�
 3. `proposal_apply` (사용자 OK 필요): 고른 항목만 Kelly 캘린더에 씁니다. 쓴 항목은 ✅로 표시되고 더는 시안에서 고칠 수 없습니다(그 뒤에는 event_update).
 4. `proposal_discard`: 고르지 않은 시안을 버립니다.
 
+### Learning 시안
+
+Learning은 전용 키로 기간별 바쁜 시간과 이미 배치한 학습 시간만 조회하고, 과제·복습 블록을 시안으로 저장합니다. Kelly에서 기존 시안 목록에 표시하며, 주인이 고른 블록을 승인하면 관련 할 일과 연결된 캘린더 일정이 생깁니다. 같은 학습 항목의 블록은 할 일 하나를 공유합니다. 이미 생성한 할 일의 마감일은 새 시안을 적용해도 유지됩니다.
+
+Learning의 `learning-planner.key`를 Planner에 읽기 전용으로 마운트한 후 `PLANNER_LEARNING_KEY_FILE`에 경로를 지정합니다. 이 키에 허용되는 API는 `GET /learning/availability`와 `POST /learning/proposals`입니다.
+
 ## 반복 규칙
 
 `repeat`(daily, weekdays, weekly, biweekly, monthly, yearly)에 `interval`(N마다), `repeatDays`(요일), `monthlyBy`(date: 같은 날짜 / weekday: 둘째 화요일처럼, 마지막 주면 "마지막 화요일"), `until`(끝 날짜) 또는 `count`(횟수)를 더합니다. RRULE은 코드가 만들고, LLM은 이 선택지만 고릅니다.

@@ -10,10 +10,11 @@ import { conflict, unprocessable } from '../common/errors.js';
 import { SQLITE_CONNECTION } from '../database/database.module.js';
 import { contentHash, validateContent } from '../roadmaps/content.js';
 import { normalizeRubric } from '../rubrics/rubrics.js';
+import { validateWindows } from '../schedule/schedule.js';
 
-/** 2 = L2 (milestones, rubrics, assignments, submissions with files, evaluations, mastery, gaps). 1 still imports. */
-export const SCHEMA_VERSION = 2;
-const SUPPORTED_SCHEMAS = [1, 2];
+/** Version 3 adds the owner's weekly study availability. Versions 1 and 2 still import. */
+export const SCHEMA_VERSION = 3;
+const SUPPORTED_SCHEMAS = [1, 2, 3];
 
 /** L2 export keys -> tables, in insert order (parents first). */
 const L2_TABLES = [
@@ -67,9 +68,10 @@ export class ImportDto {
   @IsOptional() @IsArray() mastery?: Array<Record<string, unknown>>;
   @IsOptional() @IsArray() masteryEvents?: Array<Record<string, unknown>>;
   @IsOptional() @IsArray() gaps?: Array<Record<string, unknown>>;
+  @IsOptional() @IsArray() scheduleWindows?: unknown[];
 }
 
-const TABLES = ['domains', 'ideas', 'goals', 'skills', 'roadmaps', 'roadmap_versions', 'ai_proposals', ...L2_TABLES.map(([, t]) => t)] as const;
+const TABLES = ['domains', 'ideas', 'goals', 'skills', 'roadmaps', 'roadmap_versions', 'ai_proposals', ...L2_TABLES.map(([, t]) => t), 'schedule_preferences'] as const;
 
 @Injectable()
 export class ExportService {
@@ -77,6 +79,7 @@ export class ExportService {
 
   export(actor: string) {
     const all = (table: string) => this.db.prepare(`SELECT * FROM ${table} ORDER BY rowid`).all() as Array<Record<string, unknown>>;
+    const preferences = all('schedule_preferences')[0];
     const data = {
       app: 'personal-ai-learning' as const,
       schemaVersion: SCHEMA_VERSION,
@@ -92,6 +95,7 @@ export class ExportService {
       ...(Object.fromEntries(L2_TABLES.map(([key, table]) => [key, table === 'submission_files'
         ? all(table).map(({ content, ...rest }) => ({ ...rest, content_base64: (content as Buffer).toString('base64') }))
         : all(table)])) as Record<L2Key, Array<Record<string, unknown>>>),
+      ...(preferences ? { scheduleWindows: JSON.parse(String(preferences.windows)) as unknown[] } : {}),
       counts: {} as Record<string, number>,
     };
     for (const k of ['domains', 'ideas', 'goals', 'skills', 'roadmaps', 'versions', 'proposals', ...L2_TABLES.map(([key]) => key)] as const) data.counts[k] = data[k].length;
@@ -115,6 +119,7 @@ export class ExportService {
       else if (contentHash(checked.content!) !== v.content_hash) problems.push(`version ${String(v.id)}: content hash does not match`);
     }
     problems.push(...this.checkL2(dto));
+    const scheduleWindows = dto.scheduleWindows === undefined ? undefined : validateWindows(dto.scheduleWindows);
     if (problems.length) throw unprocessable('INVALID_IMPORT', problems[0], { errors: problems.slice(0, 20) });
 
     const insert = (table: string, rows: Array<Record<string, unknown>>, columns: string[]) => {
@@ -149,6 +154,7 @@ export class ExportService {
         for (const e of content.edges) this.db.prepare('INSERT INTO prerequisite_edges (version_id, from_key, to_key) VALUES (?, ?, ?)').run(v.id, e.from, e.to);
       }
       for (const r of dto.roadmaps) this.db.prepare('UPDATE roadmaps SET current_version_id = ? WHERE id = ?').run(r.current_version_id ?? null, r.id);
+      if (scheduleWindows) this.db.prepare('INSERT INTO schedule_preferences (id, windows) VALUES (1, ?)').run(JSON.stringify(scheduleWindows));
       // L2: the columns come from the live schema, so every stored field round-trips.
       for (const [key, table] of L2_TABLES) {
         const columns = (this.db.pragma(`table_info(${table})`) as Array<{ name: string }>).map((c) => c.name);

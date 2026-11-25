@@ -73,8 +73,11 @@ class FakeCalendar implements CalendarApi {
     return this.events.get(id) ?? null;
   }
   async insertEvent(i: EventInput) {
-    const id = this.add(i.summary, '2000-01-01', '00:00', '01:00');
-    Object.assign(this.events.get(id)!, this.fromInput(i));
+    const generated = this.add(i.summary, '2000-01-01', '00:00', '01:00');
+    const id = i.id ?? generated;
+    const event = this.events.get(generated)!;
+    this.events.delete(generated);
+    this.events.set(id, { ...event, ...this.fromInput(i), id });
     return id;
   }
   async patchEvent(id: string, i: EventInput) {
@@ -145,6 +148,104 @@ function setup(now = SAT_10, connected = true) {
     setClock: (t: number) => (clock = t),
   };
 }
+
+
+describe('Learning planner drafts', () => {
+  const key = 'assignment:52d53d26-d51b-4d35-b505-49e3863feb35';
+  const date = '2026-11-22';
+  const draftBody = {
+    date, period: 'day',
+    items: [
+      { date, title: 'Solve one problem', start: '18:00', end: '19:00', task: { key, priority: 1, estimateMinutes: 90, deadline: date } },
+      { date, title: 'Solve one problem', start: '23:30', end: '24:00', task: { key, priority: 1, estimateMinutes: 90, deadline: date } },
+    ],
+  };
+
+  it('only exposes scoped planner calls and waits for the existing approval before writing a todo or calendar block', async () => {
+    const { db, planner, account, cal } = setup();
+    const learning = { 'X-Planner-Key': 'learning-fixture' };
+    const hermes = { 'X-Planner-Key': 'broker-fixture' };
+    const keys = [{ name: 'hermes-broker', key: hermes['X-Planner-Key'] }, { name: 'learning', key: learning['X-Planner-Key'] }];
+    const server = createApi(planner, async () => 'delivered', keys, silent);
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+    const base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
+    const post = (path: string, headers: Record<string, string>, body: object) => fetch(base + path, {
+      method: 'POST', headers: { ...headers, 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    });
+    try {
+      const unavailable = await fetch(base + `/learning/availability?date=${date}`, { headers: learning });
+      assert.equal(unavailable.status, 200);
+      assert.deepEqual(await unavailable.json(), { timeZone: TZ, calendarConnected: false, reserved: [], days: [{ date, busy: [] }] });
+      assert.equal(account.created, 0, 'reading availability cannot create a Google calendar');
+      await planner.cal(); // normal owner use creates the managed calendar
+      cal.add('private appointment', date, '12:00', '13:00');
+      cal.add('free slot', date, '14:00', '15:00', { transparent: true });
+      const availability = await fetch(base + `/learning/availability?date=${date}`, { headers: learning });
+      assert.deepEqual(await availability.json(), {
+        timeZone: TZ, calendarConnected: true, reserved: [], days: [{ date, busy: [{ start: 720, end: 780 }] }],
+      });
+      assert.equal((await post('/learning/proposals', hermes, draftBody)).status, 403);
+      assert.equal((await post('/todos', learning, {})).status, 403);
+      const response = await post('/learning/proposals', learning, draftBody);
+      const { proposal } = await response.json() as { proposal: { code: string; items: Array<{ todo?: unknown }> } };
+      assert.equal(response.status, 200);
+      assert.deepEqual(proposal.items[0].todo, { title: 'Solve one problem', estimateMinutes: 90, deadline: date });
+      const retry = await post('/learning/proposals', learning, draftBody);
+      assert.equal((await retry.json() as { proposal: { code: string } }).proposal.code, proposal.code);
+      assert.equal(planner.proposals().length, 1);
+      assert.equal(planner.listTodos().length, 0);
+      assert.equal(cal.events.size, 2);
+      assert.equal((await post(`/proposals/${proposal.code}/apply`, learning, {})).status, 403);
+
+      const approve = await post(`/proposals/${proposal.code}/apply`, hermes, {});
+      assert.equal(approve.status, 200);
+      const todo = planner.listTodos()[0];
+      assert.equal(planner.listTodos().length, 1);
+      assert.equal(todo.deadline, date);
+      const day = await planner.day(date);
+      assert.deepEqual(day.blocks.map((b) => [b.start, b.end, b.todoId]), [['18:00', '19:00', todo.id], ['23:30', '24:00', todo.id]]);
+      assert.equal([...cal.events.values()].find((e) => e.plannerBlockId === day.blocks[1].id)?.end, toInstant('2026-11-23', '00:00', TZ).toISOString());
+      assert.deepEqual((await planner.learningAvailability(date, 1)).reserved, [{ key, minutes: 90 }]);
+      assert.equal((await post(`/proposals/${proposal.code}/apply`, hermes, {})).status, 400);
+      assert.equal(cal.events.size, 4, 'reapplying cannot duplicate calendar events');
+      assert.equal(planner.listTodos().length, 1);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      db.close();
+    }
+  });
+
+  it('recovers a calendar write before a failed response and refuses a newly busy slot', async () => {
+    const { db, planner, cal } = setup();
+    try {
+      await planner.cal();
+      const proposed = planner.createLearningProposal(draftBody);
+      const originalInsert = cal.insertEvent.bind(cal);
+      let loseResponse = true;
+      cal.insertEvent = async (event) => {
+        const id = await originalInsert(event);
+        if (loseResponse) {
+          loseResponse = false;
+          throw new Error('simulated interrupted write response');
+        }
+        return id;
+      };
+      await assert.rejects(planner.applyProposal(proposed.code, { items: [1] }, 'hermes'), /interrupted/);
+      assert.equal(cal.events.size, 1);
+      assert.equal(planner.listTodos().length, 0);
+      await planner.applyProposal(proposed.code, { items: [1] }, 'hermes');
+      assert.equal(cal.events.size, 1);
+      assert.equal(planner.listTodos().length, 1);
+
+      cal.add('new appointment', date, '23:40', '23:55');
+      await assert.rejects(planner.applyProposal(proposed.code, { items: [2] }, 'hermes'), (error: unknown) => error instanceof PlannerError && error.code === 'plan_conflict');
+      assert.equal(cal.events.size, 2);
+      assert.equal(planner.proposal(proposed.code).items[1].applied, false);
+    } finally {
+      db.close();
+    }
+  });
+});
 
 describe('time', () => {
   it('converts Toronto wall-clock times across DST', () => {
