@@ -43,10 +43,16 @@ services:
     cpus: 2.0
 
     networks:
-      - ai-internal
+      - ai-internal      # internal: hermes-broker and the controller (status probe hermes:9119)
+      - hermes-egress    # Discord, and the 127.0.0.1 ports above (an internal network cannot publish ports)
 
 networks:
+  # Hermes <-> hermes-broker <-> controller. internal: no route to the internet.
   ai-internal:
+    driver: bridge
+    internal: true
+  # Hermes only: the internet (Discord, model calls not going through the gateway) and its host ports.
+  hermes-egress:
     driver: bridge
 
 secrets:

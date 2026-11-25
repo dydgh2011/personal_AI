@@ -1,15 +1,16 @@
 # NestJS Task Controller. Merge with the existing files, e.g.:
 #   docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yaml up -d --build controller
 #
-# Networks:
+# Networks (every *-internal network is internal: true, i.e. no route to the internet):
 #   ai-internal - shared with Hermes (defined in compose.yaml); hermes-broker lives here
-#   default     - the project network claude-worker / codex-worker already use
+#   controller-egress - the controller alone: GitHub read API + its 127.0.0.1 host port
+#   claude-worker-internal / codex-worker-internal - one worker and the controller each (compose.workers.yaml)
 #   repo-egress - internet access for repo-sync only
 #   admin-internal - the Admin Dashboard (compose.dashboard.yaml) and the controller only
 #   publisher-internal - the GitHub Publisher (compose.publisher.yaml) and the controller only
-#   test-internal - the isolated test runner (compose.test-runner.yaml) and the controller only; no internet
-# The controller joins ai-internal and default so the broker and the workers can reach
-# http://controller:3000, while the workers and Hermes stay on separate networks.
+#   test-internal - the isolated test runner (compose.test-runner.yaml) and the controller only
+# The controller joins ai-internal and one network per worker so the broker and each worker can reach
+# http://controller:3000, while the two workers and Hermes cannot reach each other.
 # Hermes holds no controller token; it reaches the controller only through hermes-broker.
 #
 # No Docker socket is mounted: the controller cannot control containers.
@@ -41,7 +42,9 @@ services:
 
     networks:
       - ai-internal
-      - default
+      - controller-egress    # GitHub read API and the 127.0.0.1:8700 port; the controller alone
+      - claude-worker-internal   # claude-worker only (defined in compose.workers.yaml)
+      - codex-worker-internal    # codex-worker only (defined in compose.workers.yaml)
       - admin-internal   # Admin Dashboard only (compose.dashboard.yaml)
       - publisher-internal   # GitHub Publisher only (compose.publisher.yaml)
       - test-internal        # isolated test runner only (compose.test-runner.yaml)
@@ -158,12 +161,18 @@ volumes:
 networks:
   repo-egress:
     driver: bridge
-  # Dashboard <-> controller. Hermes and the workers are not on it.
+  # The controller alone: GitHub read API (compose.github.yaml) and its 127.0.0.1 host port
+  # (a container only on internal networks cannot publish ports).
+  controller-egress:
+    driver: bridge
+  # Dashboard <-> controller. Hermes and the workers are not on it. internal: no internet.
   admin-internal:
     driver: bridge
-  # Publisher <-> controller. Nothing else is on it.
+    internal: true
+  # Publisher <-> controller. Nothing else is on it. internal: the publisher's GitHub access is publisher-egress.
   publisher-internal:
     driver: bridge
+    internal: true
   # Test runner <-> controller. internal: no route to the internet for untrusted test code.
   test-internal:
     driver: bridge

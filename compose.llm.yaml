@@ -7,7 +7,8 @@
 #   caller are fixed in services/llm-gateway/src/config.ts. Provider keys never leave this container.
 # - Free quotas are counted here (OpenAI shared 2.5M tokens/day stops at 80%, Gemini 500 requests/day,
 #   Groq 200K tokens/day). Paid routes need the owner's /ai-paid on for that day (cap LLM_PAID_DAILY_CAP_USD).
-# - llm-internal: callers only, no internet. llm-egress: the providers. notify-internal: the notifier.
+# - No internet on: llm-internal (Hermes), learning-internal (dashboard, learning), llm-notify (notifier,
+#   school). llm-egress: the providers, the gateway alone.
 # - No host port. Usage: GET /usage (hermes, dashboard keys).
 
 services:
@@ -45,9 +46,10 @@ services:
     volumes:
       - llm-data:/var/lib/llm-gateway        # gateway.db: usage records, daily approvals (no secrets)
     networks:
-      - llm-internal
-      - llm-egress
-      - notify-internal
+      - llm-internal         # Hermes only
+      - llm-egress           # the providers; the gateway alone
+      - llm-notify           # notifier (quota events) and school
+      - learning-internal    # dashboard (usage page) and learning (drafts); defined in compose.dashboard.yaml
     read_only: true
     tmpfs:
       - /tmp:size=16m
@@ -77,6 +79,8 @@ services:
     secrets:
       - source: notifier_llm_key
         target: llm_key
+    networks:
+      - llm-notify
 
   # Overlay: Hermes talks to the gateway (model.provider custom, base_url http://llm-gateway:8094/v1,
   # api_key ${LLM_GATEWAY_KEY} from secrets/llm-hermes.env).
@@ -101,9 +105,8 @@ services:
       - source: llm_learning_key
         target: llm_key
     networks:
-      - learning-internal
+      - learning-internal    # reaches the gateway here (the gateway joins learning-internal)
       - learning-egress
-      - llm-internal
 
   # Overlay: the dashboard's "AI usage" page reads GET /usage (its key has no aliases and no control).
   dashboard:
@@ -115,18 +118,24 @@ services:
         target: llm_key
     networks:
       - admin-internal
-      - learning-internal
-      - llm-internal
+      - learning-internal    # reaches the gateway here (the gateway joins learning-internal)
 
 volumes:
   llm-data:
 
+# Every internal network below holds only services that all call one another, so no caller of the
+# gateway can reach another caller through it (e.g. Hermes cannot reach school or learning).
 networks:
+  # Hermes <-> gateway only.
   llm-internal:
     driver: bridge
     internal: true
   llm-egress:
     driver: bridge
+  # gateway -> notifier (quota events), school -> gateway and school -> notifier. compose.school.yaml adds school.
+  llm-notify:
+    driver: bridge
+    internal: true
 
 secrets:
   llm_openai_public:

@@ -4,7 +4,9 @@
 #
 # - Owns its database (learning-data volume). No other service reads or writes it.
 # - Reachable only by the Admin Dashboard server over learning-internal (defined in
-#   compose.dashboard.yaml). Hermes, the workers, the publisher and the test runner are not on it.
+#   compose.dashboard.yaml; internal, no internet). With compose.llm.yaml the LLM gateway is on it too,
+#   because both the dashboard and learning call it; the gateway holds no learning token.
+#   Hermes, the workers, the publisher and the test runner are not on it.
 #   (Hermes access is planned for L4, through hermes-broker with a narrower token.)
 # - learning-egress: outbound only, for the AI provider once the owner configures it.
 # - No Docker socket, no controller / GitHub / worker / publisher credentials.

@@ -8,7 +8,7 @@
 #   by the broker). The planner API (8091) has no host port.
 # - Published on the host: 127.0.0.1:8720 only, for Google's redirect after the owner signs in
 #   (loopback redirect of a desktop OAuth client). It serves /oauth/callback and nothing else.
-# - planner-egress: Google (oauth2.googleapis.com, www.googleapis.com). notify-internal: the notifier.
+# - planner-egress: Google (oauth2.googleapis.com, www.googleapis.com). planner-internal: broker and notifier.
 # - Google tokens live only in the planner-data volume (SQLite), never in logs or API answers.
 
 services:
@@ -40,8 +40,7 @@ services:
     ports:
       - "127.0.0.1:8720:8720"              # Google sign-in redirect only (host-local)
     networks:
-      - planner-internal
-      - notify-internal
+      - planner-internal     # hermes-broker and the notifier (no internet)
       - planner-egress
     read_only: true
     tmpfs:
@@ -72,6 +71,8 @@ services:
     secrets:
       - source: notifier_planner_key
         target: planner_key
+    networks:
+      - planner-internal     # planner -> notifier (the broker calls both, so nobody reaches more than it calls)
 
   # Overlay: the broker forwards Hermes' /planner/* calls to the planner.
   hermes-broker:
@@ -91,6 +92,8 @@ volumes:
   planner-data:
 
 networks:
+  # hermes-broker, planner, notifier: each calls the others (broker -> planner, broker -> notifier,
+  # planner -> notifier). internal: no internet.
   planner-internal:
     driver: bridge
     internal: true
