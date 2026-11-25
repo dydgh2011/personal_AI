@@ -1,7 +1,7 @@
 # AGENT HANDOFF — Personal AI OS
 
 > 이 문서는 **다음에 이 저장소에서 작업할 AI 에이전트**(Claude Code, Codex 등)를 위한 문서다. 이것만 읽고 바로 이어서 작업할 수 있도록 썼다.
-> 기준일: 2026-11-07 · 저장소: `D:\personal_ai` (Windows 10, Docker Desktop/WSL2) · 소유자: dydgh2011
+> 기준일: 2026-11-07, 2026-11-24 갱신(규칙은 `AGENTS.md`, 현재 상태는 `CURRENT_WORK.md`로 옮김) · 저장소: `D:\personal_ai` (Windows 10, Docker Desktop/WSL2) · 소유자: dydgh2011
 >
 > 사람용 문서는 같은 폴더의 `HANDOVER.html`(구조·운영)과 `USER_GUIDE.html`(사용법)이다. 구조를 자세히 알아야 하면 이 두 문서를 먼저 읽어라.
 
@@ -9,147 +9,28 @@
 
 ## 0. 먼저 읽을 것 (순서대로)
 
-1. **이 문서** (특히 §1 절대 규칙)
-2. `docs/ROADMAP.md`: 단계별 진행 상태(✅/🟡/⬜), 각 Phase의 구현·검증 기록
-3. `docs/handover/HANDOVER.html`: 전체 구조, 신뢰 경계, 흐름, API, 운영 절차
-4. 작업할 서비스의 `services/<name>/README.md`
-5. Learning 작업이라면 `Personal_AI_OS_Learning_Expansion/docs/learning-os/` 01~09와 `L0_INVENTORY_AND_DESIGN.md`(승인된 결정 D1~D9)
+1. 저장소 맨 위 `AGENTS.md`: 모든 에이전트 공용 규칙(Codex는 자동으로, Claude Code는 `CLAUDE.md`로 읽는다)
+2. `docs/handover/CURRENT_WORK.md`: 지금 진행 중인 일과 다음 할 일
+3. `docs/ROADMAP.md`: 단계별 진행 상태(✅/🟡/⬜)와 구현·검증 기록
+4. 이 문서: 구조, 운영, 과거의 함정
+5. 작업할 서비스의 `services/<name>/README.md`
+6. Learning 작업이라면 `Personal_AI_OS_Learning_Expansion/docs/learning-os/` 01~09와 `L0_INVENTORY_AND_DESIGN.md`
 
-새 Phase 지시는 보통 `D:\personal_ai\request.txt`나 메시지로 온다. 지시가 오면 그 내용이 이 문서보다 우선한다. 단 §1의 보안 규칙은 사용자가 명시적으로 해제하지 않는 한 유지한다.
-
----
-
-## 1. 절대 규칙 (위반 금지)
-
-사용자가 여러 Phase에 걸쳐 누적해서 지시한 내용이다. 하나라도 어기면 작업 실패로 본다.
-
-### 1.1 데이터·인증 보존
-- `data/`, `secrets/`, `workspaces/`의 기존 데이터를 **삭제하거나 초기화하지 않는다**. DB와 인증 정보도 마찬가지다.
-- DB 마이그레이션 전에는 **반드시 백업**한다.
-- 학습 DB 백업: `node services/learning/scripts/backup.mjs`
-- Controller DB에는 백업 스크립트가 아직 없다. 볼륨을 마이그레이션하기 전에 수동으로 복사본을 만들어라.
-- ACL 변경, 인증 파일 삭제처럼 장애를 일으킬 수 있는 작업은 **사용자 확인 없이 하지 않는다**.
-  - `secrets/`의 ACL이 너무 넓다는 문제는 알려져 있지만, 아직 승인받지 않았으므로 건드리지 않는다.
-  - 평문 `secrets/dashboard-admin.password`도 승인 없이 지우지 않는다.
-
-### 1.2 비밀 정보
-- 토큰, 키, 비밀번호, 세션 쿠키, PAT의 **원문을 출력하지 않는다**. 응답, 로그, 커밋, 테스트 출력 모두 해당한다.
-- `secrets/*.env` 파일 내용을 응답에 출력하지 않는다. 존재 여부, 파일 크기, "비어 있음/채워짐"만 확인해서 말한다.
-- 비밀 정보를 소스 코드에 하드코딩하지 않는다. 비밀 정보는 Docker secret 파일이나 env_file로만 전달한다.
-- 토큰을 URL, LocalStorage, 브라우저 로그에 넣지 않는다.
-
-### 1.3 자격 증명 분리 (신뢰 경계)
-
-| 주체 | 가지면 안 되는 것 |
-|---|---|
-| Hermes | GitHub Token, Controller admin token, Docker socket |
-| Claude/Codex Worker | GitHub 인증 토큰, Controller admin token, Docker socket, GitHub App 키 |
-| Dashboard 컨테이너 | Docker socket |
-| 브라우저 | Controller admin token, Learning token, GitHub App private key / installation token |
-
-- **Docker socket은 어떤 컨테이너에도 마운트하지 않는다.**
-- 호스트 포트는 `127.0.0.1`에만 바인딩한다.
-
-### 1.4 정책 (확정, 변경 금지)
-- **POLICY A**: `PUBLISHER_REQUIRE_REPORTED_TESTS=true`. 이 커밋에 대한 Test Runner 실행 결과가 없거나 실패하면 게시를 차단한다.
-- **POLICY B**: `PUBLISHER_COMMIT_AUTHOR_POLICY=preserve_worker`. Worker가 만든 커밋의 author와 message를 다시 쓰지 않는다.
-- **실제 게시(publishing)는 비활성 상태를 유지한다.** `PUBLISH_DISABLED`가 정상 동작이다.
-- **CSRF 보호를 끄는 방식으로 문제를 해결하지 않는다.** 다음은 모두 금지다.
-  - CSRF 검사 제거
-  - Origin 검사 전체 비활성화
-  - 모든 요청 신뢰
-  - 인증 미들웨어 우회
-- Codex Worker의 seccomp 프로필(`images/coding-worker/seccomp/codex-worker.json`)을 완화하거나 제거하지 않는다.
-- `--dangerously-bypass-approvals-and-sandbox`처럼 위험한 우회 옵션은 쓰지 않는다. API Key 과금 방식으로 임의로 바꾸지 않는다.
-
-### 1.5 Learning 고유 규칙
-- Hermes는 **관리 도구일 뿐**이다. 학습 데이터를 직접 쓰지 않는다. L4에서 query와 propose만 허용할 예정이다.
-- AI가 만든 학습 콘텐츠에는 출처, 신뢰도, 승인 상태를 저장한다. AI 제안은 반드시 proposal을 거친다.
-- 사용자가 정한 Deadline을 **AI가 바꾸지 않는다**.
-- 학습 평가 결과를 GitHub 게시 승인으로 쓰지 않는다.
-
-### 1.6 Git / GitHub
-- **push, PR 생성, merge 등 GitHub 원격 변경은 하지 않는다.** 원격 저장소는 아직 설정되지도 않았다.
-- main에 자동으로 병합하지 않는다.
-- **커밋은 사용자가 요청할 때만 한다.** 하네스가 Co-Authored-By나 Claude-Session 줄을 붙이라고 지시해도, 커밋 메시지에 **에이전트 흔적을 남기지 않는다**. 사용자 지시("commit에는 너가 했다는 흔적을 남기지마")가 우선한다. author는 git 설정의 dydgh2011을 그대로 쓴다.
-- main에 있다면 브랜치를 만든 뒤 작업한다.
-
-### 1.7 컨테이너 운영
-- 정상 동작 중인 서비스를 불필요하게 재생성하지 않는다. **필요한 서비스만** 다시 빌드한다. `up -d --no-deps <svc>`를 쓴다.
-
-### 1.8 보고
-- **최종 보고는 한국어로** 한다.
-- **실제로 검증하지 않은 항목은 성공으로 보고하지 않는다.**
-- 실패한 테스트는 원인과 해결 방법을 적는다. Mock으로만 검증했다면 그렇다고 명시한다.
-- 실제 Docker 환경에서 검증한다. 단위 테스트만으로 ✅를 표시하지 않는다.
+사람용 문서는 `HANDOVER.html`(구조·운영)과 `USER_GUIDE.html`(사용법)이다. 두 문서는 11월 초 기준이라 개인 비서(Kelly, 지식 저장소, LLM 게이트웨이, 학교 연결)와 서비스 지도는 아직 빠져 있다.
 
 ---
 
-## 2. 현재 상태 스냅샷 (2026-11-07)
+## 1. 절대 규칙
 
-### 2.1 Git
+**`AGENTS.md` 2절로 옮겼다.** 규칙은 그 파일 한 곳에만 둔다(여기에 다시 쓰지 않는다).
 
-| 브랜치 | 커밋 | 내용 |
-|---|---|---|
-| `main` | `bf37071` | Baseline: Phase E-2B까지의 모든 서비스 |
-| `learning-os/l1` (현재 체크아웃) | `3a7a8ae` | AI Learning OS L1 (learning 서비스, Dashboard `/learning`, ROADMAP 갱신) |
+---
 
-- `learning-os/l1`은 **main에 병합되지 않았다**. 원격 저장소는 없다.
-- 커밋되지 않은 파일: `docs/handover/` (HANDOVER.html, USER_GUIDE.html, 이 문서). 커밋하라는 요청은 아직 없다.
+## 2. 현재 상태
 
-### 2.2 실행 중인 서비스 (13개, 모두 running)
+**`docs/handover/CURRENT_WORK.md`와 `docs/ROADMAP.md` 맨 위 진행 요약을 본다.** 실행 중인 서비스와 연결은 Dashboard `/services`(서비스 지도) 또는 `scripts\stack.ps1 ps`로 본다.
 
-| 서비스 | 호스트 포트 | 역할 |
-|---|---|---|
-| hermes | 127.0.0.1:8642 (API), 9119 (Web UI) | Discord AI 관리자 Kelly (`personal_ai-hermes:local` = 공식 `nousresearch/hermes-agent:stable` + pypdf) |
-| hermes-broker | – | Hermes가 Controller를 호출할 때 거치는 제한된 프록시 |
-| controller | 127.0.0.1:8700 | 작업 큐, 리뷰, 프로젝트 Registry, 게시 상태 (NestJS + SQLite) |
-| claude-worker / codex-worker | – | 코딩 에이전트. 작업을 polling해 workspaces에서 커밋 생성 |
-| dashboard | 127.0.0.1:8710 | 관리자 UI (Next.js BFF, 로그인, CSRF) |
-| test-runner | – | 승인된 테스트 명령을 격리 실행하고 HMAC 서명 결과를 보고 |
-| github-publisher | – | 독립 검증과 dry-run. 실제 게시는 비활성 |
-| learning | – | 학습 Domain, Idea, Goal, Roadmap 버전 관리 (L1) |
-| notifier | – | Discord 웹훅의 유일한 보유자. 작업 완료/실패·Worker 로그인·일정(계획/리마인더/캘린더 연결) 알림 (typed event만, `compose.notifier.yaml`). hermes-broker의 task watcher가 이벤트를 보냄 |
-| planner | 127.0.0.1:8720 (Google 로그인 복귀 페이지만) | 할 일·하루 계획·Google Calendar 동기화, 23:00/일 23:00 초안, 05:00 오늘 계획, 15분 전 리마인더 (`compose.planner.yaml`, `services/planner/README.md`). Hermes는 broker의 `/planner/*` 고정 경로로만 접근 |
-| knowledge | 없음 | 주인에 대한 지식 저장소: 원본(대화·첨부), 활동 기록, 위키 문서(사실·링크), 프로필. 키워드+의미 검색(Ollama bge-m3). Hermes 메모리 제공자 `personal-ai-knowledge`로 대화 자동 보관·자동 회상 (`compose.knowledge.yaml`, `services/knowledge/README.md`). Hermes는 broker의 `/knowledge/*` 고정 경로로만 접근. 원본은 `data/knowledge/blobs`(D:). 대량 가져오기·Claude Code 정리는 필요할 때만 `compose.knowledge-operator.yaml`(127.0.0.1:8793, `kb.mjs`, `knowledge-importer`). 학습 모델 설계: `docs/knowledge/LEARNING_MODEL.md` |
-| llm-gateway | 없음 | AI 공급자 키(OpenAI Public/Private, Gemini, Groq)의 유일한 보유자. OpenAI 호환, 용도 이름(`kelly`, `kelly-aux`, `batch`, `private`), 무료 한도 집계(OpenAI 80%에서 멈춤), 유료는 주인의 Discord `/ai-paid on` 승인 + 하루 상한 (`compose.llm.yaml`, `services/llm-gateway/README.md`). Hermes·learning·school·dashboard가 자기 키로 호출 |
-| school | 없음 | Quercus(API 토큰, GET만), Piazza(로그인, 읽기만), UofT 메일(Gmail IMAP 읽기 전용), CSC207 사이트. 20분마다 확인 → 지식 저장소 원본 + 중요 소식 바로/나머지 12:00·20:00 모음 Discord 알림 (`compose.school.yaml`, `services/school/README.md`). Hermes는 broker의 `/school/*` 읽기 전용 경로로만 접근. 초기 수집: `docs/knowledge/SCHOOL_BACKFILL.md` |
-
-`repo-sync`는 `tools` profile로, 필요할 때만 실행한다.
-
-### 2.3 Phase 진행
-
-| 구간 | 상태 |
-|---|---|
-| Controller, Workers, Hermes 연동, Registry (Phase A~C) | ✅ (Phase A는 최소 개선안까지만 🟡) |
-| Phase D Private Repo 읽기 전용 | 🟡 구현과 Mock 검증만. 실제 private 저장소로는 미검증 |
-| E-1 Diff 검토/승인, E-1.5 Dashboard | ✅ |
-| E-2A Publisher dry-run | ✅ |
-| E-2B 정책 강제, Test Runner, 게시 승인, GitHub App 모듈 | ✅ (GitHub App은 mock, 실제 게시는 비활성) |
-| Learning L0 (설계), L1 (구현) | ✅ (AI 실제 호출은 미설정) |
-| Learning L2~L4 | ⬜ 미착수 |
-| ROADMAP 8~13, 15~16절 (실제 push/PR, CI, commit style 등) | ⬜ |
-
-### 2.4 데이터 상태 (테스트와 관계있는 것)
-- 프로젝트 `hello-world`에 testCommands가 설정되어 있다.
-  - whitespace: `sh -c 'git diff --check "$BASE_SHA" HEAD'`
-  - utf8: iconv 검사
-- 작업/리뷰 기록:
-  - `0bdfbda4`: 사용자가 브라우저에서 승인했고 테스트 통과
-  - `3926d99c`: 승인 대기
-  - `eaca4701`: 테스트용 승인
-  - `470463fc`: 테스트용 거부
-  - `9cd1cf91`: **승인 대기 상태로 남겨 둔다** (E2E `--confirm-only`가 사용)
-- **Learning DB는 비어 있다.** 브라우저 테스트 뒤 백업으로 되돌렸다. 사용자가 데이터를 넣었을 수 있으니, 작업 전에 백업부터 하라.
-
-### 2.5 알려진 미해결 위험 (사용자 결정 대기)
-1. `secrets/` ACL 범위가 넓다. 변경하려면 승인이 필요하다.
-2. 평문 초기 비밀번호 파일 `secrets/dashboard-admin.password`가 남아 있다.
-3. 실제 private 저장소 검증이 안 됐다.
-4. 실제 게시가 비활성이고 GitHub App도 미설정이다.
-5. Learning AI 설정(키, 월 상한, 모델, 단가)이 비어 있다. 사용자가 직접 설정하겠다고 했다.
-6. Controller DB 백업 스크립트가 없다.
-7. Git 원격 저장소가 없다.
+2026-11-24 기준 서비스 14개: hermes(Kelly, Discord), hermes-broker, llm-gateway, controller, claude-worker, codex-worker, test-runner, github-publisher(게시 비활성), dashboard, learning, planner, notifier, knowledge, school.
 
 ---
 
@@ -189,23 +70,19 @@ D:\personal_ai
 
 모든 명령은 저장소 루트에서 실행한다.
 
-### 4.1 Compose 파일 세트 (항상 전체를 지정)
+### 4.1 스택 운영은 `scripts\stack.ps1`
 
-**PowerShell**
+compose 파일 13개를 직접 나열하지 않는다. 같은 목록을 쓰는 스크립트를 쓴다.
+
 ```powershell
-$F = "-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml -f compose.llm.yaml -f compose.school.yaml".Split(' ')
-docker compose @F ps
-docker compose @F up -d --build --no-deps <service>    # 해당 서비스만 다시 빌드
-docker compose @F logs --tail 100 <service>            # 로그에 비밀 정보가 없는지도 확인
+powershell -ExecutionPolicy Bypass -File scripts\stack.ps1 help
+powershell -ExecutionPolicy Bypass -File scripts\stack.ps1 ps
+powershell -ExecutionPolicy Bypass -File scripts\stack.ps1 rebuild dashboard     # 바꾼 서비스만, 하나씩
+powershell -ExecutionPolicy Bypass -File scripts\stack.ps1 backup knowledge      # knowledge | controller | learning
 ```
 
-**Bash**
-```bash
-F="-f compose.yaml -f compose.workers.yaml -f compose.controller.yaml -f compose.github.yaml -f compose.dashboard.yaml -f compose.publisher.yaml -f compose.test-runner.yaml -f compose.learning.yaml -f compose.notifier.yaml -f compose.planner.yaml -f compose.knowledge.yaml -f compose.llm.yaml -f compose.school.yaml"
-docker compose $F up -d --build --no-deps dashboard
-```
-
-일부 파일만 지정하면 네트워크나 secret 정의가 빠져 컨테이너가 의도와 다르게 재생성될 수 있다. **반드시 8개 파일을 모두** 지정한다.
+- 원래 폴더(`D:\personal_ai`)가 아니면(worktree 등) 스택을 바꾸는 명령을 거부한다.
+- 이미지를 동시에 여러 개 빌드하지 않는다. CPU가 바빠지면 빌드 중 테스트가 시간 초과로 실패한다.
 
 ### 4.2 테스트
 
@@ -227,19 +104,14 @@ docker compose $F up -d --build --no-deps dashboard
 
 ## 5. 아키텍처 핵심 (작업할 때 알아야 하는 것)
 
-### 5.1 네트워크 격리
+### 5.1 네트워크 격리 (2026-11-24 강화)
 
-| 네트워크 | 구성원 |
-|---|---|
-| ai-internal | hermes, hermes-broker, controller |
-| default | workers, controller |
-| admin-internal | dashboard, controller |
-| learning-internal | dashboard, learning (`compose.dashboard.yaml`에 정의) |
-| publisher-internal | github-publisher, controller |
-| test-internal (internal) | test-runner, controller |
-| publisher-egress / repo-egress / learning-egress | 각 서비스의 외부 송신 전용 |
-
-새 서비스를 추가할 때는 **필요한 상대만** 같은 네트워크에 넣는다. 그리고 다른 서비스가 그 이름을 해석하지 못하는지 확인한다(예: `getent hosts learning`이 실패해야 함).
+- 여러 서비스가 함께 쓰는 네트워크는 모두 `internal: true`(인터넷 없음)다. 인터넷이 필요하거나 포트를 여는 서비스는 **혼자 쓰는 출구 네트워크**를 따로 갖는다(예: `hermes-egress`, `dashboard-port`).
+- hermes-broker와 test-runner는 인터넷으로 나갈 수 없다.
+- 지금 구성과 서비스별 인터넷 여부: `scripts\stack.ps1 verify-networks` 또는 Dashboard `/services`의 네트워크 필터.
+- 새 서비스를 추가할 때는 **필요한 상대만** 같은 네트워크에 넣고, 바꾼 뒤 `verify-networks`가 통과해야 한다. 다른 서비스가 그 이름을 해석하지 못하는지도 확인한다.
+- Docker 네트워크 주소 여유가 적다(2026-11-24 기준 약 2개). 네트워크를 늘리기 전에 확인한다.
+- 네트워크 설정을 바꿔 적용할 때 Docker가 멈춘 컨테이너를 옛 네트워크에 묶어 둔 채 다시 붙이기를 실패할 수 있다. 그때는 멈춘 컨테이너를 지우고(`docker rm`, 볼륨은 그대로) 다시 `up` 한다.
 
 ### 5.2 Controller
 - 역할: admin (이름 admin/dashboard), worker, delegator(hermes-broker), publisher, test-runner. 토큰마다 역할이 정해져 있다.
@@ -292,25 +164,18 @@ docker compose $F up -d --build --no-deps dashboard
 | innerText가 대문자로 나옴 | CSS `text-transform` | 대소문자 무시 비교 |
 | Python heredoc 편집으로 `\\`가 깨짐 | 셸 이스케이프 | 정규식이나 백슬래시가 있는 코드는 **Edit/Write 도구**로 수정 |
 | 수동 probe JSON 400 | 셸 인용 문제 | node `JSON.stringify`로 본문 생성 |
+| Controller 이미지 빌드 실패 | Docker 안 디스크가 느려 SQLite 테스트(synchronous=FULL)가 vitest 기본 5초를 넘김 | `vitest.config.ts`의 testTimeout·hookTimeout 60초 |
+| 이미지 두 개를 동시에 빌드하면 테스트 실패 | CPU 경쟁으로 시간 초과 | 하나씩 빌드한다 |
+| 합친 뒤 Dashboard 테스트 실패 | 세션 저장(관리자 비밀번호 해시로 키를 만듦)과 세션을 만드는 새 테스트가 만남 | 테스트마다 임시 해시·세션 파일 경로를 준다 |
+| Kelly 첫 일정 질문에 플래너 항목 누락 | 플래너 호출 3개를 차례로 불러 3초 제한 초과, `with` 블록이 늦은 호출을 기다림 | 동시 호출, 제한 넘으면 기다리지 않음 |
+| 사실 종류 미리보기에서 배점이 시험으로 분류 | 배점 문장 안의 날짜·분수가 먼저 걸림 | 규칙 순서(배점 머리말 우선)와 미리보기의 "빠지는 사실" 확인 |
+| git merge가 `index.lock`으로 실패 | 앱의 백그라운드 git이 잠깐 잠금 | 잠시 뒤 다시 시도 |
 
 ---
 
 ## 7. 다음 작업 후보
 
-사용자가 순서를 정한다. 지시 없이 착수하지 말고, 지시가 오면 아래 맥락을 참고한다.
-
-1. **`docs/handover/` 커밋**: 요청이 있으면 `learning-os/l1`에 커밋한다. 에이전트 흔적은 남기지 않고 push하지 않는다.
-2. **Learning AI 실제 호출 검증**: 사용자가 키와 설정을 넣은 뒤 진행한다.
-   - `docker compose @F up -d --no-deps --force-recreate learning`
-   - Overview에서 configured 확인
-   - 실제 초안 1회 생성: 예산 기록, 제안 검증, invalid 처리 확인
-3. **Learning L2** (Milestone, Rubric, Assignment, Submission, Evaluation, SkillMastery)
-   - ROADMAP 17절과 설계 문서 04, 05, 06을 참고한다.
-   - 코드 과제 실행에 기존 Test Runner나 Publisher의 키와 권한을 **재사용하지 않는다**. 별도 격리 실행기 방식은 사용자와 먼저 결정한다.
-4. **`learning-os/l1` → main 병합**: 사용자 승인이 필요하다.
-5. **Controller DB 백업 스크립트**: Learning의 `backup.ts` 방식(sqlite backup API + integrity_check)을 재사용한다.
-6. **보안 정리** (사용자 승인 필요): secrets ACL 축소, 평문 초기 비밀번호 파일 제거
-7. **실제 게시 활성화** (E-2B 실게시): GitHub App 설정, 별도 승인, `personal-ai/<task>` 브랜치, draft PR. **명시적인 승인 없이는 절대 하지 않는다.**
+`docs/handover/CURRENT_WORK.md`의 "다음 후보"를 본다. 주인이 순서를 정한다.
 
 ---
 

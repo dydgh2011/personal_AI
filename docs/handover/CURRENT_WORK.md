@@ -1,0 +1,36 @@
+# 현재 작업 상태
+
+> 모든 에이전트(Claude Code, Codex)가 **시작할 때 읽고, 끝날 때 갱신**하는 파일이다(`AGENTS.md` 0절).
+> 다음 에이전트가 이 파일만 보고 이어서 할 수 있게 쓴다. 오래된 항목은 지우고 최신 상태만 남긴다.
+
+마지막 갱신: 2026-11-24 · Claude Code
+
+## 지금 진행 중
+- 없음. 큰 작업은 모두 합쳐서 실제 스택에 적용했고 push했다(`learning-os/l1`).
+- 스택을 바꾸는 작업을 시작하면 여기에 "누가, 무엇을, 어느 브랜치/폴더" 한 줄을 먼저 적는다.
+
+## 저장소와 스택
+- 브랜치: `learning-os/l1` (origin에 push됨). `main`에는 주인 승인 없이 합치지 않는다.
+- 스택: `D:\personal_ai`의 `personal_ai` 프로젝트, 컨테이너 14개. 운영은 `scripts\stack.ps1`.
+- 서비스 지도: 1분마다 Windows 작업 스케줄러 `PersonalAI\ServiceMap`이 `services\service-map\collect.mjs`를 돌린다. Dashboard `/services`에서 본다.
+
+## 최근에 끝낸 것 (2026-11-24)
+- 사용량 그래프(`/ai-usage`), 사실 종류(62개 채움), 지식 그래프 보기·편집(`/knowledge`), 서비스 지도 1~3단계(`/services`).
+- Kelly 일정 목록이 플래너 항목을 놓치던 문제 수정.
+- 코딩 자동화 11·12·13(프로젝트별 규칙·금지 경로·스타일, 작성자는 저장만), Learning OS L2와 새 `/learning` 화면, Dashboard 로그인 유지, 네트워크 강화.
+- Controller 이미지 빌드 실패(테스트 5초 시간 초과) 수정.
+
+## 확인하지 못한 것 (주인이 실제로 쓰면서 확인 예정)
+- 브라우저에서 새 `/learning` 화면, 프로젝트 설정 화면, `/services`의 허용 명령·호출 수.
+- Dashboard 로그인 유지: 한 번 로그인한 뒤 Dashboard를 다시 만들어도 유지되는지.
+- Learning AI 평가·초안의 실제 AI 호출(키·모델·월 상한 미설정).
+- Discord에서 "입력 중" 표시와 답 끝 📌 기록 표시.
+
+## 다음 후보 (주인이 순서를 정함)
+- 주인 결정·설정 필요: 실제 GitHub 게시(8·15, GitHub App), 커밋 작성자 방식(11, POLICY B), 비공개 저장소 실제 확인(14), Learning AI 키 설정.
+- 바로 개발 가능: Learning L3(일정·복습)와 Learning↔플래너 연결, L4(Kelly 학습 도구 등), Hermes 위임 보안 강화(5), 서비스 지도 `dashboard → learning` 허용 명령 파서.
+- 정리: 끝난 worktree 8개와 로컬 브랜치(`claude/*`), Codex가 OS 임시 폴더에 남긴 브라우저 검증 폴더, 지식 저장소 볼륨 안 옛 임시 백업 `pre-test-purge*.db` 2개(같은 파일이 `data/backups/knowledge`에 있음), `.gitignore` 줄바꿈 변경(커밋 안 함).
+- 주의: Docker 네트워크 주소 여유가 적다. 새 네트워크를 만들기 전에 `scripts\stack.ps1 verify-networks`의 "주소 풀"을 본다.
+
+## 인계 기록
+- (다음 에이전트가 여기에 날짜·도구·한 줄 요약을 추가한다)
