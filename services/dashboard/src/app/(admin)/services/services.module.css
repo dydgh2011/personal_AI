@@ -318,3 +318,120 @@
   }
 
 }
+
+/* link panel: allowed operations and recent calls (stages 2 and 3) */
+.ruleSet {
+  margin: 0 0 12px;
+  padding: 10px 0 0;
+  border-top: 1px solid var(--border);
+}
+
+.ruleHead {
+  font-size: 13px;
+  margin-bottom: 2px;
+}
+
+.ruleSet .subtle code {
+  font-size: 11px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--panel-2);
+}
+
+.opGroup {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  margin: 0 0 6px;
+  background: var(--panel-2);
+}
+
+.opGroup > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 5px 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.opGroup > summary code {
+  font-size: 12px;
+}
+
+.opGroup[open] > summary {
+  border-bottom: 1px solid var(--border);
+}
+
+.opGroup .opList {
+  padding: 2px 8px 6px;
+}
+
+.opList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.opRow {
+  display: grid;
+  grid-template-columns: 38px minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: baseline;
+  padding: 3px 0;
+  font-size: 12px;
+  border-bottom: 1px dashed color-mix(in srgb, var(--border) 60%, transparent);
+}
+
+.opRow:last-child {
+  border-bottom: 0;
+}
+
+.opRow:has(> .opMain:first-child) {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.opIdle {
+  color: var(--muted);
+}
+
+.method {
+  font: 600 10px/1.6 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  text-align: center;
+  border-radius: 4px;
+  color: var(--muted);
+  border: 1px solid var(--border);
+}
+
+.method[data-method='POST'],
+.method[data-method='PATCH'],
+.method[data-method='PUT'],
+.method[data-method='DELETE'] {
+  color: var(--warn);
+  border-color: color-mix(in srgb, var(--warn) 45%, transparent);
+}
+
+.opMain {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.opMain code {
+  font-size: 12px;
+}
+
+.opName {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.opCount {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.failed {
+  color: var(--warn);
+}

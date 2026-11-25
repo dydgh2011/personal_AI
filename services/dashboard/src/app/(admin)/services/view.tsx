@@ -1,20 +1,28 @@
 'use client';
 
 import type { StylesheetJson } from 'cytoscape';
-import { useMemo, useState } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import { CytoGraph, type StyleRules } from '@/components/graph/CytoGraph';
 import g from '@/components/graph/graph.module.css';
 import {
+  countsMatch,
   countFindings,
   FINDING_TITLES,
   findingsFor,
   graphIdOf,
   healthOf,
+  opGroups,
   selectionOf,
   serviceGraph,
   SIZE_METRICS,
   sizeMetric,
+  unlistedCalls,
+  type CallWindow,
   type FindingLevel,
+  type LinkCalls,
+  type LinkRuleSet,
+  type MapLink,
+  type OpRow,
   type MapSelection,
   type MapService,
   type ServiceMapSnapshot,
@@ -42,8 +50,9 @@ const rules: StyleRules = (css) => {
     { selector: 'node.net-open', style: { 'border-style': 'dashed' } },
     {
       selector: 'edge.call',
-      style: { width: 1.8, 'line-color': muted, 'target-arrow-shape': 'triangle', 'target-arrow-color': muted, 'arrow-scale': 0.9, opacity: 0.85 },
+      style: { width: 'data(width)', 'line-color': muted, 'target-arrow-shape': 'triangle', 'target-arrow-color': muted, 'arrow-scale': 0.9, opacity: 0.85 },
     },
+    { selector: 'edge.call.quiet', style: { opacity: 0.45 } },
     { selector: 'edge.broken', style: { 'line-color': bad, 'target-arrow-color': bad, 'line-style': 'dashed' } },
     { selector: 'edge.reach', style: { 'line-style': 'dashed', 'line-color': muted, width: 1.2, opacity: 0.7 } },
     { selector: 'edge.out', style: { 'line-style': 'dotted', 'line-color': muted, width: 1.4, opacity: 0.8 } },
@@ -70,6 +79,9 @@ export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapS
   );
   const metric = sizeMetric(sizeBy);
   const unused = snapshot.reachable.filter((r) => !r.used).length;
+  const w = snapshot.callWindow;
+  const recent = w ? snapshot.links.reduce((n, l) => n + (l.calls?.total ?? 0), 0) : null;
+  const missing = w ? w.sources.filter((x) => !x.ok).map((x) => x.id) : [];
   const pick = (sel: MapSelection) => setSelection(sel);
 
   return (
@@ -81,6 +93,12 @@ export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapS
         <span>
           연결 <b>{snapshot.links.length}</b> · 네트워크 <b>{snapshot.networks.length}</b>
         </span>
+        {w && recent !== null && (
+          <span title={missing.length ? `못 읽은 기록: ${missing.join(', ')}` : undefined}>
+            최근 {w.hours}시간 호출 <b>{recent.toLocaleString('ko-KR')}</b>
+            {missing.length > 0 && <span className="muted"> (일부 못 읽음)</span>}
+          </span>
+        )}
         <span className={s.levels}>
           {(['danger', 'warn', 'info'] as FindingLevel[]).map((lv) => (
             <span key={lv} className={`${s.level} ${s['lv_' + lv]}`}>
@@ -154,7 +172,7 @@ export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapS
             네트워크 (↗ 인터넷 가능)
           </span>
         )}
-        <span className={g.legendItem}><i className={g.line} />부름</span>
+        <span className={g.legendItem}><i className={g.line} />부름{w ? ` (굵기 = 최근 ${w.hours}시간 호출 수, 흐린 선 = 0회)` : ''}</span>
         {reach && <span className={g.legendItem}><i className={g.dashed} />닿기만 함</span>}
         {external && <span className={g.legendItem}><i className={g.dotted} />바깥으로</span>}
         <span className={g.legendItem}><i className={g.broken} />부르는데 못 닿음</span>
@@ -256,20 +274,7 @@ function Details({
   if (selection.kind === 'link') {
     const l = snapshot.links.find((x) => x.from === selection.from && x.to === selection.to);
     if (!l) return null;
-    return (
-      <div>
-        <h2>
-          {go(l.from)} → {go(l.to)}
-        </h2>
-        <dl className={s.dl}>
-          <dt>설정</dt>
-          <dd>{l.via.map((v) => <code key={v}>{v}</code>)}</dd>
-          <dt>지나는 네트워크</dt>
-          <dd>{l.networks.length ? l.networks.map((n) => <code key={n}>{n}</code>) : <span className={s.bad}>없음: 부르는데 닿지 않습니다</span>}</dd>
-        </dl>
-        <p className="muted">허용된 명령 목록은 다음 단계에서 이 자리에 붙습니다(hermes-broker ROUTES, 게이트웨이 별칭).</p>
-      </div>
-    );
+    return <LinkPanel link={l} window={snapshot.callWindow} name={name} go={go} />;
   }
 
   if (selection.kind === 'reach') {
@@ -413,9 +418,25 @@ function Details({
             : '없음'}
         </dd>
         <dt>부르는 곳</dt>
-        <dd>{out.length ? out.map((l) => <div key={l.to}>{go(l.to)} <span className="muted">({l.via.join(', ')})</span></div>) : '없음'}</dd>
+        <dd>
+          {out.length
+            ? out.map((l) => (
+                <div key={l.to}>
+                  {go(l.to)} <span className="muted">({l.via.join(', ')}){callsText(l, snapshot.callWindow)}</span>
+                </div>
+              ))
+            : '없음'}
+        </dd>
         <dt>부르는 쪽</dt>
-        <dd>{inn.length ? inn.map((l) => <div key={l.from}>{go(l.from)}</div>) : '없음'}</dd>
+        <dd>
+          {inn.length
+            ? inn.map((l) => (
+                <div key={l.from}>
+                  {go(l.from)} <span className="muted">{callsText(l, snapshot.callWindow)}</span>
+                </div>
+              ))
+            : '없음'}
+        </dd>
       </dl>
 
       {found.length > 0 && (
@@ -431,6 +452,140 @@ function Details({
         </>
       )}
     </div>
+  );
+}
+
+const count = (n: number) => n.toLocaleString('ko-KR');
+
+function callsText(l: MapLink, w: CallWindow | undefined): string {
+  if (!w || !l.calls) return '';
+  return ` · ${w.hours}시간 ${count(l.calls.total)}회${l.calls.failed ? ` (실패 ${count(l.calls.failed)})` : ''}`;
+}
+
+/** One link: its config, recent calls and the operations the code allows on it. Exported for tests. */
+export function LinkPanel({
+  link: l,
+  window: w,
+  name,
+  go,
+}: {
+  link: MapLink;
+  window: CallWindow | undefined;
+  name: (id: string) => string;
+  go: (id: string) => ReactNode;
+}) {
+  const unlisted = unlistedCalls(l);
+  return (
+    <div>
+      <h2>
+        {go(l.from)} → {go(l.to)}
+      </h2>
+      <dl className={s.dl}>
+        <dt>설정</dt>
+        <dd>{l.via.map((v) => <code key={v}>{v}</code>)}</dd>
+        <dt>지나는 네트워크</dt>
+        <dd>{l.networks.length ? l.networks.map((n) => <code key={n}>{n}</code>) : <span className={s.bad}>없음: 부르는데 닿지 않습니다</span>}</dd>
+        {w && (
+          <>
+            <dt>최근 {w.hours}시간</dt>
+            <dd>
+              {l.calls ? (
+                <>
+                  <b>{count(l.calls.total)}회</b>
+                  {l.calls.failed > 0 && <span className={s.failed}> · 실패 {count(l.calls.failed)}</span>}
+                  <div className="muted">출처: {l.calls.source}</div>
+                </>
+              ) : (
+                <span className="muted">측정 안 함: 이 연결을 세는 기록이 없습니다</span>
+              )}
+            </dd>
+          </>
+        )}
+      </dl>
+
+      <h3>허용된 명령</h3>
+      {l.allowed === undefined ? (
+        <p className="muted">이 스냅샷에는 허용 명령이 없습니다. 수집기를 새 버전으로 실행하면 나옵니다.</p>
+      ) : l.allowed.length === 0 ? (
+        <p className="muted">이 연결의 허용 명령은 코드에서 읽지 못했습니다 (수집기 rules.mjs에 이 연결의 파서가 없음). 받는 쪽이 키만 확인할 수 있습니다.</p>
+      ) : (
+        l.allowed.map((set) => <RuleSet key={`${set.by}:${set.role}:${set.source}`} set={set} calls={l.calls} name={name} />)
+      )}
+
+      {unlisted.length > 0 && (
+        <>
+          <h3>목록 밖 기록</h3>
+          <p className={s.subtle}>위 명령 이름에 없는 요청입니다. 키가 틀렸거나(auth) 없는 경로라 길목에서 거절된 것들입니다.</p>
+          <ul className={s.opList}>
+            {unlisted.map((o) => (
+              <li key={o.name} className={s.opRow}>
+                <span className={s.opMain}>
+                  <code>{o.name}</code>
+                </span>
+                <span className={s.opCount}>
+                  {count(o.total)}
+                  {o.failed > 0 && <span className={s.failed}> ({count(o.failed)} 실패)</span>}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+function RuleSet({ set, calls, name }: { set: LinkRuleSet; calls: LinkCalls | undefined; name: (id: string) => string }) {
+  const groups = opGroups(set, calls);
+  const perOp = countsMatch(set, calls);
+  return (
+    <section className={s.ruleSet}>
+      <div className={s.ruleHead}>
+        <b>{set.role === 'callee' ? `${name(set.by)}의 허용 목록` : `${name(set.by)}의 전달 목록`}</b>
+        <span className="muted"> · {set.ops.length}개</span>
+      </div>
+      <p className={s.subtle}>
+        {set.role === 'callee' ? '받는 쪽이 이 호출자를 확인하고 이것만 받습니다.' : '보내는 쪽이 이 목록에 있는 요청만 넘깁니다.'} <code>{set.source}</code>
+        {calls && !perOp && <> · 이 연결의 기록에는 명령 이름이 없어 합계만 보입니다</>}
+      </p>
+      {groups.length === 1 ? (
+        <OpList ops={groups[0].ops} />
+      ) : (
+        groups.map((gr) => (
+          <details key={gr.key} className={s.opGroup}>
+            <summary>
+              <code>{gr.key}</code> <span className="muted">{gr.ops.length}개</span>
+              {gr.total !== null && <span className={s.opCount}>{count(gr.total)}회</span>}
+            </summary>
+            <OpList ops={gr.ops} />
+          </details>
+        ))
+      )}
+    </section>
+  );
+}
+
+function OpList({ ops }: { ops: OpRow[] }) {
+  return (
+    <ul className={s.opList}>
+      {ops.map((o) => (
+        <li key={`${o.method} ${o.path} ${o.name}`} className={`${s.opRow}${o.total === 0 ? ` ${s.opIdle}` : ''}`}>
+          <span className={s.method} data-method={o.method}>
+            {o.method}
+          </span>
+          <span className={s.opMain}>
+            <code>{o.path}</code>
+            {o.name !== `${o.method} ${o.path}` && <span className={s.opName}>{o.name}</span>}
+          </span>
+          {o.total !== null && (
+            <span className={s.opCount} title="최근 호출 수">
+              {count(o.total)}
+              {o.failed > 0 && <span className={s.failed}> ({count(o.failed)} 실패)</span>}
+            </span>
+          )}
+        </li>
+      ))}
+    </ul>
   );
 }
 
