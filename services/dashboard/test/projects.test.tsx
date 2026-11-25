@@ -27,6 +27,11 @@ beforeAll(async () => {
   process.env.CONTROLLER_URL = 'http://controller.test:3000';
   process.env.CONTROLLER_TOKEN_FILE = join(dir, 'token');
   process.env.DASHBOARD_AUDIT_LOG = auditFile;
+  // Sessions are persisted and keyed from the admin password hash (session-store.ts): give the
+  // test its own hash and session file instead of the container paths under /run and /var/lib.
+  process.env.DASHBOARD_ADMIN_HASH_FILE = join(dir, 'admin.hash');
+  process.env.DASHBOARD_SESSION_FILE = join(dir, 'sessions.json');
+  writeFileSync(join(dir, 'admin.hash'), 'scrypt$test-only-hash');
   writeFileSync(join(dir, 'token'), 'tok');
   server = await import('@/lib/server');
   route = await import('@/app/api/projects/[id]/settings/route');
