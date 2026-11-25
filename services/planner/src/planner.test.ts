@@ -8,7 +8,8 @@ import { parseClientFile, SCOPES, type CalendarApi, type CalendarEvent, type Eve
 import { Jobs } from './jobs.js';
 import type { NotifyEvent } from './notify.js';
 import { Planner, PlannerError } from './planner.js';
-import { DEFAULT_SETTINGS, draftDay, freeIntervals, shareFor } from './schedule.js';
+import { planChecks } from './checks.js';
+import { DEFAULT_SETTINGS, draftDay, freeIntervals, reminderLead, shareFor } from './schedule.js';
 import { addDays, localParts, toInstant } from './time.js';
 
 const TZ = 'America/Toronto';
@@ -247,6 +248,68 @@ describe('Learning planner drafts', () => {
   });
 });
 
+describe('proposal checks', () => {
+  const s = {
+    ...DEFAULT_SETTINGS,
+    lastBus: { weekday: '01:22', saturday: '22:00', sunday: '21:40' },
+    places: [
+      { name: '집', match: ['집'] },
+      { name: 'UTM', match: ['UTM', 'Davis', 'RA Gym'] },
+      { name: 'Sheridan', match: ['Sheridan', 'SH AA'] },
+    ],
+    travel: [{ from: '집', to: 'UTM', minutes: 40 }, { from: '집', to: 'Sheridan', minutes: 90 }, { from: 'Sheridan', to: 'UTM', minutes: 40 }],
+  };
+  const item = (title: string, date: string, start: string, end: string, location: string | null = null) => ({ title, date, start, end, location });
+
+  it('passes a day that keeps sleep, travel and the exam', () => {
+    const items = [item('기상', '2026-11-26', '06:00', '07:00', '집'), item('S1', '2026-11-26', '13:10', '14:25', 'UTM 도서관'), item('샤워', '2026-11-26', '20:30', '21:30', '집')];
+    const existing = [{ ...item('FAS147H5 PRA0102', '2026-11-26', '09:00', '12:00', 'Sheridan Trafalgar'), category: 'class' }];
+    assert.deepEqual(planChecks(items, existing, [], { ...s, protectedEvents: [...s.protectedEvents, 'FAS147'] }), []);
+  });
+
+  it('flags what the prose draft got wrong: study over an exam, short travel, late bus, sleep, missing deadline', () => {
+    const items = [
+      item('CSC207 복습', '2026-12-10', '18:00', '19:00', 'UTM 도서관'),
+      item('집에서 출발', '2026-12-01', '07:30', '08:00', '집'),
+      item('S10', '2026-12-05', '21:30', '22:30', 'UTM 도서관'),
+      item('LeetCode', '2026-12-05', '23:10', '23:40', '집'),
+    ];
+    const existing = [
+      { ...item('STA256H5 Final Exam', '2026-12-10', '17:00', '20:00', 'RA Gym A/B'), category: 'class' },
+      { ...item('FAS147H5 PRA0102', '2026-12-01', '09:00', '12:00', 'Sheridan Trafalgar'), category: 'class' },
+      { ...item('MAT223 LEC', '2026-12-10', '11:00', '12:00', 'IB 345'), category: 'class' },
+    ];
+    const w = planChecks(items, existing, [{ title: 'MAT223 Weekly HW & PCRA', deadline: '2026-12-08' }], { ...s, protectedEvents: [...s.protectedEvents, 'FAS147'] });
+    assert.ok(w.some((x) => x.includes('꼭 지켜야 하는 일정 "STA256H5 Final Exam"')), w.join('\n'));
+    assert.ok(w.some((x) => x.includes('이동에 90분이 필요한데 60분뿐')), w.join('\n'));
+    assert.ok(w.some((x) => x.includes('막차(22:00) 뒤에')), w.join('\n'));
+    assert.ok(w.some((x) => x.includes('수면 시간')), w.join('\n'));
+    assert.ok(w.some((x) => x.includes('MAT223 Weekly HW & PCRA')), w.join('\n'));
+    assert.ok(!w.some((x) => x.includes('MAT223 LEC')), 'unattended classes are ignored');
+  });
+
+  it('returns the checks with a proposal and validates the settings', async () => {
+    const { cal, planner } = setup();
+    cal.add('CSC236H5 Final Exam', '2026-12-16', '09:00', '12:00', { category: 'class' });
+    const p = planner.createProposal({ title: '시험 날', items: [{ title: '공부', date: '2026-12-16', start: '10:00', end: '11:00', category: 'study' }] }, 'hermes');
+    const view = await planner.checkedProposal(p.code);
+    assert.ok(view.warnings.some((w) => w.includes('CSC236H5 Final Exam')), view.warnings.join('\n'));
+    assert.throws(() => planner.updateSettings({ travel: [{ from: '집', to: 'UTM' }] }, 'hermes'), /minutes/);
+    const saved = planner.updateSettings({ lastBus: { weekday: '01:22', saturday: '22:00', sunday: '21:40' }, protectedEvents: ['Exam', 'FAS147'] }, 'hermes');
+    assert.deepEqual(saved.protectedEvents, ['Exam', 'FAS147']);
+  });
+});
+
+describe('reminders', () => {
+  it('reminds short events 5 minutes before and longer ones 15 minutes before', () => {
+    const at = (h: string) => `2026-11-25T${h}:00-05:00`;
+    assert.equal(reminderLead(DEFAULT_SETTINGS, at('19:00'), at('20:00')), 5);
+    assert.equal(reminderLead(DEFAULT_SETTINGS, at('19:00'), at('20:30')), 15);
+    assert.equal(reminderLead(DEFAULT_SETTINGS, at('19:00'), null), 15);
+    assert.equal(reminderLead({ ...DEFAULT_SETTINGS, shortEventMinutes: 0 }, at('19:00'), at('19:30')), 15);
+  });
+});
+
 describe('time', () => {
   it('converts Toronto wall-clock times across DST', () => {
     assert.equal(toInstant('2026-11-21', '23:00', TZ).toISOString(), '2026-11-22T04:00:00.000Z'); // EST
@@ -418,7 +481,7 @@ describe('Managed calendar', () => {
     assert.equal(await planner.syncDeadlines(), 1);
     assert.equal(await planner.syncDeadlines(), 0, 'nothing to do when unchanged');
     const marker = () => [...cal.events.values()].find((e) => e.deadlineTodoId === t.id);
-    assert.deepEqual([marker()!.summary, marker()!.date, marker()!.category, marker()!.allDay], ['마감: 보고서', '2026-11-27', 'deadline', true]);
+    assert.deepEqual([marker()!.summary, marker()!.date, marker()!.category, marker()!.allDay], ['마감(이날까지): 보고서', '2026-11-27', 'deadline', true]);
     planner.updateTodo(t.id, { deadline: '2026-11-30' }, 'hermes');
     await planner.syncDeadlines();
     assert.equal(marker()!.date, '2026-11-30');
@@ -568,9 +631,21 @@ describe('Jobs', () => {
     assert.equal(sent.filter((e) => e.type === 'plan').length, 0);
   });
 
-  it('reminds 15 minutes before each event, once', async () => {
+  it('reminds 5 minutes before a short event and not earlier', async () => {
+    const { cal, sent, jobs, setClock } = setup(toInstant('2026-11-22', '18:50', TZ).getTime());
+    cal.add('CSC207 과제 파악', '2026-11-22', '19:00', '20:00');
+    await jobs.tick();
+    assert.equal(sent.filter((e) => e.type === 'reminder').length, 0, '10 minutes before: not yet');
+    setClock(toInstant('2026-11-22', '18:55', TZ).getTime());
+    await jobs.tick();
+    const reminders = sent.filter((e) => e.type === 'reminder');
+    assert.equal(reminders.length, 1);
+    assert.ok(reminders[0].type === 'reminder' && reminders[0].reminder.minutesBefore === 5);
+  });
+
+  it('reminds 15 minutes before each longer event, once', async () => {
     const { cal, sent, jobs, setClock } = setup(toInstant('2026-11-22', '08:40', TZ).getTime());
-    cal.add('수업', '2026-11-22', '09:00', '10:00', { location: 'BA 1160' });
+    cal.add('수업', '2026-11-22', '09:00', '10:30', { location: 'BA 1160' });
     cal.add('하루 종일', '2026-11-22', '00:00', '23:59', { allDay: true, start: null, end: null });
     await jobs.tick();
     assert.equal(sent.filter((e) => e.type === 'reminder').length, 0, '20 minutes before: not yet');

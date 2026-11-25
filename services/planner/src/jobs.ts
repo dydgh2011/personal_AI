@@ -9,6 +9,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { NotifyError, planDay, type Notify } from './notify.js';
 import type { Planner } from './planner.js';
+import { reminderLead } from './schedule.js';
 import { addDays, localParts } from './time.js';
 
 export interface JobsLogger {
@@ -143,12 +144,12 @@ export class Jobs {
 
   async reminders(): Promise<void> {
     const s = this.planner.settings();
-    const events = await this.planner.upcoming(s.remindMinutes + 1);
+    const events = await this.planner.upcoming(Math.max(s.remindMinutes, s.shortRemindMinutes) + 1);
     for (const e of events) {
       if (!e.start) continue;
       if (s.remindScope === 'planner' && !e.plannerBlockId) continue;
       const minutesLeft = (Date.parse(e.start) - this.now()) / 60_000;
-      if (minutesLeft > s.remindMinutes) continue;
+      if (minutesLeft > reminderLead(s, e.start, e.end)) continue;
       const key = `reminder:${e.id}:${e.start}`;
       if (this.db.prepare('SELECT 1 FROM reminders WHERE key = ?').get(key)) continue;
       const sent = await this.send({

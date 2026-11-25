@@ -1,6 +1,7 @@
 // Deterministic day drafting: fits open todos into the free time of one day. No LLM: Hermes
 // discusses and edits the draft afterwards with the planner tools, and the owner confirms it.
 
+import type { CheckSettings, Place, Travel } from './checks.js';
 import { daysBetween, fromMinutes } from './time.js';
 
 export interface Settings {
@@ -22,6 +23,23 @@ export interface Settings {
   remindMinutes: number;
   /** all: every timed calendar event; planner: only blocks the planner put in the calendar. */
   remindScope: 'all' | 'planner';
+  /** Events this long or shorter are reminded `shortRemindMinutes` before instead (0 turns it off). */
+  shortEventMinutes: number;
+  shortRemindMinutes: number;
+  /** Proposal checks (checks.ts): sleep window, last bus, places and travel times, events never to overlap. */
+  sleepStart: string;
+  sleepEnd: string;
+  lastBus: CheckSettings['lastBus'];
+  homePlace: string;
+  places: Place[];
+  travel: Travel[];
+  protectedEvents: string[];
+}
+
+/** How many minutes before this event its reminder goes out. */
+export function reminderLead(s: Pick<Settings, 'remindMinutes' | 'shortEventMinutes' | 'shortRemindMinutes'>, start: string, end: string | null): number {
+  const length = end ? (Date.parse(end) - Date.parse(start)) / 60_000 : Infinity;
+  return s.shortEventMinutes > 0 && length <= s.shortEventMinutes ? s.shortRemindMinutes : s.remindMinutes;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -34,6 +52,15 @@ export const DEFAULT_SETTINGS: Settings = {
   undatedDailyMinutes: 120,
   remindMinutes: 15,
   remindScope: 'all',
+  shortEventMinutes: 60, // owner 2026-11-25: short events 5 minutes before
+  shortRemindMinutes: 5,
+  sleepStart: '23:00',
+  sleepEnd: '06:00',
+  lastBus: null,
+  homePlace: '집',
+  places: [],
+  travel: [],
+  protectedEvents: ['exam', 'test', '시험', '기말'],
 };
 
 export interface Interval {

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { GoogleConnection } from './connection.js';
+import { planChecks, type CheckEvent, type CheckItem } from './checks.js';
 import { transaction } from './db.js';
 import { CATEGORIES, CATEGORY_LABEL, GoogleError, isCategory, type CalendarApi, type CalendarEvent, type Category, type EventInput, type Timing } from './google.js';
 import { DEFAULT_SETTINGS, draftDay, type Interval, type SchedTodo, type Settings } from './schedule.js';
@@ -184,6 +185,41 @@ const SETTING_RULES: Record<keyof Settings, (v: unknown) => unknown> = {
   remindScope: (v) => {
     if (v !== 'all' && v !== 'planner') throw bad('remindScope must be "all" or "planner"');
     return v;
+  },
+  shortEventMinutes: (v) => int(v, 'shortEventMinutes', 0, 240),
+  shortRemindMinutes: (v) => int(v, 'shortRemindMinutes', 1, 120),
+  sleepStart: (v) => time(v, 'sleepStart'),
+  sleepEnd: (v) => time(v, 'sleepEnd'),
+  lastBus: (v) => {
+    if (v === null) return null;
+    if (typeof v !== 'object' || Array.isArray(v)) throw bad('lastBus must be {weekday, saturday, sunday} (HH:MM) or null');
+    const o = v as Record<string, unknown>;
+    only(o, ['weekday', 'saturday', 'sunday']);
+    return { weekday: time(o.weekday, 'lastBus.weekday'), saturday: time(o.saturday, 'lastBus.saturday'), sunday: time(o.sunday, 'lastBus.sunday') };
+  },
+  homePlace: (v) => text(v, 'homePlace', 40),
+  places: (v) => {
+    if (!Array.isArray(v) || v.length > 30) throw bad('places must list up to 30 {name, match[]}');
+    return v.map((p, i) => {
+      if (!p || typeof p !== 'object') throw bad(`places[${i + 1}] must be {name, match[]}`);
+      const o = p as Record<string, unknown>;
+      only(o, ['name', 'match']);
+      if (!Array.isArray(o.match) || !o.match.length || o.match.length > 20) throw bad(`places[${i + 1}].match must list 1-20 words`);
+      return { name: text(o.name, `places[${i + 1}].name`, 40)!, match: o.match.map((m, j) => text(m, `places[${i + 1}].match[${j + 1}]`, 60)!) };
+    });
+  },
+  travel: (v) => {
+    if (!Array.isArray(v) || v.length > 60) throw bad('travel must list up to 60 {from, to, minutes}');
+    return v.map((t, i) => {
+      if (!t || typeof t !== 'object') throw bad(`travel[${i + 1}] must be {from, to, minutes}`);
+      const o = t as Record<string, unknown>;
+      only(o, ['from', 'to', 'minutes']);
+      return { from: text(o.from, `travel[${i + 1}].from`, 40)!, to: text(o.to, `travel[${i + 1}].to`, 40)!, minutes: int(o.minutes, `travel[${i + 1}].minutes`, 0, 600) };
+    });
+  },
+  protectedEvents: (v) => {
+    if (!Array.isArray(v) || v.length > 30) throw bad('protectedEvents must list up to 30 words');
+    return v.map((w, i) => text(w, `protectedEvents[${i + 1}]`, 60)!);
   },
 };
 
@@ -978,24 +1014,30 @@ export class Planner {
 
   // ---- deadline markers ---------------------------------------------------------------------
 
-  /** Keeps one all-day "마감: <todo>" event per open todo with a deadline. Called by the jobs loop. */
+  /**
+   * Keeps one all-day "마감(이날까지): <todo>" event per open todo with a deadline. Called by the jobs loop.
+   * The title says "by this day" because Kelly once read a marker as the day the work (a quiz) happens.
+   * MARKER_FORMAT is part of the synced key, so changing the title format re-patches every marker once.
+   */
   async syncDeadlines(): Promise<number> {
     const rows = this.db
       .prepare("SELECT id, title, deadline, status, deadline_event_id, deadline_synced FROM todos WHERE deadline_event_id IS NOT NULL OR (status = 'open' AND deadline IS NOT NULL)")
       .all() as Array<{ id: string; title: string; deadline: string | null; status: string; deadline_event_id: string | null; deadline_synced: string | null }>;
+    const wantedOf = (r: { status: string; deadline: string | null; title: string }) =>
+      r.status === 'open' && r.deadline ? `${r.deadline}|${r.title}|${MARKER_FORMAT}` : null;
     const pending = rows.filter((r) => {
-      const wanted = r.status === 'open' && r.deadline ? `${r.deadline}|${r.title}` : null;
+      const wanted = wantedOf(r);
       return wanted !== r.deadline_synced || (wanted !== null && !r.deadline_event_id);
     });
     if (!pending.length) return 0;
     const cal = await this.cal();
     if (!cal) return 0;
     for (const r of pending) {
-      const wanted = r.status === 'open' && r.deadline ? `${r.deadline}|${r.title}` : null;
+      const wanted = wantedOf(r);
       if (wanted) {
         const input: EventInput = {
-          summary: `마감: ${r.title}`,
-          description: 'Personal AI 마감 표시. 마감을 바꾸려면 Kelly에게 말해주세요.',
+          summary: deadlineTitle(r.title),
+          description: 'Personal AI 마감 표시: 이 날까지 끝내야 하는 일이에요 (이 날 하는 일정이 아님). 마감을 바꾸려면 Kelly에게 말해주세요.',
           category: 'deadline',
           timing: { kind: 'allDay', date: r.deadline!, endDate: addDays(r.deadline!, 1) },
           deadlineTodoId: r.id,
@@ -1211,6 +1253,45 @@ export class Planner {
       .prepare(`SELECT p.id, p.title, p.status, COUNT(i.n) AS items, COUNT(i.event_id) AS applied FROM proposals p LEFT JOIN proposal_items i ON i.proposal_id = p.id ${status === 'all' ? '' : "WHERE p.status = 'draft'"} GROUP BY p.id ORDER BY p.id`)
       .all() as Array<{ id: number; title: string; status: string; items: number; applied: number }>;
     return rows.map((r) => ({ code: idToCode(r.id), title: r.title, status: r.status, items: r.items, applied: r.applied }));
+  }
+
+  /**
+   * proposal() plus the code checks (checks.ts) against the owner's settings, the calendar of the same days
+   * and open todos. Only items not yet written are checked. If the calendar cannot be read, says so.
+   */
+  async checkedProposal(code: string): Promise<ProposalView> {
+    const view = this.proposal(code);
+    if (view.status !== 'draft') return view;
+    const p = this.proposalRow(code);
+    const rows = this.db.prepare('SELECT spec, event_id FROM proposal_items WHERE proposal_id = ? ORDER BY n').all(p.id) as Array<{ spec: string; event_id: string | null }>;
+    const items: CheckItem[] = [];
+    for (const r of rows) {
+      if (r.event_id) continue;
+      const { spec } = this.proposedEvent(JSON.parse(r.spec));
+      const t = spec.timing as { kind: string; date: string; start?: string; end?: string; endDate?: string };
+      if (t.kind !== 'timed' || spec.recurrence || t.endDate) continue;
+      items.push({ title: spec.title, date: t.date, start: t.start!, end: t.end!, location: spec.location ?? null });
+    }
+    if (!items.length) return view;
+    const dates = [...new Set(items.map((i) => i.date))];
+    const existing: CheckEvent[] = [];
+    try {
+      const cal = await this.cal();
+      if (cal) {
+        for (const d of dates) {
+          for (const e of await this.calendarEvents(cal, d)) {
+            if (e.allDay || e.declined || e.deadlineTodoId) continue;
+            const c = this.clip(e, d);
+            if (c) existing.push({ title: e.summary, date: d, start: fromMinutes(c.start), end: fromMinutes(c.end), location: e.location, category: e.category });
+          }
+        }
+      }
+    } catch (error) {
+      view.warnings.push(`Google Calendar could not be read for the checks: ${(error as Error).message}`);
+    }
+    const todos = this.listTodos('open').map((t) => ({ title: t.title, deadline: t.deadline }));
+    view.warnings.push(...planChecks(items, existing, todos, this.settings()));
+    return view;
   }
 
   proposal(code: string): ProposalView {
@@ -1475,6 +1556,13 @@ export interface ProposalView {
     todo?: { title: string; estimateMinutes: number; deadline: string | null };
   }>;
   warnings: string[];
+}
+
+/** Version of the deadline marker title (see syncDeadlines). */
+const MARKER_FORMAT = 'v2';
+
+export function deadlineTitle(todoTitle: string): string {
+  return `마감(이날까지): ${todoTitle}`;
 }
 
 export function cleanTitle(title: string): string {

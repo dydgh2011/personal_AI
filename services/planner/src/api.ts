@@ -187,13 +187,19 @@ export function createApi(planner: Planner, notify: Notify, clientKeys: Array<{ 
         return { proposals: planner.proposals(status) };
       },
     },
-    { method: 'POST', pattern: /^\/proposals$/, name: 'proposals.create', handler: ({ body, actor }) => ({ proposal: planner.createProposal(body, actor) }) },
-    { method: 'GET', pattern: new RegExp(`^/proposals/(${CODE})$`), name: 'proposals.get', handler: ({ params }) => ({ proposal: planner.proposal(params[0]) }) },
+    // create / show / edit return the draft with the code checks (checks.ts) as warnings.
+    {
+      method: 'POST',
+      pattern: /^\/proposals$/,
+      name: 'proposals.create',
+      handler: async ({ body, actor }) => ({ proposal: await planner.checkedProposal(planner.createProposal(body, actor).code) }),
+    },
+    { method: 'GET', pattern: new RegExp(`^/proposals/(${CODE})$`), name: 'proposals.get', handler: async ({ params }) => ({ proposal: await planner.checkedProposal(params[0]) }) },
     {
       method: 'POST',
       pattern: new RegExp(`^/proposals/(${CODE})/edit$`),
       name: 'proposals.edit',
-      handler: ({ body, params, actor }) => ({ proposal: planner.editProposal(params[0], body, actor) }),
+      handler: async ({ body, params, actor }) => ({ proposal: await planner.checkedProposal(planner.editProposal(params[0], body, actor).code) }),
     },
     {
       method: 'POST',
