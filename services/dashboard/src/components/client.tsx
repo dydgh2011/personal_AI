@@ -1,7 +1,7 @@
 'use client';
 
 import { usePathname, useRouter } from 'next/navigation';
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 
 /** Re-renders the server page every `seconds` while enabled (no data is cached in the browser). */
 export function AutoRefresh({ seconds = 5 }: { seconds?: number }) {
@@ -34,18 +34,117 @@ export function ThemeToggle() {
   );
 }
 
+/**
+ * Sidebar links in the owner's order (temporary, 2026-11-25): the order can be changed here and is
+ * kept in this browser (localStorage). Once the owner settles on one order it goes into
+ * src/modules/registry.ts and this editing goes away. Links unknown to the saved order (new
+ * modules) are added at the end in registry order.
+ */
+const NAV_ORDER_KEY = 'pai-nav-order';
+
+function readOrder(): string[] {
+  try {
+    const v = JSON.parse(localStorage.getItem(NAV_ORDER_KEY) || 'null');
+    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
+  } catch {
+    return [];
+  }
+}
+
+export function orderItems<T extends { href: string }>(items: T[], order: string[]): T[] {
+  const byHref = new Map(items.map((i) => [i.href, i]));
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const href of order) {
+    const item = byHref.get(href);
+    if (item && !seen.has(href)) {
+      out.push(item);
+      seen.add(href);
+    }
+  }
+  for (const item of items) if (!seen.has(item.href)) out.push(item);
+  return out;
+}
+
 export function NavLinks({ items }: { items: Array<{ href: string; title: string }> }) {
   const path = usePathname();
+  const [order, setOrder] = useState<string[]>([]);
+  const [editing, setEditing] = useState(false);
+  const [copied, setCopied] = useState(false);
+  useEffect(() => setOrder(readOrder()), []);
+  const list = orderItems(items, order);
+  const save = (next: string[]) => {
+    setOrder(next);
+    try {
+      localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(next));
+    } catch {
+      // storage blocked: the order still applies until the page reloads
+    }
+  };
+  const move = (index: number, delta: number) => {
+    const hrefs = list.map((i) => i.href);
+    const to = index + delta;
+    if (to < 0 || to >= hrefs.length) return;
+    [hrefs[index], hrefs[to]] = [hrefs[to], hrefs[index]];
+    save(hrefs);
+  };
+  const reset = () => {
+    setOrder([]);
+    try {
+      localStorage.removeItem(NAV_ORDER_KEY);
+    } catch {
+      // ignore
+    }
+  };
+  const copy = async () => {
+    const text = list.map((i, n) => `${n + 1}. ${i.title} (${i.href})`).join('\n');
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt('순서를 복사하세요', text.replace(/\n/g, ' / '));
+    }
+  };
+  const small: CSSProperties = { padding: '0 6px', fontSize: 12, lineHeight: '20px', minWidth: 24 };
   return (
-    <nav>
-      {items.map((m) => {
+    <nav aria-label="메뉴">
+      {list.map((m, index) => {
         const active = m.href === '/' ? path === '/' : path.startsWith(m.href);
+        if (!editing) {
+          return (
+            <a key={m.href} href={m.href} className={active ? 'active' : undefined}>
+              {m.title}
+            </a>
+          );
+        }
         return (
-          <a key={m.href} href={m.href} className={active ? 'active' : undefined}>
-            {m.title}
-          </a>
+          <div key={m.href} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0' }}>
+            <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '4px 8px' }}>{m.title}</span>
+            <button type="button" style={small} onClick={() => move(index, -1)} disabled={index === 0} aria-label={`${m.title} 위로`}>
+              ↑
+            </button>
+            <button type="button" style={small} onClick={() => move(index, 1)} disabled={index === list.length - 1} aria-label={`${m.title} 아래로`}>
+              ↓
+            </button>
+          </div>
         );
       })}
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
+        <button type="button" style={small} onClick={() => setEditing(!editing)} aria-pressed={editing}>
+          {editing ? '편집 끝' : '순서 편집'}
+        </button>
+        {editing && (
+          <>
+            <button type="button" style={small} onClick={reset}>
+              기본 순서
+            </button>
+            <button type="button" style={small} onClick={copy}>
+              {copied ? '복사됨' : '순서 복사'}
+            </button>
+          </>
+        )}
+      </div>
     </nav>
   );
 }
