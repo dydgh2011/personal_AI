@@ -1,16 +1,16 @@
 # Personal AI OS — Roadmap
 
 상태 표기: ✅ 완료(검증됨) · 🟡 부분 완료 · ⬜ 미착수. 완료는 실제 Docker 환경에서 검증한 경우에만 표시합니다.
-마지막 갱신: 2026-11-24 (18절 완료, 19절 사실 종류·지식 그래프 편집 화면, 20절 Service Map, 21절 Ubuntu 이전 계획)
+마지막 갱신: 2026-11-24 (11~13절, 17절 L2, 20절 2·3단계, 네트워크 강화, Dashboard 로그인 유지)
 
 **진행 요약** (✅ 1 · 🟡 0.5 · ⬜ 0으로 센 대략값)
 
 | 트랙 | 절 | 진행 | 남은 큰 일 |
 |---|---|---|---|
-| 코딩 자동화 | 1~15 | 약 60% (✅ 10 · 🟡 4 · ⬜ 6) | 실제 게시, PR, CI 확인, 커밋 스타일, 프로젝트별 규칙 |
-| AI Learning OS | 17 | 약 40% (L0·L1 ✅) | L2 평가·숙련도, L3 일정·복습, L4 연동 |
+| 코딩 자동화 | 1~15 | 약 70% (✅ 12 · 🟡 4 · ⬜ 4) | 실제 게시(GitHub App·정책 결정 필요), PR, CI 확인 |
+| AI Learning OS | 17 | 약 60% (L0·L1·L2 ✅) | L3 일정·복습, L4 연동, Learning↔플래너 |
 | 개인 비서·Kelly | 18~19 | 약 72% (✅ 11 · 🟡 1 · ⬜ 4) | 사실 종류 채우기, Learning↔플래너, Learning 화면, 할 일 확인 |
-| Service Map | 20 | 1단계 완료 | 허용된 명령(2단계), 호출 수(3단계) |
+| Service Map | 20 | 1~3단계 완료 | `dashboard → learning` 허용 명령 파서 |
 
 ```text
 사용자 ─ Telegram/hermes chat ─▶ Hermes ─▶ hermes-broker ─▶ Controller ◀─ claude-worker / codex-worker
@@ -151,17 +151,17 @@
 - **목표**: PR/브랜치의 check run 결과를 Registry 상태와 Hermes 보고에 반영.
 - **확장 지점**: `GitHubClient`에 checks API 읽기 추가. `userReport`의 "테스트" 줄을 실제 결과로 대체(보고된 경우에만).
 
-## 11. 사용자 Git 작성 스타일 분석과 Commit Author 설정 ⬜
+## 11. 사용자 Git 작성 스타일 분석과 Commit Author 설정 🟡 (2026-11-24: 스타일은 적용, 작성자는 저장만 — POLICY B, 선택지는 `docs/coding-agent-settings.md`)
 
 - **목표**: 사용자의 커밋 메시지 스타일 반영, 작성자 정보 설정.
 - **확장 지점**: Registry 프로젝트 필드 추가(`commitAuthor`, `commitStyle`). Worker `workspace.ts`의 `GIT_IDENTITY`를 프로젝트 설정에서 받기.
 
-## 12. 프로젝트별 AI 코딩 규칙 ⬜
+## 12. 프로젝트별 AI 코딩 규칙 ✅ (2026-11-24: 규칙은 프롬프트에, 금지 경로는 Worker 코드에서 검사. Controller migration v7)
 
 - **목표**: 프로젝트마다 에이전트 지침(예: 코딩 규칙, 금지 경로)을 관리.
 - **확장 지점**: Registry에 `agentInstructions` 필드 추가. Runner의 시스템 프롬프트(`UNATTENDED_PROMPT`)에 병합.
 
-## 13. Dashboard에서 프로젝트 선택 🟡 (E-1.5에서 읽기 전용 Projects 화면 완료, 선택·변경은 미구현)
+## 13. Dashboard에서 프로젝트 선택 ✅ (2026-11-24: 프로젝트 상세에서 규칙·금지 경로·스타일·작성자 편집, CSRF·감사 기록)
 
 - **목표**: 관리 화면에서 프로젝트와 작업 관리.
 - **확장 지점**: 기존 admin API(`/projects`, `/tasks`, `/github/repositories`) 재사용. Dashboard 전용 토큰/역할 추가 권장.
@@ -384,7 +384,7 @@
 Finance Agent, JARVIS TTS 연동, 자동 배포, 다중 Agent 병렬 프로젝트 수정 — ⬜ 미착수.
 (학습 기능은 17절 AI Learning OS로 이동했다. Personal Assistant와 Memory(지식 저장소)는 19절로 옮겨 진행 중이다. Learning OS는 자체 선수지식 DAG만 소유하며 지식 저장소와 섞지 않는다.)
 
-## 17. AI Learning OS (L0~L4) 🟡 (L0 ✅ · L1 ✅ 2026-11-04, AI 실제 호출은 미설정 · L2~L4 미착수)
+## 17. AI Learning OS (L0~L4) 🟡 (L0 ✅ · L1 ✅ 2026-11-04 · L2 ✅ 2026-11-24, AI 실제 호출은 미설정 · L3~L4 미착수)
 
 개발 프로젝트 로드맵(이 문서, 개발 일정·기능 단계)과 **학습 로드맵(Learning 데이터: 지식·선수지식·숙련도)은 별도 데이터 모델**로 관리한다. 이 절은 학습 기능을 *만드는* 개발 작업만 다루며, 학습 로드맵 자체는 Learning Service DB에 저장한다.
 설계 근거: `Personal_AI_OS_Learning_Expansion/docs/learning-os/` (01~09) 및 `L0_INVENTORY_AND_DESIGN.md`.
@@ -423,7 +423,7 @@ Finance Agent, JARVIS TTS 연동, 자동 배포, 다중 Agent 병렬 프로젝�
     - 격리: Worker, Publisher, Test Runner, Controller, Hermes는 `learning` 이름을 해석할 수 없다.
   - **미검증**: 실제 Gemini 호출. 키, 모델, 월 상한, 단가가 설정되기 전까지는 `PROVIDER_NOT_CONFIGURED`로 거부된다(정상 동작).
 
-- **L2 — Milestone·과제·평가·숙련도 (P1)** ⬜
+- **L2 — Milestone·과제·평가·숙련도 (P1)** ✅ (2026-11-24, schema v2. 학습 46·Dashboard 133 테스트, 실환경 API·401 확인. 새 `/learning` 화면. 코드 과제 실행은 없음, 실제 AI 평가·브라우저는 미확인)
   - L2-01 Milestone, Rubric, Deadline: user-fixed와 AI-suggested 일정을 구분한다.
   - L2-02 Assignment, Submission: 제출물은 불변 revision이며 업로드는 안전하게 처리한다.
   - L2-03 Evaluation, Evidence: 근거, 신뢰도, 한계를 기록하고, 평가가 실패해도 제출물을 보존한다.
@@ -510,7 +510,7 @@ Discord에서 Kelly(Hermes)가 일정, 할 일, 학교, 공부를 돕는다. 계
   - 동시 가능: 사용량 그래프(`llm-gateway` + Dashboard) ∥ 사실 종류(`knowledge` + Kelly 플러그인) ∥ 코딩 자동화(`controller`, `github-publisher`).
   - 순서 필요: 사실 종류 → 지식 그래프 화면(종류별로 보여 주기 위해), 사용량 그래프 → Learning 화면(같은 Dashboard).
 
-## 20. Service Map (서비스 지도) 🟡 (2026-11-24 시작)
+## 20. Service Map (서비스 지도) ✅ (2026-11-24, 1~3단계)
 
 Docker 인프라 지도와 서비스 의존 지도를 합친 Dashboard 화면. 서비스마다 상태와 설명, 서비스 사이 연결, 연결마다 허용된 명령을 한 화면에서 본다.
 
@@ -522,14 +522,18 @@ Docker 인프라 지도와 서비스 의존 지도를 합친 Dashboard 화면. �
   - ✅ 수집기 `services/service-map/collect.mjs`: Compose 설정, 컨테이너 상태, 설명 파일(`catalog.mjs`)로 `data/service-map/service-map.json`을 만든다. 허용 목록 방식이라 환경 변수 값과 비밀은 들어가지 않는다. 테스트 8/8, 실제 스택에서 14개 서비스, 연결 20개, 닿는 쌍 30개 확인.
   - ✅ 1분마다 실행(Windows 작업 스케줄러 `PersonalAIServiceMap`, 2026-11-24 등록·확인). 배터리로 돌 때는 Windows 기본 설정 때문에 멈춘다.
   - ✅ Dashboard `/services` 화면: Knowledge와 같은 그래프(Cytoscape 공통 부품). 점 = 서비스(색 = 층, 크기 = 보기 기준: 연결 수 기본·메모리 한도, 기준은 SIZE_METRICS에 추가해 늘림), 테두리와 ! = 주의, 마름모 = 바깥 연결(기본 켬), 화살표 = 부름, 점선 = 닿기만 함(필터), 네트워크 점(필터, 기본 끔 — 사용자가 써 보고 결정), 자유 배치/층별 정렬, 검색, 목록 보기. React Flow는 뺐다. 선택하면 연결점 강조·나머지 흐리게, 확대는 선택을 풀 때만 원래대로. 테스트 67 통과, 사용자 브라우저 확인(2026-11-24).
-- **2단계 — 허용된 명령** ⬜: `hermes-broker`의 `ROUTES`, LLM 게이트웨이 별칭, Controller 경로를 코드에서 뽑아 연결선에 붙인다. 코드와 지도가 다르면 테스트가 실패한다.
-- **3단계 — 최근 호출 수** ⬜: broker 감사 로그와 게이트웨이 `calls` 표로 연결선마다 호출 수를 보여 준다.
+- **2단계 — 허용된 명령** ✅ (연결 21개 중 20개, `rules.mjs`): `hermes-broker`의 `ROUTES`, LLM 게이트웨이 별칭, Controller 경로를 코드에서 뽑아 연결선에 붙인다. 코드와 지도가 다르면 테스트가 실패한다.
+- **3단계 — 최근 호출 수** ✅ (`calls.mjs`, 24시간, 횟수·상태 코드만): broker 감사 로그와 게이트웨이 `calls` 표로 연결선마다 호출 수를 보여 준다.
 - **첫 수집에서 나온 것**
-  - `admin-internal`, `ai-internal`, `learning-internal`, `publisher-internal`은 `internal: true`가 아니라서 인터넷으로 나갈 수 있다. 포트를 여는 서비스 때문에 일부러 둔 것일 수 있어 아직 바꾸지 않았다(보안 설정 변경은 승인 후).
-  - 닿지만 부르지 않는 쌍 10개(예: `claude-worker` ↔ `codex-worker`, `hermes` ↔ `school`). 줄일 수 있는 권한 후보다.
+  - `admin-internal`, `ai-internal`, `learning-internal`, `publisher-internal`이 인터넷으로 나갈 수 있었다 → **2026-11-24 네트워크 강화로 해결**(사용자 승인 후 적용): 공유 네트워크는 모두 `internal: true`, 포트를 열거나 인터넷이 필요한 서비스는 혼자 쓰는 출구 네트워크. hermes-broker와 test-runner는 인터넷 없음(실제 접속 시험으로 확인). 증명: `services/service-map/verify-networks.mjs`. 네트워크 주소 여유가 적으니 새 네트워크를 만들 때 Docker 주소 범위를 확인한다.
+  - 닿지만 부르지 않는 쌍 10개 → 1개(controller ↔ hermes, 실제로 쓰는 상태 확인). 연결 21개는 모두 그대로 동작(실환경 확인).
 
 ## 21. Ubuntu로 이전 ⬜ (먼 훗날, 지금은 신경 쓰지 않음)
 
 Windows 10 지원이 끝나서, 프로젝트가 완성되고 유지보수 단계에 들어가면 언젠가 Ubuntu로 옮긴다. 1~2년 뒤일 수 있다. **지금 작업에서는 고려하지 않는다.**
 
 - 그때 볼 것(메모만): Windows 작업 스케줄러로 도는 Service Map 수집기 → systemd timer나 cron, D 드라이브 경로와 Docker Desktop 전제(`host.docker.internal`, 바인드 마운트 경고) → Linux Docker, `data/`·`secrets/` 옮기기와 권한.
+
+## 22. Dashboard 로그인 유지 ✅ (2026-11-24)
+
+세션을 `dashboard-data` 볼륨의 `sessions.json`(권한 600)에 저장해 다시 만들어도 로그인이 유지된다. 쿠키 원문은 저장하지 않고 HMAC만 남기며, 키는 관리자 비밀번호 해시·이름·`DASHBOARD_SESSION_EPOCH`에서 나온다(하나라도 바뀌면 모든 세션 무효). 유휴 30분·최대 8시간·로그아웃·CSRF는 그대로.
