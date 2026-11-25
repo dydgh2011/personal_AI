@@ -6,10 +6,10 @@
 마지막 갱신: 2026-11-24 · Claude Code
 
 ## 스택 잠금
-- **Claude Code · Dashboard 스크롤 유지 배포 · 2026-11-24 22:55** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
+- **비어 있음** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
 
 ## 지금 진행 중 (맡은 범위는 `docs/handover/CODEX_PLAN.md` 1절)
-- **C · Claude Code** (2026-11-24): 커밋 작성자=주인·AI 흔적 차단 배포. 비공개 저장소 실제 확인 완료(PAT로 discovery·동기화·export). GitHub App 연결·실제 게시 켬(대상: dydgh2011/personal-ai-sandbox만). sandbox 작업 6dfcb3df가 리뷰 승인 대기 — **승인·테스트·dry-run·게시 승인·게시는 주인이 Dashboard에서 직접**(에이전트가 대신 승인하지 않음). 남은 것: 게시 결과 확인, CI 결과 읽기(10). 브랜치 claude/publish.
+- **C · Claude Code** (2026-11-24): 커밋 작성자=주인·AI 흔적 차단 배포. 비공개 저장소 실제 확인 완료(PAT로 discovery·동기화·export). GitHub App 연결·실제 게시 켬(대상: dydgh2011/personal-ai-sandbox만). **실제 게시 성공**: sandbox PR #1(draft, 브랜치 changes/6dfcb3df…), 커밋 author·committer = 주인(GitHub 계정 연결), 메시지·PR 본문에 흔적 없음. 승인·게시는 주인이 Dashboard에서 직접(에이전트는 대신 승인하지 않음). 남은 것: CI 결과 읽기(10). 브랜치 claude/publish.
 - **A · Codex**: Learning L3 + 플래너 연결 — 브랜치 `codex/learning-l3`, `D:\personal_ai-wt\codex-learning-l3`. (시작 전)
 - **B · Codex**: Kelly 학습 도구 + Hermes 보안 마무리 + 서비스 지도 파서 — 브랜치 `codex/kelly-learning`, `D:\personal_ai-wt\codex-kelly-learning`. (시작 전)
 - 각자 자기 줄만 고친다.
