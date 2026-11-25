@@ -44,7 +44,8 @@ services:
       - ./data/service-map:/var/lib/service-map:ro
     networks:
       - admin-internal       # shared only with the controller (defined in compose.controller.yaml)
-      - learning-internal    # shared only with the learning service (compose.learning.yaml)
+      - learning-internal    # the learning service (+ the LLM gateway with compose.llm.yaml)
+      - dashboard-port       # only so the 127.0.0.1:8710 port can be published; the dashboard alone
     read_only: true
     tmpfs:
       - /tmp:size=16m
@@ -72,8 +73,14 @@ volumes:
   dashboard-data:
 
 networks:
-  # Dashboard <-> learning service. Nothing else is on it.
+  # Dashboard <-> learning service (compose.llm.yaml adds the LLM gateway, which both of them call).
+  # internal: no route to the internet.
   learning-internal:
+    driver: bridge
+    internal: true
+  # The dashboard alone. A container only on internal networks cannot publish a host port, so this
+  # network exists for 127.0.0.1:8710. Side effect: the dashboard can still open outbound connections.
+  dashboard-port:
     driver: bridge
 
 secrets:

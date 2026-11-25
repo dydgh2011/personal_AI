@@ -8,6 +8,7 @@
 #   (summary by the gateway's free kelly-aux alias), the rest -> digests at 12:00 and 20:00.
 # - Hermes reads results only through hermes-broker (/school/updates, /item, /status, /poll).
 # - school-internal: broker <-> school (no internet). school-egress: the school services.
+#   llm-notify (compose.llm.yaml): gateway + notifier, no internet.
 # - No host port, no Docker socket.
 
 services:
@@ -46,11 +47,10 @@ services:
       - school-data:/var/lib/school           # school.db: items seen (full text), what was sent, page snapshots
       - ./data/knowledge-inbox/school:/import:ro   # one-time backfill .jsonl (docs/knowledge/SCHOOL_BACKFILL.md)
     networks:
-      - school-internal
-      - school-egress
-      - knowledge-internal
-      - notify-internal
-      - llm-internal
+      - school-internal      # hermes-broker
+      - school-egress        # the school services; school alone
+      - knowledge-internal   # knowledge (+ hermes-broker, which calls both)
+      - llm-notify           # gateway and notifier (defined in compose.llm.yaml)
     read_only: true
     tmpfs:
       - /tmp:size=32m

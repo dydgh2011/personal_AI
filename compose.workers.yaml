@@ -16,6 +16,9 @@ services:
     # Polling client: claims claude tasks from the controller and runs Claude Code on them.
     # `docker compose exec claude-worker claude ...` still works for manual use.
     command: ["node", "/opt/agent-worker/main.js"]
+    networks:
+      - claude-worker-internal   # the controller only (internal)
+      - claude-worker-egress     # the model account (internet); this worker alone
     env_file:
       - ./secrets/claude-worker.controller.env   # CONTROLLER_URL + this worker's token only
     environment:
@@ -69,6 +72,9 @@ services:
     # Polling client: claims codex tasks from the controller and runs `codex exec` on them.
     # `docker compose exec codex-worker codex ...` still works for manual use.
     command: ["node", "/opt/agent-worker/main.js"]
+    networks:
+      - codex-worker-internal    # the controller only (internal)
+      - codex-worker-egress      # the model account (internet); this worker alone
     env_file:
       - ./secrets/codex-worker.controller.env   # CONTROLLER_URL + this worker's token only
     environment:
@@ -114,3 +120,17 @@ volumes:
   # Per-agent publisher artifacts (compose.publisher.yaml mounts both read-only).
   publisher-artifacts-claude:
   publisher-artifacts-codex:
+
+# One worker per network: the two workers cannot reach each other. The controller joins the
+# *-internal ones in compose.controller.yaml. internal: true = no route to the internet.
+networks:
+  claude-worker-internal:
+    driver: bridge
+    internal: true
+  claude-worker-egress:
+    driver: bridge
+  codex-worker-internal:
+    driver: bridge
+    internal: true
+  codex-worker-egress:
+    driver: bridge
