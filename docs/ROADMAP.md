@@ -1,16 +1,16 @@
 # Personal AI OS — Roadmap
 
 상태 표기: ✅ 완료(검증됨) · 🟡 부분 완료 · ⬜ 미착수. 완료는 실제 Docker 환경에서 검증한 경우에만 표시합니다.
-마지막 갱신: 2026-11-24 (11~13절, 17절 L2, 20절 2·3단계, 네트워크 강화, Dashboard 로그인 유지)
+마지막 갱신: 2026-11-24 밤 (8·9·11·14·15 실제 게시 반영, 사실 종류·Learning 화면 완료, Codex 병렬 작업 시작)
 
 **진행 요약** (✅ 1 · 🟡 0.5 · ⬜ 0으로 센 대략값)
 
 | 트랙 | 절 | 진행 | 남은 큰 일 |
 |---|---|---|---|
-| 코딩 자동화 | 1~15 | 약 70% (✅ 12 · 🟡 4 · ⬜ 4) | 실제 게시(GitHub App·정책 결정 필요), PR, CI 확인 |
-| AI Learning OS | 17 | 약 60% (L0·L1·L2 ✅) | L3 일정·복습, L4 연동, Learning↔플래너 |
-| 개인 비서·Kelly | 18~19 | 약 72% (✅ 11 · 🟡 1 · ⬜ 4) | 사실 종류 채우기, Learning↔플래너, Learning 화면, 할 일 확인 |
-| Service Map | 20 | 1~3단계 완료 | `dashboard → learning` 허용 명령 파서 |
+| 코딩 자동화 | 1~15 | 약 90% (✅ 17 · 🟡 2 · ⬜ 1) | CI 결과 확인(10), 실제 프로젝트 저장소로 게시 확대(15), Hermes 보안 마무리(5, Codex) |
+| AI Learning OS | 17 | 약 60% (L0·L1·L2 ✅) | L3 일정·복습 + 플래너 연결(Codex 진행), L4 연동(Kelly 학습 도구는 Codex 진행) |
+| 개인 비서·Kelly | 18~19 | 약 84% (✅ 13 · 🟡 1 · ⬜ 2) | Learning↔플래너(Codex), 기말 계획(주인), 할 일 확인(나중) |
+| Service Map | 20 | 1~3단계 완료 | `dashboard → learning` 허용 명령 파서(Codex) |
 
 ```text
 사용자 ─ Telegram/hermes chat ─▶ Hermes ─▶ hermes-broker ─▶ Controller ◀─ claude-worker / codex-worker
@@ -130,7 +130,7 @@
   - Codex는 git 메타데이터를 읽을 수 없음(기존과 같음).
 - **다음 의존 작업**: 8, 14 (Phase D에서 일부 해결).
 
-## 8. Git Diff 검토와 Push 승인 ⬜
+## 8. Git Diff 검토와 Push 승인 ✅ (2026-11-24: 리뷰 승인 → 테스트 통과 → dry-run → 별도 게시 승인 후에만 push. sandbox에서 실제 게시)
 
 - **목표**: 작업 브랜치 diff를 사용자에게 보여 주고 명시적 승인 후에만 push.
 - **확장 지점**:
@@ -140,7 +140,7 @@
 - **완료 조건**: 승인 없이는 push 불가를 테스트로 증명.
 - **다음 의존 작업**: 9.
 
-## 9. Pull Request 생성 ⬜
+## 9. Pull Request 생성 ✅ (2026-11-24: GitHub App이 draft PR을 연다. dydgh2011/personal-ai-sandbox#1, PR 본문에 AI 흔적 없음)
 
 - **목표**: 승인된 브랜치로 PR 생성.
 - **확장 지점**: `GitHubCredentials`에 GitHub App 설치 토큰 구현(`github-credentials.ts`). PR 생성은 쓰기 권한이 있는 별도 서비스에서만.
@@ -151,7 +151,7 @@
 - **목표**: PR/브랜치의 check run 결과를 Registry 상태와 Hermes 보고에 반영.
 - **확장 지점**: `GitHubClient`에 checks API 읽기 추가. `userReport`의 "테스트" 줄을 실제 결과로 대체(보고된 경우에만).
 
-## 11. 사용자 Git 작성 스타일 분석과 Commit Author 설정 🟡 (2026-11-24: 스타일은 적용, 작성자는 저장만 — POLICY B, 선택지는 `docs/coding-agent-settings.md`)
+## 11. 사용자 Git 작성 스타일 분석과 Commit Author 설정 ✅ (2026-11-24: POLICY B 변경 — 커밋 author·committer = 주인, AI 흔적이 있으면 게시 차단. GitHub에서 계정 연결 확인)
 
 - **목표**: 사용자의 커밋 메시지 스타일 반영, 작성자 정보 설정.
 - **확장 지점**: Registry 프로젝트 필드 추가(`commitAuthor`, `commitStyle`). Worker `workspace.ts`의 `GIT_IDENTITY`를 프로젝트 설정에서 받기.
@@ -166,7 +166,7 @@
 - **목표**: 관리 화면에서 프로젝트와 작업 관리.
 - **확장 지점**: 기존 admin API(`/projects`, `/tasks`, `/github/repositories`) 재사용. Dashboard 전용 토큰/역할 추가 권장.
 
-## 14. Phase D — Private Repository 읽기 전용 연동 🟡 (구현·Mock 검증 완료, 실제 Private 저장소 미검증)
+## 14. Phase D — Private Repository 읽기 전용 연동 ✅ (2026-11-24: 실제 비공개 저장소로 discovery·토큰 동기화·worker export 확인)
 
 - **목표**: 선택한 Private 저장소를 읽기 전용으로 동기화하고, 허용된 Worker만 독립 작업 공간에서 사용.
 - **구현 상태**:
@@ -200,7 +200,7 @@
   - 브로커 키는 hermes 사용자로 실행되는 코드라면 읽을 수 있음(LLM 격리가 아님).
 - **향후 권장 (작업 단위 격리)**: 프로젝트 또는 작업 단위 실행 컨테이너(`claude-worker-<project>`)에 해당 export만 마운트하거나, Docker API 권한을 가진 별도 provisioner가 작업마다 일회용 Worker를 띄우는 방식. 다만 Docker 소켓을 쓰는 구성요소가 새로 생기므로 별도 보안 검토가 필요함.
 
-## 14-1. Phase D 실제 검증 시도 (2026-10-25) 🟡
+## 14-1. Phase D 실제 검증 시도 (2026-10-25) ✅ (2026-11-24 비공개 저장소로 완료)
 
 - PAT 파일 존재 확인(fine-grained 형식). `compose.github.yaml`로 Controller에 적용한 뒤 인증된 Discovery 성공(rate limit 5000/h).
 - **실제 Private 저장소 검증은 미완료**: 이 토큰으로 보이는 저장소 11개가 모두 public이며, 토큰의 저장소 선택에 private 저장소가 없음. 공개 저장소로 대신 검증하지 않음.
@@ -340,7 +340,7 @@
   - 소스 대부분이 아직 커밋되지 않았다.
   - Test Runner는 네트워크가 없어서 의존성 설치(npm install 등)가 필요한 프로젝트 테스트는 아직 실행할 수 없다. 향후 사전 구성 이미지나 캐시가 필요하다.
 
-## 15. Phase E 이후 (GitHub 승인 시스템) ⬜
+## 15. Phase E 이후 (GitHub 승인 시스템) 🟡 (2026-11-24: GitHub App 실제 게시 켬, 허용 저장소는 sandbox 하나. 실제 프로젝트 저장소는 App 설치와 허용 목록 추가 후)
 
 - **Phase E-2B 실제 게시(설계)**:
   - 게시 승인을 따로 받음. 저장소, 브랜치, 커밋 SHA, 파일 목록을 다시 보여 주고 명시적으로 승인받음.
@@ -429,11 +429,11 @@ Finance Agent, JARVIS TTS 연동, 자동 배포, 다중 Agent 병렬 프로젝�
   - L2-03 Evaluation, Evidence: 근거, 신뢰도, 한계를 기록하고, 평가가 실패해도 제출물을 보존한다.
     - 코드 과제 실행은 기존 Test Runner나 Publisher의 권한이나 키를 재사용하지 않는다. 별도 격리 실행기를 쓰며, 그 방식은 별도로 결정한다.
   - L2-04 SkillMastery, Gap: 자가평가와 검증된 수준(0~4)을 분리해 저장한다.
-- **L3 — 일정·복습 (P2)** ⬜
+- **L3 — 일정·복습 (P2)** ⬜ (2026-11-24 Codex 작업 A로 진행 중, `CODEX_PLAN.md`)
   - L3-01 가용 시간과 일정 규칙: 결정적 계산을 하며 timezone을 명시한다.
   - L3-02 일·주 Planner: 미완료 과제를 이월하고, 사용자가 고정한 Deadline은 승인 없이 바꾸지 않는다.
   - L3-03 복습 일정: 오래된 숙련도를 재검증하도록 일정을 잡는다.
-- **L4 — 연동 (P3)** ⬜
+- **L4 — 연동 (P3)** ⬜ (L4-01 Kelly 학습 도구는 Codex 작업 B로 진행 중)
   - L4-01 Hermes `personal_ai_learning` 도구: broker allowlist를 쓰며 query와 propose만 허용한다. 직접 쓰기, 셸, 임의 HTTP는 막는다.
   - L4-02 외부 자료와 로드맵 가져오기: provenance를 기록하고, 가져온 자료는 신뢰하지 않는 입력으로 취급한다.
   - L4-03 Project Registry 연결: 개발 로드맵과 상태를 섞지 않고 참조로만 연결한다.
@@ -465,7 +465,7 @@ Claude, ChatGPT의 사용량 화면처럼 AI 사용량의 **변화**를 그래�
   - 데스크톱과 390px 모바일, 라이트·다크 모두 확인한다.
 - **수용 기준**: 실제 `gateway.db` 기준으로 그래프 합계가 `/usage` 일별 합계와 같다. 빈 기간과 게이트웨이 장애 때 화면이 깨지지 않는다. 실제 브라우저로 확인한다.
 
-## 19. 개인 비서·Kelly 🟡 (2026-11-24 기준 약 72%)
+## 19. 개인 비서·Kelly 🟡 (2026-11-24 기준 약 84%)
 
 Discord에서 Kelly(Hermes)가 일정, 할 일, 학교, 공부를 돕는다. 계획 결정은 2026-11-21(Discord, 플래너 서비스, Google Calendar, 그래프 화면, LLM 게이트웨이).
 원칙: AI는 정해진 도구와 코드 흐름으로만 움직이고(임의 HTTP 없음), 사실은 코드가 모아 붙이고 AI는 말로 옮긴다.
@@ -484,9 +484,9 @@ Discord에서 Kelly(Hermes)가 일정, 할 일, 학교, 공부를 돕는다. 계
 | 🟡 | 기말 대비: 자료·과목 정리 완료, Kelly와 공부 계획 세우기는 확인 전 | 지식 저장소 | — |
 | ✅ | 지식 그래프 화면: Obsidian 그래프 뷰처럼 페이지·사실·연결을 보고, 필요하면 직접 고치기(아래 설명). Dashboard `/knowledge` 구현, 실환경 API·격리 확인, 사용자 브라우저 확인(2026-11-24) | `dashboard`, `knowledge` | f0c9676 + 작업 중 |
 | ✅ | AI 사용량 그래프(18절) | `dashboard`, `llm-gateway` | 8cdd56f |
-| 🟡 | 사실에 종류 붙이기(점수, 실수, 자료): 코드가 키워드 대신 종류로 고름. migration 3 적용·Kelly 반영 완료, 기존 사실 62개에 종류 채우기는 승인 대기(미리보기 완료) | `knowledge`, `personal-ai-knowledge` | f515b3c |
-| ⬜ | Learning ↔ 플래너 연결(학습 과제를 일정·할 일로) | `learning`, `planner` | — |
-| ⬜ | Learning 화면 다시 만들기 | `dashboard` `/learning` | — |
+| ✅ | 사실에 종류 붙이기(점수, 실수, 자료): 코드가 키워드 대신 종류로 고름. migration 3 적용·Kelly 반영 완료, 기존 사실 62개에 종류 채우기는 기존 사실 62개에 종류 채움(백업 후, 변경 기록 62건) | `knowledge`, `personal-ai-knowledge` | f515b3c |
+| ⬜ | Learning ↔ 플래너 연결(학습 과제를 일정·할 일로, Codex 진행 중) | `learning`, `planner` | — |
+| ✅ | Learning 화면 다시 만들기(L2와 함께 새 `/learning`) | `dashboard` `/learning` | — |
 | ⬜ | 할 일을 실제로 했는지 확인(나중 기능) | `planner` | — |
 
 - **지식 그래프 보기·편집 화면** (2026-11-24 요청)
