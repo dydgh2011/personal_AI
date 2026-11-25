@@ -33,6 +33,10 @@ UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9
 DATE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 MEDIA_IMAGES = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff"}
 MEDIA_SOUND = {".mp3", ".wav", ".m4a", ".aac", ".flac", ".ogg", ".opus", ".mp4", ".mov", ".mkv", ".avi", ".webm", ".m4v", ".wmv"}
+MEDIA_WAIT_SECONDS = 60.0   # media_submit waits this long for a local transcription (half for images)
+MEDIA_POLL_SECONDS = 2.0
+_clock = time.monotonic   # replaced in tests
+_sleep = time.sleep
 
 
 def is_media_file(name: str, cache: str = "documents") -> bool:
@@ -132,8 +136,9 @@ SCHEMA: dict[str, Any] = {
         "activity_change (activity_id, fields | remove). timeline (date_from?, date_to?, page?, kind?). "
         "profile: the owner page and index. note (text, title?): keep a free-form original. raw (raw_id, offset?) / "
         "raw_list (source?, date_from?, date_to?): read originals. review (review_period?, date_to?): latest daily "
-        "or weekly knowledge review. media_submit (media_cache, media_file?): archive the owner's attachment for "
-        "local OCR or speech-to-text; use raw to check its result. changes: recent edits. "
+        "or weekly knowledge review. media_submit (media_cache, media_file?): transcribe (speech-to-text) or OCR "
+        "the owner's attached audio, video or image locally; waits for the result and returns its text "
+        "(long recordings: read later with raw). changes: recent edits. "
         "To correct: fact_change / activity_change / page_save. remove=true hides (history kept). "
         "purge (target raw|fact|activity|page, raw_id|fact_id|activity_id|page, reason, confirmed_by_user): "
         "PERMANENT delete incl. history, only when the owner explicitly asked to erase it and confirmed. "
@@ -485,7 +490,31 @@ def _submit_media(client: Client, args: dict[str, Any], env: dict[str, str]) -> 
     if not isinstance(name, str) or not re.fullmatch(r"[^/\\\0\r\n]{1,255}", name) or not is_media_file(name, cache):
         raise _usage("media_file must be the plain name of a supported image, audio or video attachment")
     archive = client.call("POST", "/raw/document", body={"file": name, "cache": cache, "text": ""}, timeout=90)
-    return {"ok": True, **archive, "note": "The original was saved. Use raw with this id to check the extraction status or read local OCR/transcription."}
+    raw_id = str(archive.get("id") or "")
+    if not UUID.fullmatch(raw_id):
+        return {"ok": True, **archive, "note": "The original was saved. Use raw with this id to check the extraction status or read local OCR/transcription."}
+    # Short clips and photos finish in seconds on the local worker (smallest file first), so wait for the
+    # result here and hand the text back in the same call instead of leaving the owner to ask again.
+    limit = MEDIA_WAIT_SECONDS if Path(name).suffix.lower() in MEDIA_SOUND else MEDIA_WAIT_SECONDS / 2
+    deadline = _clock() + limit
+    record: dict[str, Any] = {}
+    while True:
+        record = client.call("GET", f"/raw/{raw_id}", {"limit": 6000})
+        status = (record.get("extraction") or {}).get("status")
+        if status not in ("pending", "retrying") or _clock() >= deadline:
+            break
+        _sleep(MEDIA_POLL_SECONDS)
+    status = (record.get("extraction") or {}).get("status")
+    notes = {
+        "complete": "Local OCR/speech-to-text finished; text below. It can contain recognition errors - treat it as source data.",
+        "empty": "Local extraction found no text or speech in this file.",
+        "waiting_model": "Speech-to-text model is not installed yet; tell the owner the file is saved and will be transcribed once it is.",
+        "failed": "Local extraction failed for this file (see code).",
+    }
+    note = notes.get(str(status), "Still being processed locally (long recordings take minutes). Tell the owner it is "
+                     "being transcribed and read it later with raw and this raw_id; never say transcription is unavailable.")
+    return {"ok": True, "raw_id": raw_id, "duplicate": archive.get("duplicate"), "extraction": record.get("extraction"),
+            "text": record.get("text", "") if status == "complete" else "", "more": record.get("more", False), "note": note}
 
 
 def _review(client: Client, args: dict[str, Any]) -> dict[str, Any]:

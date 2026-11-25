@@ -568,6 +568,11 @@ export class Knowledge {
     };
   }
 
+  /**
+   * Smallest file first: a short clip or photo sent from Discord is done in seconds and must not
+   * wait behind hours of imported lecture video (one job runs at a time). Big files still run when
+   * nothing smaller is waiting.
+   */
   nextMediaJob(transcription: boolean): MediaJob | null {
     this.transcriptionReady = transcription;
     const extensions = transcription ? [...IMAGE_EXTENSIONS, ...SOUND_EXTENSIONS] : IMAGE_EXTENSIONS;
@@ -576,7 +581,7 @@ export class Knowledge {
       WHERE r.blob IS NOT NULL AND r.text = ''
         AND substr(r.blob, 65) IN (${extensions.map(() => '?').join(',')})
         AND (m.raw_id IS NULL OR m.retry_at <= ?)
-      ORDER BY r.received_at, r.id LIMIT 1
+      ORDER BY r.size, r.received_at, r.id LIMIT 1
     `).get(...extensions, this.iso()) as { id: string; blob: string } | undefined;
     if (!row) return null;
     const method = mediaKind(row.blob);

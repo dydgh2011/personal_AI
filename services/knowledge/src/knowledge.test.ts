@@ -348,6 +348,19 @@ describe('local media extraction', () => {
     }
   });
 
+  it('runs a short clip before a long lecture that arrived earlier', async () => {
+    const docs = mkdtempSync(join(tmpdir(), 'kb-media-'));
+    const { kb } = setup({ documentsDir: docs });
+    writeFileSync(join(docs, 'lecture.mp4'), 'x'.repeat(5000));
+    writeFileSync(join(docs, 'voice.m4a'), 'short clip');
+    const lecture = await kb.addDocument({ file: 'lecture.mp4', text: '' }, 'hermes');
+    const clip = await kb.addDocument({ file: 'voice.m4a', text: '' }, 'hermes');
+    const job = kb.nextMediaJob(true)!;
+    assert.equal(job.id, clip.id);
+    kb.finishMediaJob(job, { status: 'complete', text: 'hello' });
+    assert.equal(kb.nextMediaJob(true)?.id, lecture.id);
+  });
+
   it('defers transient extractor failures and keeps permanent failures out of the queue', async () => {
     let now = new Date('2026-11-25T10:00:00Z');
     const docs = mkdtempSync(join(tmpdir(), 'kb-media-'));

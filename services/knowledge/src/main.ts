@@ -90,7 +90,8 @@ function main(): void {
         running = false;
       }
     };
-    setInterval(() => void media(), 10_000).unref();
+    // Every 3 s: a Discord clip is picked up quickly while Kelly's media_submit waits for the text.
+    setInterval(() => void media(), 3_000).unref();
     void media();
   }
 

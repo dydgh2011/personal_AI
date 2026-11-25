@@ -733,6 +733,50 @@ class ReviewAndMediaTest(unittest.TestCase):
             self.assertFalse(escaped["ok"])
             self.assertEqual(len(client.calls), 1)
 
+    def test_media_submit_waits_for_the_local_transcript(self):
+        raw_id = "00000000-0000-4000-8000-0000000000aa"
+
+        class Client:
+            def __init__(self):
+                self.reads = 0
+
+            def call(self, method, path, query=None, body=None, timeout=30.0):
+                if method == "POST":
+                    return {"id": raw_id, "duplicate": False}
+                self.reads += 1
+                if self.reads < 3:
+                    return {"extraction": {"method": "transcription", "status": "pending"}, "text": ""}
+                return {"extraction": {"method": "transcription", "status": "complete"}, "text": "[00:00:00] hello", "more": False}
+
+        now = [0.0]
+        old = kc._clock, kc._sleep
+        kc._clock, kc._sleep = (lambda: now[0]), (lambda s: now.__setitem__(0, now[0] + s))
+        try:
+            client = Client()
+            done = kc.run_tool({"action": "media_submit", "media_cache": "documents", "media_file": "doc_ab_clip.m4a"}, {}, client)
+            self.assertEqual((done["raw_id"], done["text"], client.reads), (raw_id, "[00:00:00] hello", 3))
+
+            class Slow(Client):
+                def call(self, method, path, query=None, body=None, timeout=30.0):
+                    if method == "POST":
+                        return {"id": raw_id}
+                    return {"extraction": {"method": "transcription", "status": "pending"}, "text": ""}
+
+            slow = kc.run_tool({"action": "media_submit", "media_cache": "documents", "media_file": "lecture.mp4"}, {}, Slow())
+            self.assertEqual(slow["text"], "")
+            self.assertIn("being transcribed", slow["note"])
+            self.assertGreaterEqual(now[0], kc.MEDIA_WAIT_SECONDS)
+        finally:
+            kc._clock, kc._sleep = old
+
+    def test_prefetch_names_the_transcription_call_for_audio_attachments(self):
+        owner = ("[The user sent a video attachment: '5e45.m4a'. It is saved at: "
+                 "/opt/data/cache/documents/native-inputs/4a3ce4/doc_9fb8efc4a4c9_5e45.m4a. Its content is not inlined here.]")
+        hint = plugin.media_hint(owner)
+        self.assertIn('action=media_submit media_cache=documents media_file="doc_9fb8efc4a4c9_5e45.m4a"', hint)
+        self.assertEqual(plugin.media_hint("[User sent an image: /opt/data/cache/images/img_abc.png]"), "")
+        self.assertEqual(plugin.media_hint("그냥 질문"), "")
+
     def test_attachment_paths_support_native_cache_and_spaces(self):
         owner = "[The user sent a video attachment: 'Lecture 2.mp4'. It is saved at: /opt/data/cache/documents/Lecture 2.mp4.]\\n" \
                 "[User sent an image: /opt/data/cache/images/img_abc.png]\\n" \

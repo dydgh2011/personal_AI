@@ -74,7 +74,8 @@ RULES = (
     "lasting about themselves (courses, goals, habits, people, preferences, plans that changed), store it as a fact "
     "on the right page (create the page if needed) and tell them in one line; when they report what they did, add "
     "an activity. Correct outdated facts with fact_change instead of adding contradictions. Never store passwords, "
-    "keys or tokens. Schedules and todos belong to personal_ai_planner, not here.\n"
+    "keys or tokens. Schedules and todos belong to personal_ai_planner, not here. Attached audio, video and images "
+    "can be transcribed or OCR'd locally with action media_submit (it returns the text).\n"
     "Recalled lines are short excerpts (a line ending in … is cut), not the full record. For a question about a "
     "course, exam, grade or study material, open the course page with action page before answering (it also "
     "carries test results and weak points kept on topic pages) and follow the note in its result: keep scores, "
@@ -85,6 +86,25 @@ RULES = (
     "when they are attached. 'Now' is the time stamped on the owner's latest message (Toronto), never the time of "
     "an earlier message."
 )
+
+
+def media_hint(message: str) -> str:
+    """Code-made block for audio/video attachments in this message: the model is told exactly which tool call
+    transcribes them. Without it the model tried vision_analyze on audio and then said it had no transcription
+    tool (2026-11-25). Images are left alone (the gateway already describes them)."""
+    found = []
+    for cache, name in ATTACHMENT_PATH.findall(message or ""):
+        cache = cache.lower()
+        if Path(name).suffix.lower() in kc.MEDIA_SOUND and kc.is_media_file(name, cache) and (cache, name) not in found:
+            found.append((cache, name))
+    if not found:
+        return ""
+    lines = [f"- personal_ai_knowledge action=media_submit media_cache={cache} media_file={json.dumps(name, ensure_ascii=False)}"
+             for cache, name in found[:5]]
+    return ("## Attached audio/video (local speech-to-text is available)\n"
+            "To transcribe or answer about what is said, make this tool call (it waits for the local transcript and "
+            "returns the text; vision_analyze cannot read audio or video). Never tell the owner transcription is "
+            "unavailable; if the result says it is still processing, say it is being transcribed.\n" + "\n".join(lines))
 
 
 def _secret_file_readable(env: dict[str, str]) -> bool:
@@ -147,6 +167,9 @@ class KnowledgeProvider(MemoryProvider):
         if not self._client or is_trivial_prompt(query):
             return ""
         parts = []
+        media = media_hint(query)
+        if media:
+            parts.append(media)
         try:
             course = cb.brief(self._client, query[:2000], session_id)
         except kc.KnowledgeError as err:
