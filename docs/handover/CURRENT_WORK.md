@@ -6,13 +6,14 @@
 마지막 갱신: 2026-11-24 · Claude Code
 
 ## 스택 잠금
-- **Claude Code · 사이드바 배포, Codex C·A·B 합치기와 배포 · 2026-11-25** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
+- **비어 있음** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
 
 ## 지금 진행 중 (맡은 범위는 `docs/handover/CODEX_PLAN.md` 1절)
 - **C · Claude Code** (2026-11-24): 커밋 작성자=주인·AI 흔적 차단 배포. 비공개 저장소 실제 확인 완료(PAT로 discovery·동기화·export). GitHub App 연결·실제 게시 켬(대상: dydgh2011/personal-ai-sandbox만). **실제 게시 성공**: sandbox PR #1(draft, 브랜치 changes/6dfcb3df…), 커밋 author·committer = 주인(GitHub 계정 연결), 메시지·PR 본문에 흔적 없음. 승인·게시는 주인이 Dashboard에서 직접(에이전트는 대신 승인하지 않음). 남은 것: CI 결과 읽기(10). 브랜치 claude/publish.
-- **A · Codex** (2026-11-24): Toronto 일·주 계획, 가용시간, 미완료 과제 이월·복습, `/learning/planner` 및 승인 후 Planner 할 일·Kelly 일정 연동 구현. 로컬 커밋 `99cbddf` (`codex/learning-l3`, `D:\personal_ai-wt\codex-learning-l3`). 호스트 테스트·타입 검사 Learning 51/51, Planner 23/23, Dashboard 133/133. Learning·Planner·Dashboard 별도 Docker 이미지 빌드 통과(각 51/51·23/23·133/133). Dashboard 호스트 `next build`는 기존 Next.js 16.4.3의 `SecurityFatalError`로 종료 1. 임시 DB v2→v3 보존, Google 대역 교차 확인 9건(Edge 390px 라이트·다크, 1280px, CSRF, 승인 전 쓰기 0건, 승인 후 고정 마감 보존). 공통 Compose에서 `learning-planner-internal`(Learning·Planner, `internal: true`)과 `secrets/learning-planner.key` 마운트 및 env 활성화, B 링크, 공통 Dashboard 보안 패치 결정 필요. 계획서 2절 4번 통합 승인, 운영 DB 백업·v3 마이그레이션·실제 제안 검증 대기. 운영 확인 후 ROADMAP 17·19절 반영.
-- **B · Codex** (2026-11-24): Kelly 학습 조회·일정 시안, broker 호출자 인증 필수화, Hermes 설정 점검, 서비스 지도 파서 구현. 로컬 커밋 `6b9e323` (`codex/kelly-learning`, `D:\personal_ai-wt\codex-kelly-learning`). 호스트 broker 19/19, Python 95 통과·2 건너뜀, 설정 점검 3/3, 서비스 지도 24/24. 별도 Docker 이미지 broker 19/19, 격리 Hermes 이미지 97/97. 원본 스택 읽기 전용 네트워크 검사 11/11(기존 링크 21개, 주소 여유 2개). A의 학습 조회·시안 API와 별도 키는 합성 데이터로 연결 확인. 통합 전 `learning-broker-internal`(Learning·broker, `internal: true`), `secrets/learning-broker.key` 마운트, `LEARNING_URL`·키 경로 활성화 필요. 배포·Kelly 재시작·실제 대화는 확인 대기. Windows 정기 점검 등록은 `services/hermes-integration/README.md` 절차를 주인이 실행하며 레거시 `secrets/hermes.controller.env` 삭제도 주인 결정. 운영 확인 후 ROADMAP 5·17·20절 반영.
-- **Kelly 지식·활동·미디어 · Codex** (2026-11-25) · Toronto 00:15 일간·주간 정리, 원본에 연결된 활동·사실 기록, 로컬 OCR·강의 받아쓰기 구현. `codex/kelly-knowledge-media` · `C:/Users/dydgh/.codex/worktrees/kelly-knowledge-media/personal_ai` · 로컬 변경 보관 중. Knowledge 39/39, 미디어 4/4, Hermes 96/96, 서비스 지도 23/23, 가져오기 도구 5/5 통과. 격리 Docker에서 임시 DB v3→v4, 한·영 이미지 OCR, WAV·MP4 받아쓰기, 검색 및 원본 보존 확인. 운영 14개 실행 상태 확인. 공유 브랜치 반영·스택 잠금 승인, 모델 파일 설치, 백업 및 운영 Discord 검증 대기. [검증과 재현 절차](KELLY_KNOWLEDGE_MEDIA_VERIFICATION.md)
+- **공통(2026-11-25, Claude)**: learning·planner·hermes-broker를 내부망 learning-link-internal 하나로 연결(Docker 주소 여유 1개 남음). Dashboard Next.js 16.4.6. 사이드바 순서 편집(임시) 배포.
+- **A · Codex** — **합쳐서 배포 완료**(2026-11-25, Claude): Learning L3 일정·복습, learning→planner 시안 연동. learning schema v3(백업 후). 실환경 learning→planner 가용 시간 조회 200. 남은 확인: 실제 시안을 만들어 플래너에서 승인하는 흐름(주인).
+- **B · Codex** — **합쳐서 배포 완료**(2026-11-25, Claude): Kelly personal_ai_learning(조회·시안만), broker 호출자 인증 필수, configure-hermes --check(모두 ok), 서비스 지도 dashboard→learning 파서. 실환경: Kelly 도구→broker→learning 200. 남은 것(주인): Hermes 설정 점검 정기 등록, 레거시 secrets/hermes.controller.env 삭제 결정.
+- **Kelly 지식·활동·미디어 · Codex** — **합쳐서 배포 완료**(2026-11-25, Claude): knowledge schema v4(백업 후), 시작 시 일간·주간 정리 실행 확인, knowledge-media(네트워크 없음) 정상, Kelly review 도구 ok. 남은 것: 받아쓰기 모델 ggml-base.bin(주인), 실제 Discord 이미지·음성 첨부로 확인.
 - 각자 자기 줄만 고친다.
 
 ## 저장소와 스택
