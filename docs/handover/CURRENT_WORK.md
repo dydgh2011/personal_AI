@@ -5,9 +5,14 @@
 
 마지막 갱신: 2026-11-24 · Claude Code
 
-## 지금 진행 중
-- 없음. 큰 작업은 모두 합쳐서 실제 스택에 적용했고 push했다(`learning-os/l1`).
-- 스택을 바꾸는 작업을 시작하면 여기에 "누가, 무엇을, 어느 브랜치/폴더" 한 줄을 먼저 적는다.
+## 스택 잠금
+- **비어 있음** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
+
+## 지금 진행 중 (맡은 범위는 `docs/handover/CODEX_PLAN.md` 1절)
+- **C · Claude Code**: 실제 GitHub 게시, PR, CI 확인, 커밋 작성자 = 주인(AI 흔적 없음), 비공개 저장소 확인 — 브랜치 `claude/publish`, `D:\personal_ai-wt\claude-publish`. 주인의 GitHub App·토큰 설정을 기다리는 중.
+- **A · Codex**: Learning L3 + 플래너 연결 — 브랜치 `codex/learning-l3`, `D:\personal_ai-wt\codex-learning-l3`. (시작 전)
+- **B · Codex**: Kelly 학습 도구 + Hermes 보안 마무리 + 서비스 지도 파서 — 브랜치 `codex/kelly-learning`, `D:\personal_ai-wt\codex-kelly-learning`. (시작 전)
+- 각자 자기 줄만 고친다.
 
 ## 저장소와 스택
 - 브랜치: `learning-os/l1` (origin에 push됨). `main`에는 주인 승인 없이 합치지 않는다.
@@ -27,8 +32,9 @@
 - Discord에서 "입력 중" 표시와 답 끝 📌 기록 표시.
 
 ## 다음 후보 (주인이 순서를 정함)
-- 주인 결정·설정 필요: 실제 GitHub 게시(8·15, GitHub App), 커밋 작성자 방식(11, POLICY B), 비공개 저장소 실제 확인(14), Learning AI 키 설정.
-- 바로 개발 가능: Learning L3(일정·복습)와 Learning↔플래너 연결, L4(Kelly 학습 도구 등), Hermes 위임 보안 강화(5), 서비스 지도 `dashboard → learning` 허용 명령 파서.
+- 주인 결정(2026-11-24): 실제 GitHub 게시 진행, **커밋 작성자는 주인 본인으로(AI 흔적 절대 없음, POLICY B 변경)**, 비공개 저장소 확인 진행 → 작업 C.
+- Learning AI: 이미 LLM 게이트웨이를 쓴다(`provider: gateway`, 별칭 `batch`, `/status`에서 configured=true). 실제 호출은 아직 0회 — 쓰면서 확인.
+- L4-02~04(외부 자료, 프로젝트 연결, 퀘스트·음성)는 아직 아무도 맡지 않았다.
 - 정리: 끝난 worktree 8개와 로컬 브랜치(`claude/*`), Codex가 OS 임시 폴더에 남긴 브라우저 검증 폴더, 지식 저장소 볼륨 안 옛 임시 백업 `pre-test-purge*.db` 2개(같은 파일이 `data/backups/knowledge`에 있음), `.gitignore` 줄바꿈 변경(커밋 안 함).
 - 주의: Docker 네트워크 주소 여유가 적다. 새 네트워크를 만들기 전에 `scripts\stack.ps1 verify-networks`의 "주소 풀"을 본다.
 
