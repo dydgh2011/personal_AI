@@ -17,7 +17,7 @@
 - 각자 자기 줄만 고친다.
 
 ## 저장소와 스택
-- 브랜치: `learning-os/l1` (origin에 push됨). `main`에는 주인 승인 없이 합치지 않는다.
+- 브랜치: `learning-os/l1` (origin에 push됨). `main`에는 주인 승인 없이 합치지 않는다. **2026-11-25 주인 요청으로 `main`을 `learning-os/l1`까지 fast-forward**(커밋 61개). `experiment/kelly-course-brief`는 같은 기능이 이미 들어가 있어 합치지 않음(정리 후보).
 - 스택: `D:\personal_ai`의 `personal_ai` 프로젝트, 컨테이너 14개. 운영은 `scripts\stack.ps1`.
 - 서비스 지도: 1분마다 Windows 작업 스케줄러 `PersonalAI\ServiceMap`이 `services\service-map\collect.mjs`를 돌린다. Dashboard `/services`에서 본다.
 
