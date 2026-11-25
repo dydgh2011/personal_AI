@@ -121,9 +121,13 @@ const WORKTREES_DIR = '.worktrees';
 const REPOS_DIR = 'repos';
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 const TASK_ID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const GIT_IDENTITY = (workerId: string) => [
-  '-c', `user.name=${workerId}`,
-  '-c', `user.email=${workerId}@personal-ai.local`,
+/**
+ * Who a commit is made as. With the project's commit author (POLICY B, owner decision 2026-11-24)
+ * author and committer are the owner; otherwise the worker identity (the publisher refuses that).
+ */
+const GIT_IDENTITY = (workerId: string, owner: { name: string; email: string } | null = null) => [
+  '-c', `user.name=${owner ? owner.name : workerId}`,
+  '-c', `user.email=${owner ? owner.email : `${workerId}@personal-ai.local`}`,
   // Repository hooks are code; never let a project's hooks run inside the worker.
   '-c', 'core.hooksPath=/dev/null',
   '-c', 'commit.gpgsign=false',
@@ -375,7 +379,7 @@ export class Workspace {
     }
     const pending = (await this.git(prepared.cwd, ['status', '--porcelain'])).trim();
     if (pending) {
-      await this.git(prepared.cwd, [...GIT_IDENTITY(this.config.workerId), 'commit', '-q', '--no-verify', '-m', message]);
+      await this.git(prepared.cwd, [...GIT_IDENTITY(this.config.workerId, prepared.settings?.commitAuthor ?? null), 'commit', '-q', '--no-verify', '-m', message]);
     }
     const head = (await this.git(prepared.cwd, ['rev-parse', 'HEAD'])).trim();
     if (head !== prepared.baseCommit) {

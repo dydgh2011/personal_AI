@@ -3,7 +3,7 @@ import type { WorkerConfig } from './config.js';
 import { ControllerError, type ControllerClient, type RegistryProject, type Task } from './controller-client.js';
 import type { Logger } from './logger.js';
 import { runProcess, type RunResult } from './process-runner.js';
-import { buildProjectPrompt, extractCommitSubject } from './project-settings.js';
+import { buildProjectPrompt, extractCommitSubject, hasAgentTrace } from './project-settings.js';
 import type { AgentOutcome, AgentRunner } from './runners/agent-runner.js';
 import type { WorkerState } from './state.js';
 import { WorkspaceError, type PreparedWorkspace, type Workspace, type WorkspaceSummary } from './workspace.js';
@@ -139,14 +139,15 @@ export class TaskExecutor {
       let finalOutcome = this.decide(stopReason, run, outcome);
       // The agent's proposed subject is used only for a successful run of a project with a commit style.
       const subject =
-        finalOutcome === 'completed' && outcome && prepared.settings && prepared.settings.commitStyle.mode !== 'off'
+        finalOutcome === 'completed' && outcome && prepared.settings && (prepared.settings.commitStyle.mode !== 'off' || prepared.settings.commitAuthor)
           ? extractCommitSubject(outcome.summary)
           : null;
+      const owner = prepared.settings?.commitAuthor ?? null;
 
       let summary: WorkspaceSummary | null = null;
       let workspaceError: string | null = null;
       try {
-        summary = await this.deps.workspace.finalize(prepared, commitMessage(config.workerId, task, finalOutcome, subject));
+        summary = await this.deps.workspace.finalize(prepared, owner ? ownerCommitMessage(task, subject) : commitMessage(config.workerId, task, finalOutcome, subject));
       } catch (error) {
         workspaceError = (error as Error).message;
         log('error', 'Could not commit task changes', { error: workspaceError });
@@ -339,6 +340,19 @@ export class TaskExecutor {
 function commitMessage(workerId: string, task: Task, outcome: ExecutionOutcome, subject: string | null = null): string {
   if (subject) return `${subject}\n\n${workerId}: task ${task.id} (${outcome})\n\n${truncate(task.instruction, 2000)}\n`;
   return `${workerId}: task ${task.id} (${outcome})\n\n${truncate(task.instruction, 2000)}\n`;
+}
+
+/**
+ * Commit message when the project has an owner commit author (POLICY B, 2026-11-24): only a subject,
+ * written as the owner would. The agent's subject (already cleaned of agent traces), else the first
+ * line of the request. No worker name, task id, outcome or trailers.
+ */
+export function ownerCommitMessage(task: Pick<Task, 'instruction'>, subject: string | null): string {
+  if (subject) return `${subject}\n`;
+  const first = task.instruction.split('\n').map((l) => l.replace(/[\x00-\x1f\x7f]/g, ' ').replace(/\s+/g, ' ').trim()).find(Boolean) ?? '';
+  const chars = [...first];
+  const line = chars.length > 72 ? `${chars.slice(0, 71).join('').trimEnd()}…` : first;
+  return `${hasAgentTrace(line) || !line ? 'Update project files' : line}\n`;
 }
 
 function truncate(text: string, max: number): string {

@@ -86,8 +86,9 @@ export default async function ProjectPage({ params, searchParams }: { params: Pr
           <fieldset className={styles.group}>
             <legend>Commit author</legend>
             <div className={styles.policy}>
-              Stored only, not applied. Workers keep committing as <code>{'<agent>-worker'}</code>, because the publisher only accepts the
-              worker identity (POLICY B). Using this author needs a separate decision by the owner.
+              POLICY B: task commits are made as this person (author and committer), with no AI or agent trace in the message.
+              The publisher only publishes commits made exactly as this identity, so without it nothing from this project is published.
+              Use the GitHub noreply address to keep your e-mail private.
             </div>
             <div className={styles.pair}>
               <label className={styles.field}>

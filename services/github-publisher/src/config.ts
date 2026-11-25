@@ -1,6 +1,6 @@
 export type PublisherMode = 'dry-run';
 /** disabled: never pushes (default). mock: records what would be pushed (tests). github: not allowed in E-2B. */
-export type PublishBackend = 'disabled' | 'mock';
+export type PublishBackend = 'disabled' | 'mock' | 'github';
 
 export interface GitHubAppConfig {
   appId: string;
@@ -28,12 +28,14 @@ export interface PublisherConfig {
   branchPrefix: string;
   /** POLICY A (fixed): a commit without a passed, signed test run of exactly that commit is never published. */
   requireReportedTests: true;
-  /** POLICY B (fixed): commits are published exactly as the worker made them. */
-  commitAuthorPolicy: 'preserve_worker';
+  /** POLICY B (owner decision 2026-11-24): only commits made as the project's commit author (the owner), with no agent trace. */
+  commitAuthorPolicy: 'owner';
   /** HMAC key the test runner signs evidence with (Docker secret). */
   testEvidenceKeyFile: string;
   githubApp: GitHubAppConfig | null;
   publishBackend: PublishBackend;
+  /** Where pushes go (https://github.com; a local server in tests). */
+  gitBaseUrl: string;
   maxBundleBytes: number;
   pollIntervalMs: number;
 }
@@ -50,16 +52,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): PublisherConfi
   // The user's policies are fixed; a configuration that tries to relax them does not start.
   const tests = (env.PUBLISHER_REQUIRE_REPORTED_TESTS ?? 'true').trim();
   if (tests !== 'true') problems.push('PUBLISHER_REQUIRE_REPORTED_TESTS must be true (POLICY A is fixed)');
-  const author = (env.PUBLISHER_COMMIT_AUTHOR_POLICY ?? 'preserve_worker').trim();
-  if (author !== 'preserve_worker') problems.push('PUBLISHER_COMMIT_AUTHOR_POLICY must be preserve_worker (POLICY B is fixed)');
+  const author = (env.PUBLISHER_COMMIT_AUTHOR_POLICY ?? 'owner').trim();
+  if (author !== 'owner') problems.push('PUBLISHER_COMMIT_AUTHOR_POLICY must be owner (POLICY B: commits are published only as the owner)');
   // Personal access tokens are never used for publishing; only a GitHub App installation token.
   for (const name of ['GITHUB_TOKEN', 'PUBLISHER_GITHUB_TOKEN', 'GH_TOKEN']) {
     if (env[name]) problems.push(`${name} is set: the publisher only uses GitHub App installation tokens`);
   }
 
   const backend = (env.PUBLISHER_PUBLISH_BACKEND ?? 'disabled').trim();
-  if (backend === 'github') problems.push('PUBLISHER_PUBLISH_BACKEND=github is not enabled in Phase E-2B (no real pushes yet)');
-  else if (backend !== 'disabled' && backend !== 'mock') problems.push('PUBLISHER_PUBLISH_BACKEND must be disabled or mock');
+  if (backend !== 'disabled' && backend !== 'mock' && backend !== 'github') problems.push('PUBLISHER_PUBLISH_BACKEND must be disabled, mock or github');
 
   let githubApp: GitHubAppConfig | null = null;
   const appId = env.PUBLISHER_GITHUB_APP_ID?.trim();
@@ -103,6 +104,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): PublisherConfi
   const branchPrefix = (env.PUBLISHER_BRANCH_PREFIX ?? 'personal-ai/').trim();
   if (!/^[a-z0-9][a-z0-9-]*\/$/.test(branchPrefix)) problems.push('PUBLISHER_BRANCH_PREFIX must look like "personal-ai/"');
 
+  if (backend === 'github' && !githubApp) problems.push('PUBLISHER_PUBLISH_BACKEND=github needs the GitHub App (PUBLISHER_GITHUB_APP_ID, _INSTALLATION_ID, _KEY_FILE)');
+
   if (problems.length) throw new ConfigError(`Invalid publisher configuration:\n - ${problems.join('\n - ')}`);
   return {
     mode: 'dry-run',
@@ -116,10 +119,11 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): PublisherConfi
     githubApiUrl: (env.GITHUB_API_URL?.trim() || 'https://api.github.com').replace(/\/+$/, ''),
     branchPrefix,
     requireReportedTests: true,
-    commitAuthorPolicy: 'preserve_worker',
+    commitAuthorPolicy: 'owner',
     testEvidenceKeyFile: env.PUBLISHER_TEST_EVIDENCE_KEY_FILE?.trim() || '/run/secrets/test_evidence_key',
     githubApp,
-    publishBackend: backend === 'mock' ? 'mock' : 'disabled',
+    publishBackend: backend === 'mock' ? 'mock' : backend === 'github' ? 'github' : 'disabled',
+    gitBaseUrl: (env.PUBLISHER_GIT_BASE_URL?.trim() || 'https://github.com').replace(/\/+$/, ''),
     maxBundleBytes,
     pollIntervalMs: pollSeconds * 1000,
   };

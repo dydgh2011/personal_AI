@@ -1,13 +1,12 @@
 /**
  * Per-project settings for coding agents (ROADMAP 11 and 12). Admin-only, never shown to
- * delegators (Hermes). Workers receive commitStyle and agentInstructions through
- * GET /internal/projects; commitAuthor is NOT sent to workers.
+ * delegators (Hermes). Workers receive commitStyle, agentInstructions and commitAuthor through
+ * GET /internal/projects.
  *
- * commitAuthor and POLICY B: the publisher only accepts commits whose author and committer are
- * `<agent>-worker <<agent>-worker@personal-ai.local>` (POLICY B, fixed). A worker committing as the
- * project's commitAuthor would make every such commit unpublishable (AUTHOR_CHANGED), and making the
- * publisher accept it would change POLICY B. So the value is validated and stored for a later owner
- * decision, and workers keep their own identity. See docs/coding-agent-settings.md.
+ * commitAuthor and POLICY B (owner decision 2026-11-24): task commits are authored and committed as
+ * the project's commitAuthor (the owner), with no agent trace in the message. The publisher only
+ * accepts commits made as exactly that identity, so a project without a commitAuthor cannot be
+ * published. See docs/coding-agent-settings.md.
  */
 
 export const COMMIT_STYLE_MODES = ['off', 'auto', 'manual'] as const;

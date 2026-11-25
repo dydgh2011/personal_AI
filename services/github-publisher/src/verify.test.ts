@@ -6,8 +6,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { PublisherConfig } from './config.js';
 import { Journal } from './journal.js';
-import { baseConfig, COMMANDS, fakeGitHub, FakeGitHub, fixture, g, KEY, makeJob, type Fixture, type Over } from './testkit.js';
-import { verifyPublication } from './verify.js';
+import { baseConfig, COMMANDS, fakeGitHub, FakeGitHub, fixture, g, KEY, makeJob, OWNER, type Fixture, type Over } from './testkit.js';
+import { hasAgentTrace, verifyPublication } from './verify.js';
 
 describe('preflight gate', () => {
   let root: string;
@@ -25,22 +25,24 @@ describe('preflight gate', () => {
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  it('7. everything satisfied: eligible and publishable, nothing written, worker author kept', async () => {
+  it('7. everything satisfied: eligible and publishable, nothing written, owner author kept', async () => {
     const r = await run();
     assert.deepEqual(failed(r), []);
     assert.equal(r.eligible, true);
     assert.equal(r.canPublish, true);
     assert.equal(r.reason, null);
     assert.equal(r.gitVerified, true);
-    assert.deepEqual(r.policy, { tests: 'required', commitAuthor: 'preserve_worker' });
-    assert.deepEqual(r.author, { name: 'codex-worker', email: 'codex-worker@personal-ai.local', committerName: 'codex-worker', committerEmail: 'codex-worker@personal-ai.local', message: f.message });
+    assert.deepEqual(r.policy, { tests: 'required', commitAuthor: 'owner' });
+    assert.deepEqual(r.author, { name: OWNER.name, email: OWNER.email, committerName: OWNER.name, committerEmail: OWNER.email, message: f.message });
     assert.equal(r.tests.signatureValid, true);
     assert.deepEqual(r.tests.commands.map((c) => c.exitCode), [0, 0]);
     assert.equal(r.pushPerformed, false);
     assert.equal(r.pullRequestCreated, false);
     assert.equal(r.pullRequest?.draft, true);
-    assert.match(r.pullRequest!.body, /created by an AI coding agent/);
-    assert.match(r.pullRequest!.body, /codex-worker <codex-worker@personal-ai.local> \(worker identity, preserved\)/);
+    // The pull request reads as the owner's own: no agent, worker, task or tool names.
+    assert.equal(r.pullRequest!.title, 'Add notes');
+    assert.equal(hasAgentTrace(`${r.pullRequest!.title}\n${r.pullRequest!.body}`), false);
+    assert.doesNotMatch(`${r.pullRequest!.title}\n${r.pullRequest!.body}`, /codex|claude|worker|agent|task/i);
     assert.equal(g(f.upstream, 'for-each-ref', '--format=%(refname)'), 'refs/heads/main');
     // checks are listed in preflight order
     assert.deepEqual(r.checks.map((c) => c.id).slice(0, 2), ['task_completed', 'review_approved']);
@@ -194,17 +196,54 @@ describe('preflight gate', () => {
   });
 });
 
-describe('POLICY B: commit author preservation', () => {
+describe('POLICY B: commits only as the owner, no agent trace', () => {
   let root: string;
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  it('8. a commit whose author or committer is not the worker is refused', async () => {
+  it('8. a commit whose author or committer is not the project commit author is refused', async () => {
     root = mkdtempSync(join(tmpdir(), 'publisher-author-'));
     const f = fixture(root, { author: 'Some User', email: 'user@example.com' });
     const r = await verifyPublication(makeJob(f), { config: baseConfig(root, f), github: fakeGitHub(f), evidenceKey: KEY });
     assert.equal(r.reason, 'AUTHOR_CHANGED');
     assert.match(r.blockers[0], /Some User <user@example.com>/);
     assert.equal(r.canPublish, false);
+  });
+
+  it('a project without a commit author cannot be published', async () => {
+    root = mkdtempSync(join(tmpdir(), 'publisher-noauthor-'));
+    const f = fixture(root);
+    const r = await verifyPublication(makeJob(f, { project: { commitAuthor: null } }), { config: baseConfig(root, f), github: fakeGitHub(f), evidenceKey: KEY });
+    assert.equal(r.reason, 'AUTHOR_CHANGED');
+    assert.match(r.blockers.join('\n'), /no commit author is set/);
+  });
+
+  it('the old worker identity is refused', async () => {
+    root = mkdtempSync(join(tmpdir(), 'publisher-worker-'));
+    const f = fixture(root, { author: 'codex-worker', email: 'codex-worker@personal-ai.local' });
+    const r = await verifyPublication(makeJob(f), { config: baseConfig(root, f), github: fakeGitHub(f), evidenceKey: KEY });
+    assert.equal(r.canPublish, false);
+    assert.ok(r.reasons.includes('AUTHOR_CHANGED'));
+    assert.ok(r.reasons.includes('AGENT_TRACE'));
+  });
+
+  for (const trace of [
+    'Add notes\n\nCo-Authored-By: Claude <noreply@anthropic.com>',
+    'Add notes\n\nCo-authored-by: Someone Else <s@example.com>',
+    'Add notes\n\n\u{1F916} Generated with [Claude Code](https://claude.com/claude-code)',
+    'codex-worker: task 123 (completed)\n\nAdd notes',
+  ]) {
+    it(`a commit message with an agent trace is refused: ${JSON.stringify(trace.split('\n').at(-1))}`, async () => {
+      root = mkdtempSync(join(tmpdir(), 'publisher-trace-'));
+      const f = fixture(root, { message: trace });
+      const r = await verifyPublication(makeJob(f), { config: baseConfig(root, f), github: fakeGitHub(f), evidenceKey: KEY });
+      assert.equal(r.reason, 'AGENT_TRACE');
+      assert.equal(r.canPublish, false);
+    });
+  }
+
+  it('ordinary words are not traces', () => {
+    assert.equal(hasAgentTrace('Fix the Gemini provider timeout'), false);
+    assert.equal(hasAgentTrace('Add OpenAI-compatible endpoint docs'), false);
   });
 
   it('a commit message different from the reviewed one is refused', async () => {

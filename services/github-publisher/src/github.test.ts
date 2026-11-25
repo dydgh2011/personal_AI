@@ -126,7 +126,7 @@ class MockGitHub {
   }
 }
 
-describe('GitHub App (E-2B, mock only)', () => {
+describe('GitHub App (writer against a local git server)', () => {
   let dir: string;
   let mock: MockGitHub;
   let keyFile: string;
@@ -215,7 +215,7 @@ describe('GitHub App (E-2B, mock only)', () => {
     const remote = join(dir, 'remote', 'owner', 'hello.git');
     assert.equal(g(remote, 'rev-parse', 'refs/heads/personal-ai/x'), head, 'the approved SHA itself');
     assert.equal(g(remote, 'cat-file', '-p', head), before, 'author, committer, message and tree unchanged');
-    assert.equal(g(remote, 'log', '-1', '--format=%an <%ae> / %cn <%ce>', head), 'codex-worker <codex-worker@personal-ai.local> / codex-worker <codex-worker@personal-ai.local>');
+    assert.equal(g(remote, 'log', '-1', '--format=%an <%ae> / %cn <%ce>', head), 'Owner Name <owner@example.com> / Owner Name <owner@example.com>');
     assert.equal(g(remote, 'rev-parse', 'refs/heads/main'), g(seed, 'rev-parse', 'HEAD~1'), 'default branch untouched');
     // idempotent: a second push of the same commit is a no-op; another commit on that branch is refused
     await writer.pushBranch({ fullName: 'owner/hello', repositoryId: 42, branch: 'personal-ai/x', headSha: head, repoDir: seed });
@@ -252,13 +252,17 @@ describe('configuration', () => {
   it('keeps the owner policies fixed', () => {
     const c = loadConfig(base);
     assert.equal(c.requireReportedTests, true);
-    assert.equal(c.commitAuthorPolicy, 'preserve_worker');
+    assert.equal(c.commitAuthorPolicy, 'owner');
     assert.equal(c.publishBackend, 'disabled');
     assert.throws(() => loadConfig({ ...base, PUBLISHER_REQUIRE_REPORTED_TESTS: 'false' }), (e: Error) => e instanceof ConfigError && /POLICY A is fixed/.test(e.message));
-    assert.throws(() => loadConfig({ ...base, PUBLISHER_COMMIT_AUTHOR_POLICY: 'developer_profile' }), /POLICY B is fixed/);
+    assert.throws(() => loadConfig({ ...base, PUBLISHER_COMMIT_AUTHOR_POLICY: 'preserve_worker' }), /must be owner/);
   });
-  it('never publishes for real in E-2B and never uses personal access tokens', () => {
-    assert.throws(() => loadConfig({ ...base, PUBLISHER_PUBLISH_BACKEND: 'github' }), /not enabled in Phase E-2B/);
+  it('publishes for real only through a configured GitHub App, never with personal access tokens', () => {
+    assert.throws(() => loadConfig({ ...base, PUBLISHER_PUBLISH_BACKEND: 'github' }), /needs the GitHub App/);
+    const app = { PUBLISHER_GITHUB_APP_ID: '1', PUBLISHER_GITHUB_APP_INSTALLATION_ID: '2', PUBLISHER_GITHUB_APP_KEY_FILE: '/run/secrets/k' };
+    assert.equal(loadConfig({ ...base, ...app, PUBLISHER_PUBLISH_BACKEND: 'github' }).publishBackend, 'github');
+    assert.equal(loadConfig({ ...base, ...app, PUBLISHER_PUBLISH_BACKEND: 'github' }).gitBaseUrl, 'https://github.com');
+    assert.throws(() => loadConfig({ ...base, PUBLISHER_PUBLISH_BACKEND: 'live' }), /disabled, mock or github/);
     assert.equal(loadConfig({ ...base, PUBLISHER_PUBLISH_BACKEND: 'mock' }).publishBackend, 'mock');
     assert.throws(() => loadConfig({ ...base, GITHUB_TOKEN: 'x' }), /only uses GitHub App installation tokens/);
     assert.throws(() => loadConfig({ ...base, PUBLISHER_MODE: 'publish' }), /PUBLISHER_PUBLISH_BACKEND/);

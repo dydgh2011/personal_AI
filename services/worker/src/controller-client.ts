@@ -28,6 +28,8 @@ export interface RegistryProject {
   syncStatus: 'not_synced' | 'synced' | 'error';
   /** Registry v7 (absent from older controllers = nothing configured). Checked by project-settings.ts. */
   commitStyle?: { mode: 'off' | 'auto' | 'manual'; guide: string | null };
+  /** The owner's git identity for task commits (POLICY B); null/absent = worker identity. */
+  commitAuthor?: { name: string; email: string } | null;
   agentInstructions?: { rules: string; forbiddenPaths: string[] };
 }
 

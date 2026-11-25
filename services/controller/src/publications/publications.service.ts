@@ -100,7 +100,7 @@ export interface PublicationJob {
   } | null;
   project: (Pick<Project,
     'id' | 'source' | 'fullName' | 'remoteUrl' | 'defaultBranch' | 'visibility' | 'githubRepositoryId' | 'enabled' |
-    'allowCodeChanges' | 'allowedAgents' | 'syncStatus' | 'cachedHeadSha'> & { testCommands: TestCommand[] }) | null;
+    'allowCodeChanges' | 'allowedAgents' | 'syncStatus' | 'cachedHeadSha' | 'commitAuthor'> & { testCommands: TestCommand[] }) | null;
   /** Newest test run of the approved commit (with the runner's signed evidence), or null. */
   testValidation: TestValidation | null;
   /** publish: the authorization the request consumed. dry-run: the currently active one, if any. */
@@ -294,6 +294,7 @@ export class PublicationsService {
         id: p.id, source: p.source, fullName: p.fullName, remoteUrl: p.remoteUrl, defaultBranch: p.defaultBranch,
         visibility: p.visibility, githubRepositoryId: p.githubRepositoryId, enabled: p.enabled, allowCodeChanges: p.allowCodeChanges,
         allowedAgents: p.allowedAgents, syncStatus: p.syncStatus, cachedHeadSha: p.cachedHeadSha, testCommands: p.testCommands,
+        commitAuthor: p.commitAuthor,
       },
       testValidation: this.tests.latestFor(task.id, publication.headSha),
       authorization,

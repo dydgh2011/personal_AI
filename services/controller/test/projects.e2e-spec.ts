@@ -161,6 +161,7 @@ describe('Project registry and GitHub discovery', () => {
         syncStatus: 'not_synced',
         commitStyle: { mode: 'off', guide: null },
         agentInstructions: { rules: '', forbiddenPaths: [] },
+        commitAuthor: null,
       });
       await http.get('/internal/projects').set(hermes).expect(403);
     });
@@ -178,7 +179,7 @@ describe('Project registry and GitHub discovery', () => {
       agentInstructions: { rules: 'Use TypeScript strict mode.\r\nNo new dependencies.', forbiddenPaths: ['secrets/', '*.pem', 'config/prod/**'] },
     };
 
-    it('starts empty, is set by the admin, and reaches workers without the commit author', async () => {
+    it('starts empty, is set by the admin, and reaches workers with the commit author (POLICY B: owner)', async () => {
       const created = (await registerHello({ enabled: true }).expect(201)).body;
       expect(created).toMatchObject({ commitAuthor: null, commitStyle: { mode: 'off', guide: null }, agentInstructions: { rules: '', forbiddenPaths: [] } });
 
@@ -194,8 +195,7 @@ describe('Project registry and GitHub discovery', () => {
       const forClaude = (await http.get('/internal/projects').set(claude).expect(200)).body.items[0];
       expect(forClaude.commitStyle).toEqual({ mode: 'manual', guide: 'Conventional Commits, lowercase, no period.' });
       expect(forClaude.agentInstructions.forbiddenPaths).toEqual(['secrets/', '*.pem', 'config/prod/**']);
-      expect(forClaude).not.toHaveProperty('commitAuthor');
-      expect(JSON.stringify(forClaude)).not.toContain('owner@example.com');
+      expect(forClaude.commitAuthor).toEqual({ name: 'Dev Owner', email: 'owner@example.com' });
 
       const forHermes = (await http.get('/projects/hello-world').set(hermes).expect(200)).body;
       for (const key of ['commitAuthor', 'commitStyle', 'agentInstructions']) expect(forHermes).not.toHaveProperty(key);

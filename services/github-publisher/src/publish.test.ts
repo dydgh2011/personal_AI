@@ -31,7 +31,7 @@ describe('publish requests (mock backend)', () => {
   });
   afterEach(() => rmSync(root, { recursive: true, force: true }));
 
-  it('publishes the approved commit once: same SHA, draft PR, AI provenance, journal', async () => {
+  it('publishes the approved commit once: same SHA, draft PR without agent traces, journal', async () => {
     const job = makeJob(f, { mode: 'publish' });
     const { status, report } = await handle(job, deps());
     assert.equal(status, 'pr_created', JSON.stringify(report.blockers));
@@ -39,7 +39,7 @@ describe('publish requests (mock backend)', () => {
     assert.equal(writer.pullRequests.length, 1);
     assert.equal(report.pushPerformed, true);
     assert.equal(report.pullRequestCreated, true);
-    assert.match(String((report.pullRequest as { body: string }).body), /created by an AI coding agent/);
+    assert.doesNotMatch(String((report.pullRequest as { body: string }).body), /codex|claude|worker|agent/i);
     assert.equal(await journal.publishedReview('r-1'), true);
     // the worker's commit is untouched (no amend / rebase happened)
     assert.equal(g(f.worker, 'rev-parse', f.branch), f.head);
