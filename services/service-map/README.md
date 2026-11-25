@@ -55,16 +55,16 @@ node D:\personal_ai\services\service-map\collect.mjs
 | 연결 | 읽는 곳 | 누가 막나 |
 |---|---|---|
 | hermes → hermes-broker | `hermes-broker/src/broker.ts`의 `ROUTES`(도우미 `plannerRoutes()` 등 포함) | 받는 쪽(broker) |
-| hermes-broker → controller·planner·knowledge·school | 같은 `ROUTES`의 `target` | 보내는 쪽(broker가 이것만 넘김) |
+| hermes-broker → controller·planner·knowledge·school·learning | 같은 `ROUTES`의 `target` | 보내는 쪽 |
 | hermes-broker·school·dashboard → knowledge | `knowledge/src/api.ts`의 `CLIENT_ROUTES`와 경로별 `clients` | 받는 쪽 |
 | hermes·learning·school·dashboard → llm-gateway | `llm-gateway/src/config.ts`의 `CLIENT_RIGHTS`(별칭, `/usage`, `/control/paid`). `gateway.ts`에 그 검사가 그대로 있는지도 확인 | 받는 쪽 |
 | dashboard·작업자·github-publisher·test-runner·hermes-broker → controller | `controller/src/**/*.controller.ts`의 `@RequireRole`(없으면 admin), 역할↔서비스는 `token-registry.ts`·`app-config.ts` | 받는 쪽 |
+| dashboard → learning | `learning/src/**`의 NestJS 컨트롤러와 경로 데코레이터. Dashboard에 부여된 소유자 권한 | 받는 쪽 |
 | 모든 호출자 → notifier | `notifier/src/notifier.ts`의 이벤트 종류(`PAYLOAD`). 호출자를 구분하지 않는다 | 받는 쪽 |
 
 - 이름, 메서드, 경로 모양만 들어간다. 정규식의 변수 부분은 `:id`, `:project`, `{claude|codex}`처럼 바뀐다. 키, 토큰, 환경 변수 값은 읽지 않는다.
 - 파서는 "읽은 개수 = 코드에 있는 개수"를 스스로 확인하고, 다르면 실패한다(조용히 줄어든 지도를 만들지 않음). 실패한 파서는 `rules-extract-failed`로 남고, 나머지는 계속 나온다.
 - 테스트가 **실제 소스**를 읽어 알려진 경로(예: `tasks.create`, `planner.day`, 작업자 `POST /internal/workers/claim`)와 안전 성질(Hermes는 승인·거절·게시 불가, 대시보드 knowledge 키는 편집만)을 확인한다. 경로를 바꾸면 테스트도 같이 고친다.
-- 아직 못 읽는 연결: `dashboard → learning`(Learning OS의 권한 구조는 아직 파서 없음) → `link-no-rules`(정보).
 
 ## 최근 호출 수 (3단계, `calls.mjs`)
 

@@ -50,7 +50,7 @@ _PROTECTED_SKILL = re.compile(r"(?i)personal[-_ ]?ai")
 # What the browser tools must never reach: local files and the internal Docker services.
 _INTERNAL_TARGETS = re.compile(
     r"(?i)file:|/run/secrets|/opt/data"
-    r"|://(?:[^/\s\"@]*@)?(?:hermes-broker|controller|claude-worker|codex-worker|hermes|localhost|"
+    r"|://(?:[^/\s\"@]*@)?(?:hermes-broker|controller|claude-worker|codex-worker|hermes|learning|localhost|"
     r"127\.\d+\.\d+\.\d+|0\.0\.0\.0|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(?:1[6-9]|2\d|3[01])\.\d+\.\d+|\[?::1\]?)"
     r"(?::\d+)?(?:[/\"?#]|$)"
 )
@@ -78,7 +78,7 @@ def check(tool_name: str, args: Any) -> str | None:
             return "BLOCKED by Personal AI policy: credential files are not readable by Hermes."
     if tool_name.startswith("browser") and _INTERNAL_TARGETS.search(text):
         return ("BLOCKED by Personal AI policy: the browser may not open local files or internal services "
-                f"(broker, controller, workers). {POLICY}")
+                f"(broker, controller, workers, learning). {POLICY}")
     if tool_name == "skill_manage" and _PROTECTED_SKILL.search(text):
         return ("BLOCKED by Personal AI policy: skills named after the Personal AI controller are provided read-only by "
                 "the operator and cannot be created, replaced or shadowed.")

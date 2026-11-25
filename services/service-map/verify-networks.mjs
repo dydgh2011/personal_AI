@@ -69,9 +69,12 @@ export function check({ before, after, live }) {
   add(unreachable.length === 0, 'link-unreachable = 0', unreachable.map((f) => f.services.join(' → ')).join(', '));
   const leaky = after.findings.filter((f) => f.code === 'internal-has-internet');
   add(leaky.length === 0, 'internal-has-internet = 0', leaky.map((f) => f.message.split(':')[0]).join(', '));
-  const ub = count(before, 'reachable-unused');
-  const ua = count(after, 'reachable-unused');
-  add(ua < ub, `reachable-unused 줄어듦 (${ub} → ${ua})`);
+  const beforeUnused = before.findings.filter((f) => f.code === 'reachable-unused');
+  const afterUnused = after.findings.filter((f) => f.code === 'reachable-unused');
+  const previousPairs = new Set(beforeUnused.map((f) => pair(...f.services)));
+  const newPairs = afterUnused.filter((f) => !previousPairs.has(pair(...f.services)));
+  add(newPairs.length === 0, `reachable-unused 새 연결 없음 (${beforeUnused.length} → ${afterUnused.length})`,
+    newPairs.map((f) => f.services.join(' ↔ ')).join(', '));
 
   const afterLinks = new Map(after.links.map((l) => [`${l.from}>${l.to}`, l]));
   const missing = live.links.filter((l) => !afterLinks.get(`${l.from}>${l.to}`)?.networks.length);

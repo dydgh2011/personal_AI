@@ -8,7 +8,7 @@
 //   skills.external_dirs   + /opt/personal-ai/skills              (read-only skill mount, compose.yaml)
 //   skills.disabled        + claude-code, codex, opencode          (bundled skills that run coding CLIs in Hermes)
 //   plugins.enabled        + personal-ai-controller                (personal_ai_task tool + pre_tool_call guard)
-//   platform_toolsets      telegram / cli / cron without terminal, code_execution, file, computer_use and
+//   platform_toolsets      Discord / Telegram / CLI / cron without terminal, code_execution, file, computer_use and
 //                          delegation: Hermes delegates coding through personal_ai_task instead of doing it.
 //                          The previous value is kept as a comment next to each line.
 // SOUL.md                  "Personal AI OS role" section = hermes-config/SOUL.personal-ai.md
@@ -33,6 +33,8 @@ const PLATFORM_TOOLSETS = {
   cli: [...MANAGER_TOOLSETS, 'x_search'],
   telegram: MANAGER_TOOLSETS,
   cron: MANAGER_TOOLSETS,
+  // Match Kelly's reduced Discord toolset without re-enabling previously removed tools.
+  discord: MANAGER_TOOLSETS.filter((name) => !['browser', 'connections', 'image_gen', 'tts'].includes(name)),
 };
 const SOUL_HEADING = '## Personal AI OS role';
 const SOUL_SECTION = readFileSync(new URL('../hermes-config/SOUL.personal-ai.md', import.meta.url), 'utf8').trim();
@@ -46,6 +48,7 @@ const backup = (file) => copyFileSync(file, join(hermesHome, 'backups', `${file.
 
 /** Top-level `name:` block: [start, end) offsets of its indented body. */
 function block(text, name) {
+  requireUnique(text, name, name);
   const match = new RegExp(`^${name}:[ \\t]*(?:#.*)?\\n`, 'm').exec(text);
   if (!match) throw new Error(`config.yaml has no top-level "${name}:" section`);
   const start = match.index + match[0].length;
@@ -54,10 +57,17 @@ function block(text, name) {
   return { start, end: start + (end ? end.index : rest.length) };
 }
 
+function requireUnique(text, key, label, indent = '') {
+  if ([...text.matchAll(new RegExp(`^${indent}${key}:`, 'gm'))].length > 1) {
+    throw new Error(`config.yaml has repeated "${label}" keys`);
+  }
+}
+
 /** Ensures `  <key>:` under the block lists `value`. Adds the key if absent; refuses to rewrite an existing list. */
 function ensureListItem(text, blockName, key, values) {
   const b = block(text, blockName);
   const body = text.slice(b.start, b.end);
+  requireUnique(body, key, `${blockName}.${key}`, '  ');
   const keyMatch = new RegExp(`^  ${key}:[ \\t]*\\n((?:    - .*\\n)*)`, 'm').exec(body);
   if (keyMatch) {
     const present = [...keyMatch[1].matchAll(/^    - (.+?)\s*$/gm)].map((m) => m[1]);
@@ -67,7 +77,7 @@ function ensureListItem(text, blockName, key, values) {
     return { text: text.slice(0, insertAt) + absent.map((v) => `    - ${v}\n`).join('') + text.slice(insertAt), ok: false };
   }
   if (new RegExp(`^  ${key}:`, 'm').test(body)) throw new Error(`${blockName}.${key} is not a block list; edit it by hand`);
-  const insertAt = b.start + body.trimEnd().length + 1;
+  const insertAt = b.start + (body.trimEnd() ? body.trimEnd().length + 1 : 0);
   const addition = `  # Personal AI OS (services/hermes-integration/scripts/configure-hermes.mjs)\n  ${key}:\n${values.map((v) => `    - ${v}\n`).join('')}`;
   return { text: text.slice(0, insertAt) + addition + text.slice(insertAt), ok: false };
 }
@@ -76,23 +86,28 @@ function ensureListItem(text, blockName, key, values) {
 function ensureToolsets(text, platform, toolsets) {
   const b = block(text, 'platform_toolsets');
   const body = text.slice(b.start, b.end);
+  requireUnique(body, platform, `platform_toolsets.${platform}`, '  ');
   const wanted = `[${toolsets.join(', ')}]`;
   const line = new RegExp(`^  ${platform}:[ \\t]*(.*)$`, 'm').exec(body);
-  if (line && line[1].replace(/\s+#.*$/, '').trim() === wanted) return { text, ok: true };
+  const flow = line?.[1].replace(/\s+#.*$/, '').trim().match(/^\[([^\]]*)\]$/);
+  if (line && !flow) throw new Error(`platform_toolsets.${platform} must be a single-line list`);
+  const current = flow?.[1].split(',').map((entry) => entry.trim().replace(/^(['"])([a-z_]+)\1$/, '$2'));
+  if (current?.length === toolsets.length && toolsets.every((tool) => current.includes(tool))) return { text, ok: true };
   const comment = `  # ${platform} before Personal AI OS: ${line ? line[1].trim() : '(platform default)'}\n`;
   const replacement = `${comment}  ${platform}: ${wanted}`;
   if (line) {
     const at = b.start + line.index;
     return { text: text.slice(0, at) + replacement + text.slice(at + line[0].length), ok: false };
   }
-  const insertAt = b.start + body.trimEnd().length + 1;
+  const insertAt = b.start + (body.trimEnd() ? body.trimEnd().length + 1 : 0);
   return { text: `${text.slice(0, insertAt)}${replacement}\n${text.slice(insertAt)}`, ok: false };
 }
 
 // ---- config.yaml ---------------------------------------------------------------------------
 const configFile = join(hermesHome, 'config.yaml');
 const original = readFileSync(configFile, 'utf8');
-let config = original;
+const normalized = original.replace(/\r\n/g, '\n');
+let config = normalized;
 for (const [blockName, key, values, label] of [
   ['skills', 'external_dirs', [SKILLS_DIR], `skills.external_dirs contains ${SKILLS_DIR}`],
   ['skills', 'disabled', DISABLED_SKILLS, `skills.disabled contains ${DISABLED_SKILLS.join(', ')}`],
@@ -105,11 +120,11 @@ for (const [blockName, key, values, label] of [
 for (const [platform, toolsets] of Object.entries(PLATFORM_TOOLSETS)) {
   const result = ensureToolsets(config, platform, toolsets);
   config = result.text;
-  report(result.ok, `config.yaml platform_toolsets.${platform} = manager toolsets (no terminal/file/code/delegation)`);
+  report(result.ok, `config.yaml platform_toolsets.${platform} = manager toolsets (no terminal/file/code/computer_use/delegation)`);
 }
-if (config !== original && !check) {
+if (config !== normalized && !check) {
   backup(configFile);
-  writeFileSync(configFile, config);
+  writeFileSync(configFile, original.includes('\r\n') ? config.replace(/\n/g, '\r\n') : config);
 }
 
 // ---- SOUL.md -------------------------------------------------------------------------------
@@ -121,8 +136,9 @@ if (at >= 0) {
   const next = soul.indexOf('\n## ', at + SOUL_HEADING.length);
   current = soul.slice(at, next < 0 ? soul.length : next).trim();
 }
-report(current === SOUL_SECTION, 'SOUL.md "Personal AI OS role" section is current');
-if (current !== SOUL_SECTION && !check) {
+const soulMatches = current?.replace(/\r\n/g, '\n') === SOUL_SECTION.replace(/\r\n/g, '\n');
+report(soulMatches, 'SOUL.md "Personal AI OS role" section is current');
+if (!soulMatches && !check) {
   let updated;
   if (at >= 0) {
     const next = soul.indexOf('\n## ', at + SOUL_HEADING.length);

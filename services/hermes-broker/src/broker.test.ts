@@ -1,11 +1,20 @@
 import assert from 'node:assert/strict';
-import { createServer, type Server } from 'node:http';
+import { createServer, request, type Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import { createBroker, type Logger } from './broker.js';
 
 const TOKEN = 'delegator-' + 'k'.repeat(40);
+const BROKER_KEY = 'hermes-' + 'h'.repeat(40);
 const TASK_ID = '3f1c2a54-0000-4000-8000-000000000000';
+const config = {
+  controllerUrl: 'http://127.0.0.1:9',
+  token: TOKEN,
+  submitPerMinute: 3,
+  submitPerHour: 5,
+  upstreamTimeoutMs: 2000,
+  clientKey: BROKER_KEY,
+};
 
 describe('hermes-broker', () => {
   let upstream: Server;
@@ -33,7 +42,7 @@ describe('hermes-broker', () => {
     });
     const upstreamUrl = await listen(upstream);
     const logger: Logger = { info: (msg, f = {}) => logs.push({ msg, ...f }), warn: (msg, f = {}) => logs.push({ msg, ...f }) };
-    broker = createBroker({ controllerUrl: upstreamUrl, token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: null }, logger, () => clock);
+    broker = createBroker({ ...config, controllerUrl: upstreamUrl }, logger, () => clock);
     base = await listen(broker);
   });
 
@@ -45,7 +54,7 @@ describe('hermes-broker', () => {
   const call = async (method: string, path: string, body?: unknown, headers: Record<string, string> = {}) => {
     const res = await fetch(base + path, {
       method,
-      headers: { 'Content-Type': 'application/json', ...headers },
+      headers: { 'Content-Type': 'application/json', 'X-Broker-Key': BROKER_KEY, ...headers },
       body: body === undefined ? undefined : typeof body === 'string' ? body : JSON.stringify(body),
     });
     return { status: res.status, body: await res.json(), headers: res.headers };
@@ -191,13 +200,13 @@ describe('hermes-broker', () => {
     });
     const plannerUrl = await listen(planner);
     const withPlanner = createBroker(
-      { controllerUrl: 'http://127.0.0.1:9', token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: null, planner: { url: plannerUrl, key: PLANNER_KEY }, plannerWritesPerMinute: 3 },
+      { ...config, planner: { url: plannerUrl, key: PLANNER_KEY }, plannerWritesPerMinute: 3 },
       { info: () => {}, warn: () => {} },
       () => clock,
     );
     const url = await listen(withPlanner);
     const send = (method: string, path: string, body?: unknown) =>
-      fetch(url + path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      fetch(url + path, { method, headers: { 'Content-Type': 'application/json', 'X-Broker-Key': BROKER_KEY }, body: body === undefined ? undefined : JSON.stringify(body) });
     try {
       const day = await send('GET', '/planner/day?date=2026-11-23');
       assert.equal(day.status, 200);
@@ -238,13 +247,13 @@ describe('hermes-broker', () => {
     });
     const knowledgeUrl = await listen(knowledge);
     const broker = createBroker(
-      { controllerUrl: 'http://127.0.0.1:9', token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: null, knowledge: { url: knowledgeUrl, key: KNOWLEDGE_KEY }, knowledgeWritesPerMinute: 2 },
+      { ...config, knowledge: { url: knowledgeUrl, key: KNOWLEDGE_KEY }, knowledgeWritesPerMinute: 2 },
       { info: () => {}, warn: () => {} },
       () => clock,
     );
     const url = await listen(broker);
     const send = (method: string, path: string, body?: unknown) =>
-      fetch(url + path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      fetch(url + path, { method, headers: { 'Content-Type': 'application/json', 'X-Broker-Key': BROKER_KEY }, body: body === undefined ? undefined : JSON.stringify(body) });
     try {
       const search = await send('GET', '/knowledge/search?q=%ED%97%AC%EC%8A%A4&kinds=fact&limit=5');
       assert.equal(search.status, 200);
@@ -285,13 +294,13 @@ describe('hermes-broker', () => {
     });
     const schoolUrl = await listen(school);
     const broker = createBroker(
-      { controllerUrl: 'http://127.0.0.1:9', token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: null, school: { url: schoolUrl, key: SCHOOL_KEY } },
+      { ...config, school: { url: schoolUrl, key: SCHOOL_KEY } },
       { info: () => {}, warn: () => {} },
       () => clock,
     );
     const url = await listen(broker);
     const send = (method: string, path: string, body?: unknown) =>
-      fetch(url + path, { method, headers: { 'Content-Type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+      fetch(url + path, { method, headers: { 'Content-Type': 'application/json', 'X-Broker-Key': BROKER_KEY }, body: body === undefined ? undefined : JSON.stringify(body) });
     try {
       assert.equal((await send('GET', '/school/updates?days=3&service=piazza&important=1&limit=20')).status, 200);
       assert.equal((await send('GET', '/school/item?service=quercus&id=stream%3A1%3At')).status, 200);
@@ -317,20 +326,99 @@ describe('hermes-broker', () => {
     assert.equal((await call('GET', '/school/status')).status, 503, 'without a school service configured');
   });
 
-  it('requires the client key when configured, before forwarding anything', async () => {
-    const key = 'k'.repeat(48);
-    const keyed = createBroker({ controllerUrl: base, token: TOKEN, submitPerMinute: 3, submitPerHour: 5, upstreamTimeoutMs: 2000, clientKey: key }, { info: () => {}, warn: () => {} });
-    const keyedBase = await listen(keyed);
+  it('requires a valid, independent key to start and authenticates every proxied request', async () => {
+    const logger = { info: () => {}, warn: () => {} };
+    assert.throws(() => createBroker({ ...config, clientKey: '' }, logger), /key is required/);
+    assert.throws(() => createBroker({ ...config, clientKey: TOKEN }, logger), /must differ/);
+    assert.throws(() => createBroker({ ...config, learning: { url: base, key: BROKER_KEY } }, logger), /must differ/);
+    const get = (headers: Record<string, string> = {}) => fetch(base + '/system/status', { headers }).then((r) => r.status);
+    assert.equal(await get(), 401);
+    assert.equal(await get({ 'X-Broker-Key': 'wrong' }), 401);
+    const duplicateStatus = await new Promise((resolve, reject) => {
+      const req = request(base + '/system/status', { headers: { 'X-Broker-Key': [BROKER_KEY, BROKER_KEY] } }, (res) => {
+        res.resume();
+        resolve(res.statusCode);
+      });
+      req.on('error', reject).end();
+    });
+    assert.equal(duplicateStatus, 401);
+    assert.equal(seen.length, 0, 'rejected requests never reach the controller');
+    assert.equal((await fetch(base + '/health')).status, 200);
+    assert.equal(await get({ 'X-Broker-Key': BROKER_KEY }), 200);
+    assert.equal(logs.at(-1)?.caller, 'hermes');
+    assert.ok(!JSON.stringify(logs).includes(BROKER_KEY));
+  });
+
+  it('forwards learning queries and schedule proposals with only the scoped learning key', async () => {
+    const LEARNING_KEY = 'learning-' + 'l'.repeat(40);
+    const got: Array<{ method: string; url: string; body: string; key: string | undefined }> = [];
+    const learning = createServer(async (req, res) => {
+      assert.equal(req.headers.authorization, undefined);
+      assert.equal(req.headers['x-broker-key'], undefined);
+      assert.equal(req.headers['x-approver'], undefined);
+      let body = '';
+      for await (const chunk of req) body += chunk;
+      got.push({ method: req.method!, url: req.url!, body, key: req.headers['x-learning-key'] as string | undefined });
+      res.writeHead(req.method === 'POST' ? 201 : 200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ proposal: { code: 'A', status: 'draft' }, echo: LEARNING_KEY }));
+    });
+    const proxy = createBroker(
+      {
+        ...config,
+        learning: { url: await listen(learning), key: LEARNING_KEY },
+        learningQueriesPerMinute: 5,
+        learningProposalsPerMinute: 1,
+      },
+      { info: (msg, fields) => logs.push({ msg, ...fields }), warn: () => {} },
+      () => clock,
+    );
+    const url = await listen(proxy);
+    const send = (method: string, path: string, body?: unknown) => fetch(url + '/learning' + path, {
+      method,
+      headers: { 'Content-Type': 'application/json', 'X-Broker-Key': BROKER_KEY, 'X-Approver': 'owner' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
     try {
-      const get = (headers: Record<string, string> = {}) => fetch(keyedBase + '/system/status', { headers }).then((r) => r.status);
-      const before = seen.length;
-      assert.equal(await get(), 401);
-      assert.equal(await get({ 'X-Broker-Key': 'wrong' }), 401);
-      assert.equal(seen.length, before, 'rejected requests never reach the controller');
-      assert.equal((await fetch(keyedBase + '/health')).status, 200);
-      assert.equal(await get({ 'X-Broker-Key': key }), 200);
+      const queries = ['/domains', '/roadmaps', `/roadmaps/${TASK_ID}`, '/schedule/status', '/schedule?period=week&date=2026-11-24'];
+      for (const path of queries) assert.equal((await send('GET', path)).status, 200, path);
+      const proposal = await send('POST', '/schedule/propose', { date: '2026-11-24', period: 'week' });
+      assert.equal(proposal.status, 201);
+      assert.ok(!(await proposal.text()).includes(LEARNING_KEY), 'redacts the scoped key from responses');
+      assert.deepEqual(got.map((entry) => [entry.method, entry.url]), [...queries.map((path) => ['GET', path]), ['POST', '/schedule/propose']]);
+      assert.deepEqual(JSON.parse(got.at(-1)!.body), { date: '2026-11-24', period: 'week' });
+      assert.ok(got.every((entry) => entry.key === LEARNING_KEY));
+      assert.equal((await send('GET', '/schedule')).status, 429);
+      assert.equal((await send('POST', '/schedule/propose', {})).status, 429);
+      assert.ok(logs.some((log) => log.op === 'learning.schedule.propose' && log.caller === 'hermes' && log.status === 201));
+      assert.ok(!JSON.stringify(logs).includes('2026-11-24'));
+      assert.ok(!JSON.stringify(logs).includes(LEARNING_KEY));
+
+      clock += 60_000;
+      for (const [method, path, body, status] of [
+        ['GET', '/schedule?date=2026-02-30', undefined, 400],
+        ['GET', '/schedule?period=year', undefined, 400],
+        ['GET', '/schedule?period=day&period=week', undefined, 400],
+        ['GET', '/schedule?constructor=day', undefined, 400],
+        ['GET', '/roadmaps/not-an-id', undefined, 404],
+        ['GET', '/export', undefined, 404],
+        ['POST', '/domains', {}, 405],
+        ['POST', `/roadmaps/${TASK_ID}/proposals/generate`, {}, 404],
+        ['POST', `/roadmaps/${TASK_ID}/proposals/${TASK_ID}/apply`, {}, 404],
+        ['POST', '/schedule/confirm', {}, 404],
+        ['POST', '/schedule/propose', { period: 'year' }, 400],
+        ['POST', '/schedule/propose', { date: '2026-02-30' }, 400],
+        ['POST', '/schedule/propose', { deadline: '2026-11-25' }, 400],
+        ['POST', '/schedule/propose', { date: 'x'.repeat(1024) }, 413],
+      ] as const) {
+        assert.equal((await send(method, path, body)).status, status, path);
+      }
+      assert.equal(got.length, 6, 'invalid requests never reach the learning service');
+      assert.equal((await send('GET', '/schedule')).status, 200, 'query limit resets');
+      assert.equal((await send('POST', '/schedule/propose', {})).status, 201, 'proposal limit resets');
     } finally {
-      await new Promise((r) => keyed.close(r));
+      await new Promise((resolve) => proxy.close(resolve));
+      await new Promise((resolve) => learning.close(resolve));
     }
+    assert.equal((await call('GET', '/learning/schedule/status')).status, 503);
   });
 });

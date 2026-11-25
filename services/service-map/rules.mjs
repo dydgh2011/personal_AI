@@ -2,7 +2,7 @@
 //
 // Nothing here is hand-written per operation: each parser reads the table the service itself
 // enforces (hermes-broker ROUTES, knowledge client allowlists, LLM gateway CLIENT_RIGHTS, controller
-// @RequireRole decorators, notifier event types). Every parser also checks that it understood the
+// @RequireRole decorators, Learning controller decorators, notifier event types). Each parser checks
 // whole table (e.g. as many parsed routes as `method:` entries), and throws when it did not, so a
 // code change the parser cannot read fails loudly instead of silently shrinking the map.
 //
@@ -20,6 +20,7 @@ export const SOURCES = {
   controllerDir: 'services/controller/src',
   controllerTokens: 'services/controller/src/auth/token-registry.ts',
   controllerConfig: 'services/controller/src/config/app-config.ts',
+  learningDir: 'services/learning/src',
   notifier: 'services/notifier/src/notifier.ts',
 };
 
@@ -207,7 +208,8 @@ export function parseGatewayRights(configText, gatewayText, source = SOURCES.gat
 
 // ---------------------------------------------------------------- controller (NestJS)
 
-const HTTP_DECORATOR = /^\s*@(Get|Post|Put|Patch|Delete)\((?:'([^']*)')?\)/;
+const HTTP_DECORATOR = /^\s*@(Get|Post|Put|Patch|Delete|Head|Options)\((?:'([^']*)')?\)/;
+const NEST_ROUTE = /^\s*@(Get|Post|Put|Patch|Delete|Head|Options|All|Sse)\(/;
 const ROLE_DECORATOR = /^\s*@RequireRole\((?:'([^']+)'|\[([^\]]*)\])\)/;
 
 function rolesOf(line) {
@@ -266,18 +268,18 @@ export function parseNestController(text, source) {
       pending = { http: null, roles: null, isPublic: false };
     }
   }
-  const decorators = lines.filter((l) => HTTP_DECORATOR.test(l)).length;
+  const decorators = lines.filter((l) => NEST_ROUTE.test(l)).length;
   if (handlers.length !== decorators) fail(source, `read ${handlers.length} of ${decorators} handlers`);
   return handlers;
 }
 
-function listControllerFiles(root) {
+function listSourceFiles(root, matches) {
   const out = [];
   const walk = (dir) => {
     for (const e of readdirSync(dir, { withFileTypes: true })) {
       const p = path.join(dir, e.name);
       if (e.isDirectory()) walk(p);
-      else if (e.name.endsWith('.controller.ts')) out.push(p);
+      else if (e.isFile() && matches(e.name)) out.push(p);
     }
   };
   walk(root);
@@ -365,7 +367,7 @@ export function extractRules(root) {
     }
   });
   attempt('controller', () => {
-    const files = listControllerFiles(path.join(root, SOURCES.controllerDir));
+    const files = listSourceFiles(path.join(root, SOURCES.controllerDir), (name) => name.endsWith('.controller.ts'));
     if (files.length === 0) fail(SOURCES.controllerDir, 'no *.controller.ts files');
     const handlers = files.flatMap((f) => parseNestController(readFileSync(f, 'utf8'), path.relative(root, f).split(path.sep).join('/')));
     const callers = parseControllerCallers(read(SOURCES.controllerTokens), read(SOURCES.controllerConfig), read(SOURCES.broker));
@@ -375,6 +377,20 @@ export function extractRules(root) {
         .map((h) => ({ name: `${h.method} ${h.path}`, method: h.method, path: h.path }));
       add(service, 'controller', { by: 'controller', role: 'callee', source: `${SOURCES.controllerDir} (@RequireRole '${role}')`, ops: sortOps(ops) });
     }
+  });
+  attempt('learning', () => {
+    const files = listSourceFiles(path.join(root, SOURCES.learningDir), (name) => name.endsWith('.ts') && !/\.(?:spec|test|d)\.ts$/.test(name));
+    const handlers = files.flatMap((file) => {
+      const code = readFileSync(file, 'utf8');
+      if (!/^@Controller\(/m.test(code)) return [];
+      return parseNestController(code, path.relative(root, file).split(path.sep).join('/'));
+    });
+    // The Learning guard grants the Dashboard owner access to every authenticated handler.
+    const ops = handlers
+      .filter(({ roles }) => roles.includes('admin') || roles.includes('owner'))
+      .map(({ method, path: route }) => ({ name: `${method} ${route}`, method, path: route }));
+    if (ops.length === 0) fail(SOURCES.learningDir, 'no authenticated Learning handlers');
+    add('dashboard', 'learning', { by: 'learning', role: 'callee', source: SOURCES.learningDir, ops: sortOps(ops) });
   });
   attempt('notifier', () => {
     const types = parseNotifierTypes(read(SOURCES.notifier));

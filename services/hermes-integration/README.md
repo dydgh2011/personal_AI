@@ -7,7 +7,7 @@ Hermes는 직접 코딩하지 않으며, **Controller 인증 정보를 갖고 �
 사용자 (Telegram / hermes chat)
    │
 Hermes (LLM) ── 네이티브 도구 personal_ai_task (플러그인, Hermes 프로세스 안, 셸·파일 없음)
-   │  HTTP, 인증 없음 (ai-internal 네트워크)
+   │  HTTP, X-Broker-Key 인증 (ai-internal 네트워크)
    ▼
 hermes-broker ── delegator 토큰 보유 (compose secret, 이 컨테이너에만 있음)
    │  고정된 API만 중계, 입력 검증, 작업 생성 속도 제한, 감사 로그(지시문 내용 제외)
@@ -23,9 +23,10 @@ claude-worker / codex-worker
 services/hermes-integration/
 ├── plugins/personal-ai-controller/      Hermes 플러그인 (읽기 전용 마운트 → /opt/data/plugins/personal-ai-controller)
 │   ├── plugin.yaml
-│   ├── __init__.py                      도구 4개(personal_ai_task, _worker_login, _planner, _document) 등록 + pre_tool_call 가드 훅
+│   ├── __init__.py                      Personal AI 도구 등록 및 pre_tool_call 가드 훅
 │   ├── controller_client.py             브로커 API 클라이언트 (도구와 운영자 CLI가 공유, 표준 라이브러리만)
 │   ├── planner_client.py                planner 도구 (브로커 경유)
+│   ├── learning_client.py               학습 조회와 일정 시안 (브로커 경유)
 │   ├── document_client.py               첨부 문서 읽기 (첨부 폴더만, 네트워크 없음)
 │   └── guard.py                         Controller 우회·인증 파일 접근 도구 호출 차단
 ├── plugins/personal-ai-knowledge/       메모리 제공자: 대화·첨부 자동 보관, 자동 회상, 도구 personal_ai_knowledge (services/knowledge)
@@ -33,44 +34,83 @@ services/hermes-integration/
 ├── skills/personal-ai-controller/SKILL.md   사용 절차·보고 템플릿 (읽기 전용 마운트, skills.external_dirs)
 ├── skills/personal-ai-planner/SKILL.md      일정·시안·강의계획서 절차
 ├── skills/personal-ai-knowledge/SKILL.md    무엇을 언제 저장하고 찾는지
+├── skills/personal-ai-learning/SKILL.md     학습 조회와 소유자 승인 요청
 ├── hermes-config/SOUL.personal-ai.md    SOUL.md에 들어가는 역할 규칙
 ├── scripts/configure-hermes.mjs         data/hermes 설정 적용/점검 (멱등, 백업)
-└── tests/                               test_controller.py, test_plugin.py, test_document.py, test_knowledge.py, test_llm.py, test_school_tool.py — 72개
+└── tests/                               Python 도구 테스트와 Node.js 설정 점검 테스트
 ```
 
 ## 보안 구조 (Phase A)
 
 | 통제 | 방식 | 강제 여부 |
 |---|---|---|
-| 인증 정보 분리 | delegator 토큰은 hermes-broker 컨테이너에만 있음. Hermes에는 토큰 파일·환경변수 없음 (`/run/secrets` 없음 확인) | **강제** (다른 컨테이너) |
-| API 범위 | 브로커가 허용하는 것: 상태 조회, 프로젝트 조회, 작업 목록/조회/생성/취소. 그 외 경로는 404/405로 브로커가 직접 응답 | **강제** |
+| 인증 정보 분리 | delegator 토큰은 브로커에 두고 Hermes에는 브로커 호출용 키만 연결 | **강제** |
+| 브로커 호출자 확인 | `GET /health` 이외에는 유효한 `X-Broker-Key` 하나가 필요함. 인증 키 파일을 읽지 못하면 기동 실패 | **강제** |
+| API 범위 | 브로커가 고정 허용 목록을 검사하고 대상 서비스마다 별도 자격으로 호출 | **강제** |
 | 권한 범위 | Controller가 delegator 역할 검사: 활성 프로젝트, 허용 agent, 자기 작업만. 프로젝트 등록·수정, `/internal/*`, GitHub 조회 불가 | **강제** |
 | 남용 방지 | 새 작업 분당 5개, 시간당 30개 (브로커). 내용 해시 기반 Idempotency-Key로 중복 등록 방지 | **강제** |
-| 직접 코딩·시스템 제어 차단 | telegram/cli/cron 플랫폼 toolset에서 `terminal`, `code_execution`, `file`, `computer_use`, `delegation` 제거 | **강제** (Hermes 설정; 운영자가 되돌릴 수 있음) |
+| 직접 코딩·시스템 제어 차단 | Discord, Telegram, CLI, cron에서 터미널, 코드 실행, 파일, 컴퓨터 제어, 위임 toolset 제거 | **강제** (Hermes 설정) |
 | 우회 차단 | `pre_tool_call` 가드: 도구가 다시 켜지더라도 docker/claude/codex 실행, CLI 설치, git 원격 작업, 인증 파일 읽기, 통합 파일 수정, 같은 이름 Skill 생성/대체, `delegate_task` 차단 | Hermes 프로세스 안에서 강제 (패턴 기반) |
 | 코드·Skill 변조 방지 | 플러그인·Skill을 저장소에서 읽기 전용 마운트 | **강제** |
 | 행동 규칙 | SOUL.md, SKILL.md, 도구 설명, 결과의 `userReport`(Controller 사실만으로 만든 보고문) | 유도 (보안 경계 아님) |
 
 ## 설치 (재현 방법)
 
-`D:\personal_ai`에서:
+`D:\personal_ai`에서 초기 설정이 필요한 경우 실행합니다. 재생성이나 재시작은 `docs/handover/CODEX_PLAN.md`의 스택 잠금을 먼저 잡습니다.
 
 ```powershell
 # 1) Hermes 전용 delegator 토큰 (처음 한 번). 노출이 의심되면 rotate-hermes-token.mjs
 node services\controller\scripts\add-hermes-token.mjs
-# 2) Controller + 브로커
-docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yaml up -d --build --no-deps controller hermes-broker
+# 2) Hermes와 브로커 사이의 인증 키
+node services\hermes-broker\scripts\add-client-key.mjs
 # 3) Hermes 설정 (external skill, 내장 코딩 skill 비활성화, 플러그인 활성화, toolset 축소, SOUL 규칙)
 node services\hermes-integration\scripts\configure-hermes.mjs
-# 4) Hermes 재생성 (플러그인·Skill 읽기 전용 마운트, 브로커 URL)
-docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yaml up -d --no-deps hermes
-# 점검
+# 4) 서비스별 재생성과 점검
+.\scripts\stack.ps1 rebuild controller
+.\scripts\stack.ps1 rebuild hermes-broker
+.\scripts\stack.ps1 rebuild hermes
 node services\hermes-integration\scripts\configure-hermes.mjs --check
 ```
 
-플러그인 코드를 바꾼 뒤에는 `docker restart personal_ai-hermes-1`이 필요합니다(Python 모듈은 시작 시 로드). SKILL.md는 새 대화부터 반영됩니다.
+플러그인 코드만 바꿨다면 `.\scripts\stack.ps1 restart hermes`로 Hermes를 다시 시작합니다. Hermes는 시작할 때 Python 모듈을 읽고 새 대화에서 Skill을 읽습니다.
 
 되돌리기: `config.yaml`의 각 `platform_toolsets` 줄 위에 이전 값이 주석으로 남아 있고, 원본은 `data/hermes/backups/`에 있습니다.
+
+## 읽기 전용 설정 점검
+
+`configure-hermes.mjs --check`가 관리하는 Skill, 플러그인, Discord·Telegram·CLI·cron 도구 목록과 SOUL의 역할 절을 확인합니다. 확인이 필요한 항목이 있으면 종료 코드 1을 반환합니다.
+
+Windows 작업 스케줄러에는 소유자가 등록합니다. 다음 명령은 로그인 세션에서 매일 오전 9시(이 PC의 현지 시각)에 점검하도록 등록합니다.
+
+```powershell
+Set-Location 'D:\personal_ai'
+$hermesCheckPath = (Resolve-Path 'services/hermes-integration/scripts/configure-hermes.mjs').Path
+$hermesCheckNode = (Get-Command node.exe -ErrorAction Stop).Source
+$hermesCheckAction = New-ScheduledTaskAction -Execute $hermesCheckNode -Argument ('"{0}" --check' -f $hermesCheckPath) -WorkingDirectory (Get-Location).Path
+$hermesCheckTrigger = New-ScheduledTaskTrigger -Daily -At ([datetime]::Today.AddHours(9))
+$hermesCheckUser = New-ScheduledTaskPrincipal -UserId ([Security.Principal.WindowsIdentity]::GetCurrent().Name) -LogonType Interactive
+$hermesCheckSettings = New-ScheduledTaskSettingsSet -StartWhenAvailable -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -MultipleInstances IgnoreNew
+Register-ScheduledTask -TaskName 'PersonalAI-HermesConfigCheck' -Action $hermesCheckAction -Trigger $hermesCheckTrigger -Principal $hermesCheckUser -Settings $hermesCheckSettings
+Start-ScheduledTask -TaskName 'PersonalAI-HermesConfigCheck'
+```
+
+작업이 끝난 뒤 최근 결과를 확인합니다.
+
+```powershell
+Get-ScheduledTaskInfo -TaskName 'PersonalAI-HermesConfigCheck' | Select-Object LastRunTime, LastTaskResult, NextRunTime
+```
+
+`LastTaskResult`가 0이면 점검을 통과한 것입니다. 세부 결과가 필요하면 저장소 루트에서 `node services/hermes-integration/scripts/configure-hermes.mjs --check`를 실행합니다.
+
+## 도구 `personal_ai_learning`
+
+| 동작 | 인자 | 결과 |
+|---|---|---|
+| `query` | `resource=domains\|roadmaps\|roadmap\|status\|schedule`. `roadmap`은 `roadmap_id` 필요 | 학습 정보 또는 일정 조회 |
+| `query` · `schedule` | `date`(선택), `period=day\|week`(선택) | 과제와 복습의 일·주 계획 |
+| `propose` | `date`(선택), `period=day\|week`(선택) | 소유자가 확인할 플래너 시안 |
+
+날짜를 생략하면 토론토의 오늘을 기준으로 일 계획을 조회하거나 제안합니다. Kelly는 시안 코드와 상태를 안내하고 소유자는 기존 플래너 승인 흐름에서 일정과 할 일을 확인합니다. [브로커 연결 설정](../hermes-broker/README.md#학습-조회와-일정-시안)
 
 ## 도구 `personal_ai_task`
 
@@ -200,12 +240,13 @@ docker exec personal_ai-hermes-1 python3 /opt/data/plugins/personal-ai-controlle
 
 ```powershell
 python -m unittest discover -s services\hermes-integration\tests -v
+node --test services/hermes-integration/tests/configure-hermes.test.mjs
 # Hermes 이미지의 Python으로
-docker run --rm -e PYTHONDONTWRITEBYTECODE=1 -v "${PWD}\services\hermes-integration:/src:ro" --entrypoint /opt/hermes/.venv/bin/python3 personal_ai-hermes:local -B -m unittest discover -s /src/tests
+docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 -v "${PWD}\services\hermes-integration:/src:ro" --entrypoint /opt/hermes/.venv/bin/python3 personal_ai-hermes:local -B -m unittest discover -s /src/tests
 ```
 
 ## 남은 한계
 
-- 브로커 자체는 호출자를 인증하지 않습니다(같은 네트워크의 Hermes 프로세스·브라우저 도구도 호출 가능). 브로커가 주는 능력은 delegator 권한과 같고, 그 범위는 Controller가 제한합니다.
+- 브로커 키 파일에 접근할 수 있는 Hermes 프로세스는 호출 자격을 공유합니다. 프로세스별 격리가 필요하면 게이트웨이와 도구 실행을 별도 Unix 사용자 또는 컨테이너로 나눕니다.
 - `pre_tool_call` 가드는 패턴 기반이라 의도적인 난독화를 모두 막지는 못합니다. 주 통제는 toolset 제거와 인증 정보 부재입니다.
 - Hermes(LLM)가 쓸 수 있는 `browser`, `web`, `cronjob`, `memory` 등은 유지됩니다. cron 작업도 같은 축소 toolset으로 실행됩니다.

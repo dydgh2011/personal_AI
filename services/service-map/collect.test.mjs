@@ -5,6 +5,7 @@ import test from 'node:test';
 import { GATEWAY_QUERY, parseGatewayRows, parseRequestLog } from './calls.mjs';
 import { buildMap, parseInspectLines, REPO_ROOT } from './collect.mjs';
 import { extractRules, parseBrokerRoutes, parseKnowledgeApi, parseNestController, prettyPath } from './rules.mjs';
+import { check as checkNetworks } from './verify-networks.mjs';
 
 const SECRET = 'sk-test-0000-DO-NOT-LEAK';
 
@@ -145,7 +146,7 @@ const namesOf = (from, to, by) => opsOf(from, to, by).map((o) => o.name);
 test('real code: every parser reads its table', () => {
   assert.deepEqual(real.errors, []);
   assert.ok(real.brokerRoutes.length >= 60, `broker routes: ${real.brokerRoutes.length}`);
-  for (const k of ['hermes>hermes-broker', 'hermes-broker>controller', 'hermes-broker>planner', 'hermes-broker>knowledge', 'hermes-broker>school', 'dashboard>knowledge', 'school>knowledge', 'hermes>llm-gateway', 'learning>llm-gateway', 'school>llm-gateway', 'dashboard>llm-gateway', 'dashboard>controller', 'claude-worker>controller', 'codex-worker>controller', 'github-publisher>controller', 'test-runner>controller', '*>notifier']) {
+  for (const k of ['hermes>hermes-broker', 'hermes-broker>controller', 'hermes-broker>planner', 'hermes-broker>knowledge', 'hermes-broker>school', 'hermes-broker>learning', 'dashboard>knowledge', 'dashboard>learning', 'school>knowledge', 'hermes>llm-gateway', 'learning>llm-gateway', 'school>llm-gateway', 'dashboard>llm-gateway', 'dashboard>controller', 'claude-worker>controller', 'codex-worker>controller', 'github-publisher>controller', 'test-runner>controller', '*>notifier']) {
     assert.ok((real.rules.get(k) || []).some((s) => s.ops.length > 0), `no rules for ${k}`);
   }
 });
@@ -163,6 +164,38 @@ test('real code: hermes-broker ROUTES', () => {
   // Caller-side sets show the path the callee sees (prefix stripped).
   assert.ok(opsOf('hermes-broker', 'planner', 'hermes-broker').some((o) => o.name === 'planner.day' && o.path === '/day'));
   assert.ok(namesOf('hermes', 'hermes-broker').includes('school.poll'));
+});
+
+test('real code: Dashboard Learning owner routes and the broker query/propose scope', () => {
+  const dashboard = namesOf('dashboard', 'learning', 'learning');
+  assert.ok(dashboard.includes('GET /domains'));
+  assert.ok(dashboard.includes('PATCH /assignments/:id'));
+  assert.ok(dashboard.includes('POST /roadmaps/:id/proposals/:proposalId/apply'));
+  assert.ok(!dashboard.includes('GET /health'), 'public health is excluded from caller rules');
+  assert.deepEqual(opsOf('hermes-broker', 'learning', 'hermes-broker').map((o) => `${o.method} ${o.path}`), [
+    'GET /domains',
+    'GET /roadmaps/:id',
+    'GET /roadmaps',
+    'POST /schedule/propose',
+    'GET /schedule',
+    'GET /schedule/status',
+  ]);
+  assert.ok(!real.rules.has('hermes>learning'));
+});
+
+test('network comparisons allow unchanged unused pairs and detect replacements', () => {
+  const map = (...pairs) => ({
+    services: [],
+    links: [],
+    networks: [],
+    findings: pairs.map((services) => ({ code: 'reachable-unused', services })),
+  });
+  const before = map(['controller', 'hermes']);
+  const result = (after) => checkNetworks({ before, after, live: before }).find((c) => c.name.startsWith('reachable-unused'));
+  assert.ok(result(map(['hermes', 'controller'])).ok);
+  assert.ok(result(map()).ok);
+  assert.equal(result(map(['dashboard', 'planner'])).ok, false);
+  assert.equal(result(map(['dashboard', 'planner'])).detail, 'dashboard ↔ planner');
 });
 
 test('real code: knowledge client allowlists', () => {
@@ -215,6 +248,8 @@ test('parsers fail loudly instead of returning less', () => {
   assert.throws(() => parseKnowledgeApi(knowledge("'status', 'gone'")), /unknown route gone/);
   const nest = "@Controller('x')\nexport class X {\n  @Get()\n  @Post('y')\n  run() {}\n}\n";
   assert.throws(() => parseNestController(nest, 'x.controller.ts'), /read 1 of 2 handlers/);
+  const computed = "@Controller('x')\nexport class X {\n  @Get(OTHER_PATH)\n  run() {}\n}\n";
+  assert.throws(() => parseNestController(computed, 'x.controller.ts'), /read 0 of 1 handlers/);
 });
 
 test('route regexes become readable paths', () => {

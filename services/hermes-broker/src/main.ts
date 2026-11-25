@@ -63,6 +63,30 @@ function schoolConfig(): { url: string; key: string } | null {
   return { url, key };
 }
 
+function learningConfig(): { url: string; key: string } | null {
+  const raw = process.env.LEARNING_URL?.trim();
+  if (!raw) return null;
+  const url = URL.parse(raw);
+  if (!url || !['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.pathname !== '/' || url.search || url.hash) {
+    throw new Error('LEARNING_URL must be an http(s) origin');
+  }
+  const keyFile = process.env.LEARNING_KEY_FILE?.trim() || '/run/secrets/learning_key';
+  return { url: url.origin, key: readKey(keyFile, 'learning key') };
+}
+
+function readKey(file: string, label: string): string {
+  let key: string;
+  try {
+    key = readFileSync(file, 'utf8').trim();
+  } catch {
+    throw new Error(`Cannot read the ${label} file`);
+  }
+  if (key.length < 32 || /\s/.test(key)) {
+    throw new Error(`The ${label} must be at least 32 characters without whitespace`);
+  }
+  return key;
+}
+
 function main(): void {
   const tokenFile = process.env.BROKER_TOKEN_FILE || '/run/secrets/controller_token';
   let token: string;
@@ -75,15 +99,7 @@ function main(): void {
   const controllerUrl = (process.env.CONTROLLER_URL || 'http://controller:3000').replace(/\/+$/, '');
   if (!/^https?:\/\/[^\s/]+/.test(controllerUrl)) throw new Error('CONTROLLER_URL must be an http(s) URL');
   const port = int('PORT', 8080, 1, 65535);
-  let clientKey: string | null = null;
-  if (process.env.BROKER_CLIENT_KEY_FILE) {
-    try {
-      clientKey = readFileSync(process.env.BROKER_CLIENT_KEY_FILE, 'utf8').trim();
-    } catch {
-      throw new Error(`Cannot read the client key file ${process.env.BROKER_CLIENT_KEY_FILE}`);
-    }
-    if (clientKey.length < 32 || /\s/.test(clientKey)) throw new Error('The broker client key must be at least 32 characters');
-  }
+  const clientKey = readKey(process.env.BROKER_CLIENT_KEY_FILE?.trim() || '/run/secrets/broker_client_key', 'broker client key');
 
   const server = createBroker(
     {
@@ -98,10 +114,13 @@ function main(): void {
       knowledge: knowledgeConfig(),
       knowledgeWritesPerMinute: int('BROKER_KNOWLEDGE_WRITES_PER_MINUTE', 120, 1, 10000),
       school: schoolConfig(),
+      learning: learningConfig(),
+      learningQueriesPerMinute: int('BROKER_LEARNING_QUERIES_PER_MINUTE', 60, 1, 1000),
+      learningProposalsPerMinute: int('BROKER_LEARNING_PROPOSALS_PER_MINUTE', 5, 1, 1000),
     },
     logger,
   );
-  server.listen(port, '0.0.0.0', () => logger.info('Broker listening', { port, controller: controllerUrl, clientKey: clientKey !== null }));
+  server.listen(port, '0.0.0.0', () => logger.info('Broker listening', { port, controller: controllerUrl }));
 
   // Optional: report finished Hermes tasks to the notifier (compose.notifier.yaml).
   let watcher: Watcher | null = null;
