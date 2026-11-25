@@ -1,4 +1,5 @@
 import { createHash, createHmac, hkdfSync, randomBytes, scryptSync, timingSafeEqual } from 'node:crypto';
+import type { Session } from './session-store';
 
 /** scrypt$N$r$p$saltB64$hashB64 */
 export function hashPassword(password: string, salt = randomBytes(16)): string {
@@ -24,48 +25,8 @@ export function safeEqual(a: string, b: string): boolean {
   return timingSafeEqual(x, y);
 }
 
-export interface Session {
-  id: string;
-  user: string;
-  csrf: string;
-  createdAt: number;
-  lastSeen: number;
-}
-
-export interface SessionOptions {
-  idleMs: number;
-  absoluteMs: number;
-}
-
-/** Server-side sessions; only the random id travels in an HttpOnly cookie. */
-export class SessionStore {
-  private readonly sessions = new Map<string, Session>();
-  constructor(private readonly options: SessionOptions, private readonly now: () => number = Date.now) {}
-
-  create(user: string): Session {
-    const t = this.now();
-    const session = { id: randomBytes(32).toString('base64url'), user, csrf: randomBytes(32).toString('base64url'), createdAt: t, lastSeen: t };
-    this.sessions.set(session.id, session);
-    return session;
-  }
-
-  get(id: string | undefined): Session | null {
-    if (!id) return null;
-    const session = this.sessions.get(id);
-    if (!session) return null;
-    const t = this.now();
-    if (t - session.lastSeen > this.options.idleMs || t - session.createdAt > this.options.absoluteMs) {
-      this.sessions.delete(id);
-      return null;
-    }
-    session.lastSeen = t;
-    return session;
-  }
-
-  destroy(id: string | undefined): void {
-    if (id) this.sessions.delete(id);
-  }
-}
+// Sessions live in session-store.ts (persistent on the dashboard volume); re-exported here.
+export { SessionStore, type Session, type SessionOptions } from './session-store';
 
 /** Failed login attempts per key (ip, user) in a sliding window. */
 export class LoginLimiter {

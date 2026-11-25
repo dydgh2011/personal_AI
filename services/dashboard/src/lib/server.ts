@@ -18,13 +18,35 @@ export const settings = {
   cookieSecure: env('DASHBOARD_COOKIE_SECURE', 'false') === 'true',
   idleMinutes: Number(env('DASHBOARD_SESSION_IDLE_MINUTES', '30')),
   absoluteHours: Number(env('DASHBOARD_SESSION_ABSOLUTE_HOURS', '8')),
+  // Sessions survive restarts in this file on the dashboard-data volume ("none" = memory only).
+  sessionFile: env('DASHBOARD_SESSION_FILE', '/var/lib/dashboard/sessions.json'),
+  // Change this value (any text) to log every browser out, like a password change does.
+  sessionEpoch: env('DASHBOARD_SESSION_EPOCH', ''),
 };
+
+/**
+ * Key material for the session store: the admin password hash, the admin user and the epoch.
+ * Changing any of them invalidates every stored session. Re-read at most every 5 s so a rotated
+ * hash file takes effect without a restart; never logged.
+ */
+let bindingCache: { at: number; value: string } | undefined;
+function sessionBinding(): string {
+  const t = Date.now();
+  if (!bindingCache || t - bindingCache.at > 5_000) {
+    bindingCache = { at: t, value: ['v1', readSecret(settings.adminHashFile), settings.adminUser, settings.sessionEpoch].join('\n') };
+  }
+  return bindingCache.value;
+}
 
 // One store per server process, shared by every route and page bundle.
 const g = globalThis as unknown as { __paiSessions?: SessionStore; __paiLimiter?: LoginLimiter };
 export const sessions = (g.__paiSessions ??= new SessionStore({
   idleMs: settings.idleMinutes * 60_000,
   absoluteMs: settings.absoluteHours * 3_600_000,
+  file: settings.sessionFile === 'none' ? undefined : settings.sessionFile,
+  secret: sessionBinding,
+  flushMs: 60_000,
+  pruneEveryMs: 5 * 60_000,
 }));
 export const limiter = (g.__paiLimiter ??= new LoginLimiter());
 
