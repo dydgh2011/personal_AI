@@ -193,7 +193,7 @@ docker exec personal_ai-controller-1 rm /var/lib/controller/backup.db
 - Worker 최근 접속 시각은 메모리 저장 → 재시작 시 초기화
 - 승인(approval) 흐름 없음. 추가 시 `task-state.ts`에 `awaiting_approval` 상태와 `approve`/`reject` 전환을 넣고, claim은 queued만 가져가므로 그대로 동작
 - 단일 인스턴스 전제 (SQLite). 토큰 교체 시 Controller 재시작 필요. env_file 값은 `docker inspect`로 보일 수 있음 (Docker secrets로 전환 가능)
-- 이전 단계에서 만든 `secrets/hermes.controller.env`에는 admin 토큰이 들어 있습니다. 지금은 어디에도 연결되지 않으므로 필요 없으면 직접 삭제하세요
+- 이전 단계에서 만든 `secrets/hermes.controller.env`(admin 토큰 사본, 미사용)는 2026-11-25에 삭제했습니다. 다시 만들지 마세요
 - Worker는 작업마다 `GET /internal/projects`로 Registry를 확인합니다(활성, allowedAgents, allowCodeChanges, syncStatus, cachedHeadSha). worker view에는 remote URL이 없습니다. GitHub 프로젝트는 repo-sync 캐시로만 체크아웃됩니다 (services/worker/README.md)
 
 ## PostgreSQL로 전환하려면

@@ -12,7 +12,7 @@
 - **C · Claude Code** (2026-11-24): 커밋 작성자=주인·AI 흔적 차단 배포. 비공개 저장소 실제 확인 완료(PAT로 discovery·동기화·export). GitHub App 연결·실제 게시 켬(대상: dydgh2011/personal-ai-sandbox만). **실제 게시 성공**: sandbox PR #1(draft, 브랜치 changes/6dfcb3df…), 커밋 author·committer = 주인(GitHub 계정 연결), 메시지·PR 본문에 흔적 없음. 승인·게시는 주인이 Dashboard에서 직접(에이전트는 대신 승인하지 않음). 남은 것: CI 결과 읽기(10). 브랜치 claude/publish.
 - **공통(2026-11-25, Claude)**: learning·planner·hermes-broker를 내부망 learning-link-internal 하나로 연결(Docker 주소 여유 1개 남음). Dashboard Next.js 16.4.6. 사이드바 순서 편집(임시) 배포.
 - **A · Codex** — **합쳐서 배포 완료**(2026-11-25, Claude): Learning L3 일정·복습, learning→planner 시안 연동. learning schema v3(백업 후). 실환경 learning→planner 가용 시간 조회 200. 남은 확인: 실제 시안을 만들어 플래너에서 승인하는 흐름(주인).
-- **B · Codex** — **합쳐서 배포 완료**(2026-11-25, Claude): Kelly personal_ai_learning(조회·시안만), broker 호출자 인증 필수, configure-hermes --check(모두 ok), 서비스 지도 dashboard→learning 파서. 실환경: Kelly 도구→broker→learning 200. 남은 것(주인): Hermes 설정 점검 정기 등록, 레거시 secrets/hermes.controller.env 삭제 결정.
+- **B · Codex** — **합쳐서 배포 완료**(2026-11-25, Claude): Kelly personal_ai_learning(조회·시안만), broker 호출자 인증 필수, configure-hermes --check(모두 ok), 서비스 지도 dashboard→learning 파서. 실환경: Kelly 도구→broker→learning 200. 2026-11-25 주인이 Hermes 설정 점검을 작업 스케줄러에 등록(`PersonalAI-HermesConfigCheck`, 매일 09:00, 첫 실행 결과 0), 레거시 secrets/hermes.controller.env는 주인 요청으로 삭제.
 - **Kelly 지식·활동·미디어 · Codex** — **합쳐서 배포 완료**(2026-11-25, Claude): knowledge schema v4(백업 후), 시작 시 일간·주간 정리 실행 확인, knowledge-media(네트워크 없음) 정상, Kelly review 도구 ok. 남은 것: 받아쓰기 모델 ggml-base.bin(주인), 실제 Discord 이미지·음성 첨부로 확인.
 - 각자 자기 줄만 고친다.
 
@@ -33,12 +33,22 @@
 - Learning AI 평가·초안의 실제 AI 호출(키·모델·월 상한 미설정).
 - Discord에서 "입력 중" 표시와 답 끝 📌 기록 표시.
 
+## 주인이 다음에 말을 걸 때 먼저 알릴 것 (2026-11-25)
+- **Learning 확인은 주인이 자고 일어나서 하기로 함.** 다음 대화를 시작하면 바로 알린다: `/learning/planner`에서 가용 시간 저장 → 하루/7일 선택 → Send draft to Planner → Kelly에게 시안 보여 달라고 해서 승인 → 할 일·일정 생성 확인.
+- 기말 계획은 Kelly와 다른 방식으로 하려고 함. 주인이 먼저 말할 때까지 기다린다.
+
+## 최근 변경 (2026-11-25 새벽)
+- 사이드바 순서를 쿠키(`pai_nav`)로 서버에서 그림(기본 순서 깜빡임 수정). 주인이 브라우저에서 확인 완료.
+- 미디어 처리 순서를 작은 파일 먼저로 바꿈: 11-23에 가져온 강의 영상 5개(약 810MB)가 Discord 음성을 막고 있었음. Discord m4a 받아쓰기 실제 완료 확인. 옛 영상 5개는 작은 파일이 없을 때 차례로 처리됨(CPU 2스레드, 오래 걸림).
+- Kelly가 음성 첨부에 "받아쓰기 도구가 없다"고 답하던 문제: 모델이 `media_submit`을 부르지 않았음. 고친 것: 음성·영상이 붙은 메시지마다 코드가 정확한 `media_submit` 호출을 안내(prefetch), `media_submit`은 최대 60초 기다려 받아쓴 글을 바로 돌려줌, 지식 서비스는 3초마다 새 미디어를 확인. Hermes 안에서 실제 도구로 m4a 받아쓰기 글 반환 확인. 주인이 Discord에서 새 파일로 전체 흐름 확인 완료(2026-11-25).
+- Docker 주소 풀을 `10.210.0.0/16`, /24 단위로 늘림(주인 설정). 새 네트워크부터 이 범위. 네트워크 증명 통과.
+
 ## 다음 후보 (주인이 순서를 정함)
 - 주인 결정(2026-11-24): 실제 GitHub 게시 진행, **커밋 작성자는 주인 본인으로(AI 흔적 절대 없음, POLICY B 변경)**, 비공개 저장소 확인 진행 → 작업 C.
 - Learning AI: 이미 LLM 게이트웨이를 쓴다(`provider: gateway`, 별칭 `batch`, `/status`에서 configured=true). 실제 호출은 아직 0회 — 쓰면서 확인.
 - L4-02~04(외부 자료, 프로젝트 연결, 퀘스트·음성)는 아직 아무도 맡지 않았다.
 - 정리: 끝난 worktree 8개와 로컬 브랜치(`claude/*`), Codex가 OS 임시 폴더에 남긴 브라우저 검증 폴더, 지식 저장소 볼륨 안 옛 임시 백업 `pre-test-purge*.db` 2개(같은 파일이 `data/backups/knowledge`에 있음), `.gitignore` 줄바꿈 변경(커밋 안 함).
-- 주의: Docker 네트워크 주소 여유가 적다. 새 네트워크를 만들기 전에 `scripts\stack.ps1 verify-networks`의 "주소 풀"을 본다.
+- Docker 네트워크 주소: 2026-11-25 주인이 `10.210.0.0/16`(/24 단위, 256개)을 추가해 여유가 충분하다.
 
 ## 인계 기록
 - 2026-11-25 · Codex · A·B 커밋, 테스트 재현 명령과 운영 확인 절차를 정리했다. [Learning L3와 Kelly 학습 도구 검증 인계](LEARNING_KELLY_VERIFICATION.md)

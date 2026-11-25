@@ -56,7 +56,7 @@
 - **남은 문제**: 행동 품질은 LLM(gemini-3.5-flash-lite)에 따라 달라짐. 보고문은 `userReport`로 고정해 보완.
 - **다음 의존 작업**: 13 (Dashboard).
 
-## 5. Phase A — Hermes 위임 보안 강화 🟡 (2026-11-25: broker 호출자 인증 필수, Hermes 설정 점검 `configure-hermes --check` 추가. 남은 것: 정기 점검 등록과 레거시 `secrets/hermes.controller.env` 삭제 — 주인 결정)
+## 5. Phase A — Hermes 위임 보안 강화 🟡 (2026-11-25: broker 호출자 인증 필수, Hermes 설정 점검 `configure-hermes --check` 매일 09:00 정기 실행, 레거시 `secrets/hermes.controller.env` 삭제)
 
 - **목표**: 코딩 위임은 반드시 Controller 경유, 직접 코딩·시스템 제어 최소화, 인증 정보를 LLM 실행 환경에서 분리.
 - **구현 상태 (완료)**:
@@ -75,8 +75,8 @@
 - **남은 문제 (권장안)**:
   - 브로커는 호출자를 인증하지 않음(Hermes 컨테이너 안의 무엇이든 delegator 권한으로 호출 가능). 장기적으로는 Hermes 게이트웨이와 도구 실행 프로세스를 분리(별도 UID 또는 컨테이너)하고, 브로커가 게이트웨이 전용 자격을 확인하는 구조가 필요함.
   - 가드는 패턴 기반이라 우회 가능. 주 통제는 toolset 제거와 인증 정보 부재.
-  - `config.yaml`은 Hermes가 쓸 수 있는 위치에 있음(파일 도구는 제거됨). 설정 무결성 점검(`configure-hermes.mjs --check`)을 정기 실행 권장.
-  - 레거시 `secrets/hermes.controller.env`(현재 유효한 admin 토큰 사본, 미사용) 수동 삭제 필요.
+  - `config.yaml`은 Hermes가 쓸 수 있는 위치에 있음(파일 도구는 제거됨). 설정 무결성 점검(`configure-hermes.mjs --check`)은 2026-11-25부터 작업 스케줄러가 매일 09:00 실행(`PersonalAI-HermesConfigCheck`).
+  - 레거시 `secrets/hermes.controller.env`(admin 토큰 사본, 미사용)는 2026-11-25 주인 요청으로 삭제함.
 - **다음 의존 작업**: 8 (승인 흐름은 브로커가 아닌 사용자 승인 채널 필요).
 
 ## 6. Phase B — GitHub Repository Registry MVP ✅
