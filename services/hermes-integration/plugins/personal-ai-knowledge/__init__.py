@@ -56,6 +56,7 @@ logger = logging.getLogger("personal_ai_knowledge")
 
 NAME = "personal-ai-knowledge"
 RECALL_TIMEOUT = 3.0
+ANSWER_CHECK_MAX_CHARS = 3000  # longer answers are documents: no code-appended notes
 # "[The user sent a document: 'x.pdf'. It is saved at: /opt/data/cache/documents/..../doc_..._x.pdf." (Hermes gateway)
 LEGACY_DOCUMENT_PATH = re.compile(r"saved at:?\s+(/opt/data/cache/documents/[^\s\]]+?)(?=[.,;\]]?(?:\s|$))")
 ATTACHMENT_PATH = re.compile(
@@ -199,7 +200,12 @@ class KnowledgeProvider(MemoryProvider):
         return "\n\n".join(parts)
 
     def check_answer(self, response_text: str = "", session_id: str = "", **_: Any) -> str | None:
-        """transform_llm_output hook: append what the answer left out (course facts, the first upcoming item)."""
+        """transform_llm_output hook: append what the answer left out (course facts, the first upcoming item).
+
+        Only for chat-sized answers: a long document (a plan, a report) is not a reply to one question, and the
+        appended "📌 저장소 기록" lines ended up inside a written plan (2026-11-25)."""
+        if len(response_text or "") > ANSWER_CHECK_MAX_CHARS:
+            return None
         text, changed = response_text, False
         for check in (cb.check, sb.check):
             try:

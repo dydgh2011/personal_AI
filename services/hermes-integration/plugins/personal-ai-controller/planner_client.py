@@ -39,7 +39,8 @@ ACTIONS = (
 )
 
 SETTING_KEYS = ("dayStart", "dayEnd", "maxFocusMinutes", "breakMinutes", "maxBlockMinutes", "minBlockMinutes",
-                "undatedDailyMinutes", "remindMinutes", "remindScope")
+                "undatedDailyMinutes", "remindMinutes", "remindScope", "shortEventMinutes", "shortRemindMinutes",
+                "sleepStart", "sleepEnd", "lastBus", "homePlace", "places", "travel", "protectedEvents")
 
 
 def _bad(message: str) -> CliError:
@@ -96,7 +97,7 @@ def _day_lines(day: dict[str, Any]) -> list[str]:
         head += " - 캘린더에 아직 반영 안 된 변경 있음"
     rows: list[tuple[str, str]] = []
     for e in day.get("events", []):
-        label = CATEGORY_LABEL.get(e.get("category") or "", "일정")
+        label = "마감·이날까지" if e.get("deadline") else CATEGORY_LABEL.get(e.get("category") or "", "일정")
         when = "종일" if e.get("allDay") else f"{e['start']}-{e['end']}"
         ref = "" if e.get("deadline") else f" (event_id {e['id']}{', 반복' if e.get('seriesId') else ''})"
         rows.append(("00:00" if e.get("allDay") else e.get("start") or "00:00", f"  [{label}] {when} {e['title']}{ref}"))

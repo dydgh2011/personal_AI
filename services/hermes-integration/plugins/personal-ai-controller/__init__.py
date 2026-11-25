@@ -156,7 +156,11 @@ PLANNER_SCHEMA: dict[str, Any] = {
     "description": (
         "The owner's schedule in the Google calendar \"Kelly\" that the planner manages: todos, day plans, fixed "
         "events (classes, appointments, routines, birthdays) and deadline markers, coloured by category. Use it for "
-        "anything about plans, schedule, todos, deadlines, study time or the calendar. Dates are YYYY-MM-DD and "
+        "anything about plans, schedule, todos, deadlines, study time or the calendar. A deadline marker "
+        "(all-day \"마감(이날까지): …\", [마감·이날까지]) means the todo is due by the end of that day; it is not the "
+        "day the work, quiz or test happens. Proposal warnings come from code checks (sleep, last bus, travel time, "
+        "protected events such as exams, deadlines in the period): fix every warning or tell the owner why not. "
+        "Dates are YYYY-MM-DD and "
         "times HH:MM (24-hour), Toronto local time; never compute them in UTC. "
         "day / week: show the day(s) (block_id for plan blocks, event_id for fixed events). generate: draft plan "
         "blocks from open todos around fixed events (draft only). block_add / block_update / block_remove: edit a "
@@ -227,7 +231,10 @@ PLANNER_SCHEMA: dict[str, Any] = {
                       "description": "proposal_create: events with the event_add fields (title, date, start, end, all_day, "
                                      "category, repeat, interval, repeat_days, monthly_by, until, count, location, notes)."},
             "settings": {"type": "object", "description": "settings_update: dayStart, dayEnd, maxFocusMinutes, "
-                         "breakMinutes, maxBlockMinutes, minBlockMinutes, undatedDailyMinutes, remindMinutes, remindScope (all|planner)."},
+                         "breakMinutes, maxBlockMinutes, minBlockMinutes, undatedDailyMinutes, remindMinutes, remindScope (all|planner), "
+                         "shortEventMinutes (events this long or shorter use shortRemindMinutes; 0 = off), shortRemindMinutes. "
+                         "Proposal checks: sleepStart, sleepEnd (HH:MM), lastBus {weekday, saturday, sunday}, homePlace, "
+                         "places [{name, match[]}], travel [{from, to, minutes}], protectedEvents [title words]."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200},
             "confirmed_by_user": {"type": "boolean", "description": "true only when the user explicitly agreed to this "
                                   "exact change in the conversation (confirm, deadline change, dropping a todo)."},

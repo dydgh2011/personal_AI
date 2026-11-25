@@ -94,7 +94,7 @@ class ToolTest(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(out["display"].splitlines(), [
             "2026-11-23(월) 초안(미확정)",
-            "  [마감] 종일 마감: 보고서",
+            "  [마감·이날까지] 종일 마감: 보고서",
             "  [계획·공부] 07:00-08:30 알고리즘 과제 (block_id 11111111-1111-4111-8111-111111111111)",
             "  [수업] 09:00-11:00 CSC263 (event_id lec1_20261123T140000Z, 반복)",
         ])

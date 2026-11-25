@@ -303,6 +303,18 @@ class CourseBriefTest(unittest.TestCase):
         provider = plugin.KnowledgeProvider(env={"PERSONAL_AI_BROKER_URL": "http://broker"}, client=self.client)
         self.assertIsNone(provider.check_answer(response_text="hi", session_id="none"))
 
+    def test_long_documents_get_no_appended_notes(self):
+        provider = plugin.KnowledgeProvider(env={"PERSONAL_AI_BROKER_URL": "http://broker"}, client=self.client)
+        called = []
+        old = plugin.cb.check, plugin.sb.check
+        plugin.cb.check = plugin.sb.check = lambda text, sid: called.append(1) or text + "\n📌"
+        try:
+            self.assertIsNone(provider.check_answer(response_text="# 계획\n" + "x" * plugin.ANSWER_CHECK_MAX_CHARS, session_id="s"))
+            self.assertEqual(called, [])
+            self.assertTrue(provider.check_answer(response_text="짧은 답", session_id="s").endswith("📌"))
+        finally:
+            plugin.cb.check, plugin.sb.check = old
+
 
 class ScheduleBriefTest(unittest.TestCase):
     """Code lists every dated item, so 'first/next' never comes from one course."""
