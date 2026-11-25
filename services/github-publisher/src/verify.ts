@@ -27,6 +27,8 @@ export interface PublicationJob {
     id: string; source: string; fullName: string | null; remoteUrl: string | null; defaultBranch: string;
     visibility: string | null; githubRepositoryId: number | null; enabled: boolean; allowCodeChanges: boolean;
     testCommands?: TestCommand[];
+    /** POLICY B (2026-11-24): the only identity a published commit may have (the owner). */
+    commitAuthor?: { name: string; email: string } | null;
   } | null;
   testValidation?: {
     id: string; taskId: string; projectId: string; commitSha: string; status: string; commands: TestCommand[];
@@ -41,7 +43,7 @@ export interface PublicationJob {
 /** Structured reason codes (shared vocabulary with the controller's 409 codes). */
 export type ReasonCode =
   | 'TASK_NOT_COMPLETED' | 'REVIEW_NOT_APPROVED' | 'ARTIFACT_INVALID' | 'COMMIT_MISMATCH' | 'TREE_MISMATCH' | 'BASE_INVALID'
-  | 'FILES_MISMATCH' | 'REVIEW_INCOMPLETE' | 'AUTHOR_CHANGED' | 'TEST_REPORT_MISSING' | 'TEST_EVIDENCE_INVALID' | 'TEST_FAILED'
+  | 'FILES_MISMATCH' | 'REVIEW_INCOMPLETE' | 'AUTHOR_CHANGED' | 'AGENT_TRACE' | 'TEST_REPORT_MISSING' | 'TEST_EVIDENCE_INVALID' | 'TEST_FAILED'
   | 'TEST_SKIPPED' | 'TEST_ABORTED' | 'TEST_COMMANDS_CHANGED' | 'TEST_COMMIT_MISMATCH' | 'REPOSITORY_NOT_ALLOWED'
   | 'REMOTE_REPOSITORY_MISMATCH' | 'REMOTE_BASE_CHANGED' | 'TARGET_BRANCH_EXISTS' | 'PUBLISH_APPROVAL_REQUIRED';
 
@@ -62,14 +64,14 @@ const ORDER: Record<string, number> = {
   artifact: 3, bundle: 3, head_matches: 3,
   tree_matches: 4,
   trusted_repository: 5, base_in_repository: 5, base_is_ancestor: 5, linear_history: 5,
-  files_match: 6, review_complete: 6, author_preserved: 6,
+  files_match: 6, review_complete: 6, author_preserved: 6, no_agent_trace: 6,
   test_evidence: 7, tests_passed: 8, test_commit: 9,
   target_allowed: 10, target_branch: 10, remote_repository: 10,
   base_current: 11, target_branch_free: 11,
   publish_authorization: 12,
 };
 
-const GIT_CHECKS = ['artifact', 'bundle', 'head_matches', 'tree_matches', 'trusted_repository', 'base_in_repository', 'base_is_ancestor', 'linear_history', 'files_match', 'author_preserved'];
+const GIT_CHECKS = ['artifact', 'bundle', 'head_matches', 'tree_matches', 'trusted_repository', 'base_in_repository', 'base_is_ancestor', 'linear_history', 'files_match', 'author_preserved', 'no_agent_trace'];
 
 export interface PublicationReport {
   format: 'personal-ai-publication/v1';
@@ -80,7 +82,7 @@ export interface PublicationReport {
   reviewStatus: string | null;
   projectId: string | null;
   agent: string;
-  policy: { tests: 'required'; commitAuthor: 'preserve_worker' };
+  policy: { tests: 'required'; commitAuthor: 'owner' };
   /** Every git-object check passed (artifact, SHAs, tree, ancestry, files, author). */
   gitVerified: boolean;
   /** Every check passed except the separate publish approval. */
@@ -157,7 +159,7 @@ export async function preflight(job: PublicationJob, deps: VerifyDeps, options: 
   const report: PublicationReport = {
     format: 'personal-ai-publication/v1', mode, publicationId: job.publication.id, taskId, reviewId: review?.id ?? null,
     reviewStatus: review?.status ?? null, projectId: job.task.projectId, agent,
-    policy: { tests: 'required', commitAuthor: 'preserve_worker' },
+    policy: { tests: 'required', commitAuthor: 'owner' },
     gitVerified: false, eligible: false, canPublish: false, reason: null, reasons: [], checks, blockers: [], warnings,
     testValidationId: job.testValidation?.id ?? null,
     tests: { status: job.testValidation?.status ?? null, commitSha: job.testValidation?.commitSha ?? null, commands: [], evidenceHash: job.testValidation?.evidenceHash ?? null, signatureValid: false },
@@ -427,17 +429,43 @@ async function verifyGit(
     : extra.length || missing.length ? `not shown at approval: [${extra.join(', ')}]; shown but not in the commit: [${missing.join(', ')}]`
     : `${actual.size} file(s), same as approved`, 'FILES_MISMATCH');
 
-  // POLICY B: every commit keeps the worker identity; the head keeps its message. Read from the
-  // commit objects themselves (the published SHA is this SHA, so nothing can be rewritten later).
-  const identity = { name: `${agent}-worker`, email: `${agent}-worker@personal-ai.local` };
+  // POLICY B (owner decision 2026-11-24): every commit is authored AND committed as the project's
+  // commit author (the owner), carries no agent trace, and the head keeps the message shown at review.
+  // Read from the commit objects themselves (the published SHA is this SHA, nothing is rewritten later).
+  const owner = job.project?.commitAuthor ?? null;
   const people = (await git(['log', '--format=%an%x00%ae%x00%cn%x00%ce', `${base}..${head}`], repo, home)).trim().split('\n').filter(Boolean).map((l) => l.split('\0'));
   const message = (await git(['log', '-1', '--format=%B', head], repo, home)).trim();
   const [an, ae, cn, ce] = people[0] ?? ['', '', '', ''];
   report.author = { name: an, email: ae, committerName: cn, committerEmail: ce, message: message.slice(0, 4000) };
-  const sameIdentity = people.length > 0 && people.every(([a, b, c, d]) => a === identity.name && b === identity.email && c === identity.name && d === identity.email);
+  const sameIdentity = !!owner && people.length > 0 && people.every(([a, b, c, d]) => a === owner.name && b === owner.email && c === owner.name && d === owner.email);
   const sameMessage = !!shown?.commitMessage && message.slice(0, 4000) === shown.commitMessage.trim();
-  add('author_preserved', sameIdentity && sameMessage, !sameIdentity ? `author/committer is not the ${agent} worker identity (${an} <${ae}>, committer ${cn} <${ce}>)`
-    : !sameMessage ? 'commit message differs from the one recorded at review time' : `${an} <${ae}>, committed by ${cn} <${ce}>; message unchanged`, 'AUTHOR_CHANGED');
+  add('author_preserved', sameIdentity && sameMessage,
+    !owner ? 'no commit author is set for this project (Dashboard → Projects → commit author); commits are only published as the owner'
+    : !sameIdentity ? `author/committer is not the project's commit author ${owner.name} <${owner.email}> (${an} <${ae}>, committer ${cn} <${ce}>)`
+    : !sameMessage ? 'commit message differs from the one recorded at review time' : `${an} <${ae}>; message unchanged`, 'AUTHOR_CHANGED');
+  const messages = (await git(['log', '--format=%B%x00', `${base}..${head}`], repo, home)).split('\0').map((m) => m.trim()).filter(Boolean);
+  const traced = [...messages, ...people.map((p) => `${p[0]} <${p[1]}> ${p[2]} <${p[3]}>`)].find(hasAgentTrace) ?? null;
+  add('no_agent_trace', messages.length > 0 && traced === null, traced === null ? `${messages.length} commit message(s) without agent traces`
+    : `agent trace in a commit: "${traced.split('\n').find(hasAgentTrace)?.slice(0, 120) ?? traced.slice(0, 120)}"`, 'AGENT_TRACE');
+}
+
+/**
+ * What would show a commit (or pull request) was made by an AI agent or by this system's workers.
+ * Same list as the worker's (services/worker/src/project-settings.ts); a published commit must match none.
+ */
+export const AGENT_TRACE: RegExp[] = [
+  /co-authored-by\s*:/i,
+  /^\s*(signed-off-by|generated-by|assisted-by)\s*:/im,
+  /generated\s+(with|by)\s+\[?(claude|chatgpt|codex|openai|anthropic|copilot|an?\s+ai)/i,
+  /\bclaude\s+code\b/i,
+  /noreply@anthropic\.com|@openai\.com|personal-ai\.local/i,
+  /\b(claude|codex)-worker\b/i,
+  /\bas an ai\b|\bai[- ]generated\b|\bai coding agent\b/i,
+  /\u{1F916}/u,
+];
+
+export function hasAgentTrace(text: string): boolean {
+  return AGENT_TRACE.some((re) => re.test(text));
 }
 
 /** Copies the bundle out of the worker's volume (so it cannot change under us) and checks the manifest. */
@@ -502,18 +530,14 @@ async function trustedRepository(exportRoot: string, projectId: string, remoteUr
 
 function pullRequestPlan(job: PublicationJob, report: PublicationReport): PublicationReport['pullRequest'] {
   const review = job.review!;
-  const firstLine = (job.reported?.commitMessage ?? '').split('\n').map((l) => l.trim()).find((l) => l && !/^(claude|codex)-worker: task /.test(l)) ?? '';
-  const title = `[personal-ai/${job.task.agent}] ${firstLine || `task ${job.task.id.slice(0, 8)}`}`.slice(0, 120);
+  // Written as the owner's own pull request (POLICY B, 2026-11-24): no agent, worker, task or tool names.
+  const firstLine = (job.reported?.commitMessage ?? '').split('\n').map((l) => l.trim()).find((l) => l && !hasAgentTrace(l)) ?? '';
+  const title = (firstLine || 'Update project files').slice(0, 120);
+  const passed = report.tests.commands.map((c) => c.name).filter(Boolean);
   const body = [
-    'Prepared by the Personal AI OS GitHub Publisher. **Draft - created by an AI coding agent.**',
+    passed.length ? `Tests: ${passed.join(', ')} passed on \`${(report.tests.commitSha ?? review.headSha).slice(0, 12)}\`.` : 'Tests passed.',
     '',
-    `- Agent: ${job.task.agent} (task \`${job.task.id}\`)`,
-    `- Code review approved by: ${review.decidedBy} at ${review.decidedAt} (review \`${review.id}\`)`,
-    `- Publish authorized by: ${job.authorization?.authorizedBy ?? '(pending)'}${job.authorization ? ` at ${job.authorization.authorizedAt}` : ''}`,
-    `- Tests: run \`${report.testValidationId}\` on \`${report.tests.commitSha}\`: ${report.tests.commands.map((c) => `${c.name} exit ${c.exitCode}`).join(', ')} (evidence sha256 \`${report.tests.evidenceHash}\`)`,
-    `- Base: \`${review.baseSha}\` (${report.target.baseBranch})`,
-    `- Head: \`${review.headSha}\`, tree \`${review.headTree}\` (published unchanged)`,
-    `- Commit author/committer: ${report.author ? `${report.author.name} <${report.author.email}>` : 'unknown'} (worker identity, preserved); pushed by the GitHub App`,
+    `Base: \`${review.baseSha.slice(0, 12)}\` (${report.target.baseBranch})`,
     '',
     'Files:',
     ...report.files.map((f) => `- ${f.status} \`${f.path}\``),

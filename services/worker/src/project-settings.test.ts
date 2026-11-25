@@ -6,13 +6,14 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, it } from 'node:test';
 import type { WorkerConfig } from './config.js';
 import { ControllerClient, type RegistryProject, type Task } from './controller-client.js';
-import type { WorkerReport } from './executor.js';
+import { ownerCommitMessage, type WorkerReport } from './executor.js';
 import { silentLogger } from './logger.js';
 import {
   analyzeCommitSubjects,
   buildProjectPrompt,
   extractCommitSubject,
   forbiddenMatcher,
+  hasAgentTrace,
   readProjectSettings,
   SettingsError,
   type ProjectSettings,
@@ -30,6 +31,7 @@ const BEL = String.fromCharCode(7);
 
 const settings = (over: Partial<ProjectSettings> = {}): ProjectSettings => ({
   commitStyle: { mode: 'off', guide: null },
+  commitAuthor: null,
   rules: '',
   forbiddenPaths: [],
   ...over,
@@ -46,7 +48,34 @@ describe('project settings: registry values', () => {
       commitStyle: { mode: 'manual', guide: '  feat: lowercase  ' },
       agentInstructions: { rules: ' No new deps. \n', forbiddenPaths: ['secrets/', '*.pem'] },
     });
-    assert.deepEqual(s, { commitStyle: { mode: 'manual', guide: 'feat: lowercase' }, rules: 'No new deps.', forbiddenPaths: ['secrets/', '*.pem'] });
+    assert.deepEqual(s, { commitStyle: { mode: 'manual', guide: 'feat: lowercase' }, commitAuthor: null, rules: 'No new deps.', forbiddenPaths: ['secrets/', '*.pem'] });
+  });
+
+  it('reads the owner commit author and refuses invalid or agent-like identities', () => {
+    assert.deepEqual(readProjectSettings({ id: 'p', commitAuthor: { name: ' Owner Name ', email: 'owner@example.com ' } }).commitAuthor, { name: 'Owner Name', email: 'owner@example.com' });
+    for (const commitAuthor of [
+      { name: '', email: 'a@example.com' },
+      { name: 'A <b>', email: 'a@example.com' },
+      { name: 'A', email: 'not-an-email' },
+      { name: 'claude-worker', email: 'claude-worker@personal-ai.local' },
+      { name: 'Claude', email: 'noreply@anthropic.com' },
+    ]) {
+      assert.throws(() => readProjectSettings({ id: 'p', commitAuthor }), SettingsError, JSON.stringify(commitAuthor));
+    }
+  });
+
+  it('finds agent traces but not ordinary words', () => {
+    for (const s of ['Co-Authored-By: Claude <noreply@anthropic.com>', 'x\n\nCo-authored-by: A <a@b.c>', 'Generated with Claude Code', 'codex-worker: task 1', '\u{1F916} done']) {
+      assert.equal(hasAgentTrace(s), true, s);
+    }
+    for (const s of ['Fix the Gemini provider timeout', 'Add OpenAI-compatible docs', 'feat: add page']) assert.equal(hasAgentTrace(s), false, s);
+  });
+
+  it('owner commit message: only a subject, never worker or task lines', () => {
+    assert.equal(ownerCommitMessage({ instruction: 'x' }, 'feat: add page'), 'feat: add page\n');
+    assert.equal(ownerCommitMessage({ instruction: '  README에 설치 방법 추가\n자세히' }, null), 'README에 설치 방법 추가\n');
+    assert.equal(ownerCommitMessage({ instruction: 'Ask Claude Code to fix it' }, null), 'Update project files\n');
+    assert.equal([...ownerCommitMessage({ instruction: 'a'.repeat(200) }, null).trim()].length, 72);
   });
 
   it('refuses values outside the controller limits (fail closed)', () => {
@@ -220,6 +249,14 @@ describe('project settings in the workspace', () => {
     assert.ok(s3.commit);
     assert.equal(s3.blockedPaths, undefined);
     assert.equal(git(p3.cwd, 'log', '-1', '--format=%an <%ae>|%cn <%ce>|%s'), 'claude-worker <claude-worker@personal-ai.local>|claude-worker <claude-worker@personal-ai.local>|docs: add notes');
+
+    // with the project's commit author: author AND committer are the owner (POLICY B, 2026-11-24)
+    const t4 = task();
+    const p4 = await workspace.prepare(t4, project({ commitAuthor: { name: 'Owner Name', email: 'owner@example.com' } }));
+    await writeFile(join(p4.cwd, 'owner.md'), 'ok');
+    const s4 = await workspace.finalize(p4, 'docs: add owner notes\n');
+    assert.ok(s4.commit);
+    assert.equal(git(p4.cwd, 'log', '-1', '--format=%an <%ae>|%cn <%ce>|%B').trim(), 'Owner Name <owner@example.com>|Owner Name <owner@example.com>|docs: add owner notes');
   });
 
   it('auto style: analyses the project history (read-only) and reports it', async () => {
@@ -282,6 +319,24 @@ describe('Worker + project settings', () => {
     await Promise.all(workers.map((w) => w.running.catch(() => {})));
     await controller.stop();
     await dir.cleanup();
+  });
+
+  it('Claude with an owner commit author: only the subject, as the owner, no trace', async () => {
+    controller.projects.set('sandbox', localProject('sandbox', { commitAuthor: { name: 'Owner Name', email: 'owner@example.com' } }));
+    const config = start('claude');
+    const t = controller.addTask('claude', '@dump args.json\n@write page.html=<p>\n@say COMMIT_MESSAGE: Add landing page');
+    await waitFor(() => statusOf(t.id) === 'completed', 15_000, 'task done');
+    const wt = join(config.workspaceRoot, '.worktrees', t.id);
+    const { argv } = JSON.parse(readFileSync(join(wt, 'args.json'), 'utf8')) as { argv: string[] };
+    assert.match(argv[argv.indexOf('--append-system-prompt') + 1], /no mention of AI, agents, tools/);
+    assert.equal(git(wt, 'log', '-1', '--format=%B'), 'Add landing page');
+    assert.equal(git(wt, 'log', '-1', '--format=%an <%ae>|%cn <%ce>'), 'Owner Name <owner@example.com>|Owner Name <owner@example.com>');
+    assert.equal(hasAgentTrace(git(wt, 'log', '-1', '--format=%an %ae %cn %ce %B')), false);
+
+    // a subject that names an agent is not used; the request's first line is
+    const t2 = controller.addTask('claude', '@write more.html=<p>\n@say COMMIT_MESSAGE: Claude Code added a page');
+    await waitFor(() => statusOf(t2.id) === 'completed', 15_000, 'second task done');
+    assert.equal(git(join(config.workspaceRoot, '.worktrees', t2.id), 'log', '-1', '--format=%B'), '@write more.html=<p>');
   });
 
   it('Claude: rules in the system prompt, the agent subject in the commit, worker identity kept', async () => {

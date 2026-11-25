@@ -3,7 +3,7 @@ import { join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { ConfigError, loadConfig, type PublisherConfig } from './config.js';
 import { ControllerClient, ControllerError } from './controller-client.js';
-import { AppGitHubReader, GitHubAppApi, GitHubAudit } from './github-app.js';
+import { AppGitHubReader, GitHubAppApi, GitHubAppWriter, GitHubAudit } from './github-app.js';
 import { DisabledWriter, HttpGitHubReader, MockWriter, type GitHubReader, type GitHubWriter } from './github.js';
 import { Journal } from './journal.js';
 import { preflight, type PublicationJob } from './verify.js';
@@ -92,7 +92,10 @@ export function buildDeps(config: PublisherConfig): HandlerDeps {
   return {
     config,
     github,
-    writer: config.publishBackend === 'mock' ? new MockWriter() : new DisabledWriter(),
+    writer: config.publishBackend === 'mock' ? new MockWriter()
+      : config.publishBackend === 'github' && config.githubApp
+        ? new GitHubAppWriter({ api: new GitHubAppApi({ apiUrl: config.githubApiUrl, app: config.githubApp, allowedRepositories: config.allowedRepositories, audit }), gitBaseUrl: config.gitBaseUrl, audit })
+        : new DisabledWriter(),
     journal: new Journal(config.stateDir),
     controller: new ControllerClient(config.controllerUrl, config.tokenFile),
   };

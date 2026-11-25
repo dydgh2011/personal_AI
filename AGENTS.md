@@ -48,8 +48,8 @@
 
 ### 정책 (변경 금지)
 - **POLICY A**: 테스트 결과가 보고되지 않았거나 실패한 커밋은 게시하지 않는다.
-- **POLICY B**: Worker가 만든 커밋의 author와 message를 다시 쓰지 않는다.
-- **실제 GitHub 게시는 꺼 둔다**(`PUBLISH_DISABLED`가 정상).
+- **POLICY B** (2026-11-24 주인 결정으로 변경): 작업 커밋의 author와 committer는 **프로젝트의 커밋 작성자(주인 본인)**다. 커밋 메시지와 PR에 AI·에이전트 흔적(`Co-authored-by`, `Generated with`, worker 이름, task id 등)이 있으면 게시하지 않는다. 커밋 작성자가 없는 프로젝트는 게시하지 않는다. 게시 단계에서 커밋을 다시 쓰지 않는다.
+- 실제 GitHub 게시는 GitHub App으로만 한다(개인 토큰 금지). 켜고 끄는 것은 주인 결정이며 지금 상태는 `CURRENT_WORK.md`를 본다.
 - CSRF 검사, Origin 검사, 인증 미들웨어를 끄거나 우회해서 문제를 해결하지 않는다. Codex Worker의 seccomp 프로필을 완화하지 않는다.
 - 학습 평가 결과를 GitHub 게시 승인으로 쓰지 않는다. 사용자가 정한 Deadline을 AI가 바꾸지 않는다.
 

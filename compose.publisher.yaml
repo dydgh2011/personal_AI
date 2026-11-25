@@ -27,7 +27,8 @@ services:
       PUBLISHER_EXPORT_ROOT: /repo-exports
       # Owner policies (fixed; the publisher refuses to start with any other value).
       PUBLISHER_REQUIRE_REPORTED_TESTS: "true"
-      PUBLISHER_COMMIT_AUTHOR_POLICY: preserve_worker
+      PUBLISHER_BRANCH_PREFIX: changes/            # pushed branch names carry no system or AI name
+      PUBLISHER_COMMIT_AUTHOR_POLICY: owner             # POLICY B (2026-11-24): commits only as the owner, no agent trace
       # Real publishing stays off in Phase E-2B (allowed: disabled | mock).
       PUBLISHER_PUBLISH_BACKEND: disabled
       PUBLISHER_TEST_EVIDENCE_KEY_FILE: /run/secrets/test_evidence_key

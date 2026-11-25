@@ -88,6 +88,8 @@ export interface WorkerProjectView {
   commitStyle: CommitStyle;
   /** Admin's coding rules (prompt) and forbidden paths (enforced by the worker before committing). */
   agentInstructions: AgentInstructions;
+  /** The owner's git identity for task commits (POLICY B, 2026-11-24); null = worker identity. */
+  commitAuthor: CommitAuthor | null;
 }
 
 export function delegatorView(p: Project): DelegatorProjectView {
@@ -115,5 +117,6 @@ export function workerView(p: Project): WorkerProjectView {
     syncStatus: p.syncStatus,
     commitStyle: p.commitStyle,
     agentInstructions: p.agentInstructions,
+    commitAuthor: p.commitAuthor,
   };
 }

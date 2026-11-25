@@ -42,7 +42,7 @@ export function PublicationPanel({ taskId, status, csrf, confirm, files, idempot
       <h2>Publishing</h2>
       <div className="row">
         <span className={`badge ${label.tone}`}>{label.text}</span>
-        <span className="muted">Policy: tests required (POLICY A) · worker commit author preserved (POLICY B) · real publishing {status.publishEnabled ? 'enabled' : 'disabled'}</span>
+        <span className="muted">Policy: tests required (POLICY A) · commits only as the project owner, no AI trace (POLICY B) · real publishing {status.publishEnabled ? 'enabled' : 'disabled'}</span>
       </div>
 
       {/* ---- tests */}

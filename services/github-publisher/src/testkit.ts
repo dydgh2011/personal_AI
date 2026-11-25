@@ -13,8 +13,11 @@ export const COMMANDS = [
   { name: 'utf8', argv: ['sh', '-c', 'true'], timeoutSeconds: 30 },
 ];
 
+/** The project's commit author (the owner): the only identity a published commit may have. */
+export const OWNER = { name: 'Owner Name', email: 'owner@example.com' };
+
 export const g = (cwd: string, ...args: string[]) =>
-  execFileSync('git', ['-c', 'user.name=codex-worker', '-c', 'user.email=codex-worker@personal-ai.local', '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8' }).trim();
+  execFileSync('git', ['-c', `user.name=${OWNER.name}`, '-c', `user.email=${OWNER.email}`, '-c', 'commit.gpgsign=false', '-c', 'init.defaultBranch=main', ...args], { cwd, encoding: 'utf8' }).trim();
 
 export class FakeGitHub implements GitHubReader {
   repos = new Map<string, RemoteRepository>();
@@ -51,8 +54,8 @@ export function fixture(root: string, commit: { author?: string; email?: string;
   g(worker, 'checkout', '-q', '-b', branch, base);
   writeFileSync(join(worker, 'NOTES.md'), '# Notes\n<script>alert(1)</script>\n');
   g(worker, 'add', '-A');
-  const message = commit.message ?? `codex-worker: task ${taskId} (completed)\n\nAdd notes`;
-  execFileSync('git', ['-c', `user.name=${commit.author ?? 'codex-worker'}`, '-c', `user.email=${commit.email ?? 'codex-worker@personal-ai.local'}`, '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message], { cwd: worker });
+  const message = commit.message ?? 'Add notes';
+  execFileSync('git', ['-c', `user.name=${commit.author ?? OWNER.name}`, '-c', `user.email=${commit.email ?? OWNER.email}`, '-c', 'commit.gpgsign=false', 'commit', '-q', '-m', message], { cwd: worker });
   const head = g(worker, 'rev-parse', 'HEAD');
   const tree = g(worker, 'rev-parse', 'HEAD^{tree}');
 
@@ -126,7 +129,7 @@ export function makeJob(f: Fixture, over: Over = {}): PublicationJob {
     },
     project: {
       id: 'hello', source: 'github', fullName: 'owner/hello', remoteUrl: 'https://github.com/owner/hello.git', defaultBranch: 'main',
-      visibility: 'public', githubRepositoryId: 42, enabled: true, allowCodeChanges: true, testCommands: COMMANDS, ...over.project,
+      visibility: 'public', githubRepositoryId: 42, enabled: true, allowCodeChanges: true, testCommands: COMMANDS, commitAuthor: OWNER, ...over.project,
     },
     testValidation: tv,
     authorization: authorization as PublicationJob['authorization'],

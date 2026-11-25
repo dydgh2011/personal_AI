@@ -8,18 +8,49 @@ import type { RegistryProject } from './controller-client.js';
  * value is out of bounds: a registry the worker cannot trust is treated like an unreadable one.
  * A controller from before these settings sends none; that means "nothing configured".
  *
- * Git identity is NOT a project setting here: commits keep the worker identity (POLICY B).
+ * Commit author (POLICY B, owner decision 2026-11-24): when the project has a commit author, the
+ * worker commits as that person (author and committer) and the commit carries no agent trace: no
+ * trailers, no worker or task lines, no tool names. Without one, the worker identity is kept and
+ * the publisher refuses to publish.
  */
 
 export type CommitStyleMode = 'off' | 'auto' | 'manual';
 
+export interface CommitAuthor {
+  name: string;
+  email: string;
+}
+
 export interface ProjectSettings {
   commitStyle: { mode: CommitStyleMode; guide: string | null };
+  /** The owner's git identity for task commits; null = keep the worker identity (not publishable). */
+  commitAuthor: CommitAuthor | null;
   rules: string;
   forbiddenPaths: string[];
 }
 
-export const LIMITS = { styleGuide: 1000, rules: 4000, forbiddenPaths: 50, forbiddenPath: 200, subject: 100 } as const;
+export const LIMITS = { styleGuide: 1000, rules: 4000, forbiddenPaths: 50, forbiddenPath: 200, subject: 100, authorName: 100, authorEmail: 254 } as const;
+
+const EMAIL = /^[^\s@<>()]+@[^\s@<>()]+\.[^\s@<>()]+$/;
+
+/**
+ * Lines and words that would show a commit was made by an AI agent or by this system's workers.
+ * Used to clean the agent's proposed subject; the publisher refuses commits that still carry one.
+ */
+export const AGENT_TRACE: RegExp[] = [
+  /co-authored-by\s*:/i,
+  /^\s*(signed-off-by|generated-by|assisted-by)\s*:/im,
+  /generated\s+(with|by)\s+\[?(claude|chatgpt|codex|openai|anthropic|copilot|an?\s+ai)/i,
+  /\bclaude\s+code\b/i,
+  /noreply@anthropic\.com|@openai\.com|personal-ai\.local/i,
+  /\b(claude|codex)-worker\b/i,
+  /\bas an ai\b|\bai[- ]generated\b|\bai coding agent\b/i,
+  /\u{1F916}/u,
+];
+
+export function hasAgentTrace(text: string): boolean {
+  return AGENT_TRACE.some((re) => re.test(text));
+}
 
 /** Commit subjects read for the style analysis (newest first, merges skipped). */
 export const STYLE_SAMPLE = 50;
@@ -29,7 +60,7 @@ const PATH_PATTERN = /^(?!\s)(?!.*\s$)(?!\/)(?!\.\/)(?!.*\/\/)(?!(?:.*\/)?\.{1,2
 
 export class SettingsError extends Error {}
 
-export function readProjectSettings(project: Pick<RegistryProject, 'id' | 'commitStyle' | 'agentInstructions'>): ProjectSettings {
+export function readProjectSettings(project: Pick<RegistryProject, 'id' | 'commitStyle' | 'agentInstructions' | 'commitAuthor'>): ProjectSettings {
   const fail = (what: string): never => {
     throw new SettingsError(`Project "${project.id}" has invalid agent settings in the registry (${what}); the task was not run`);
   };
@@ -48,7 +79,18 @@ export function readProjectSettings(project: Pick<RegistryProject, 'id' | 'commi
   for (const p of forbiddenPaths) {
     if (typeof p !== 'string' || p.length > LIMITS.forbiddenPath || !PATH_PATTERN.test(p)) fail(`forbidden path ${JSON.stringify(String(p).slice(0, 60))}`);
   }
-  return { commitStyle: { mode: style.mode, guide: guide?.trim() || null }, rules: rules.trim(), forbiddenPaths: [...forbiddenPaths] };
+  const author = project.commitAuthor ?? null;
+  let commitAuthor: CommitAuthor | null = null;
+  if (author !== null) {
+    if (typeof author !== 'object') fail('commitAuthor');
+    const name = typeof author.name === 'string' ? author.name.trim() : '';
+    const email = typeof author.email === 'string' ? author.email.trim() : '';
+    if (!name || [...name].length > LIMITS.authorName || !TEXT.test(name) || /[<>\n]/.test(name)) fail('commitAuthor.name');
+    if (!email || email.length > LIMITS.authorEmail || !EMAIL.test(email)) fail('commitAuthor.email');
+    if (hasAgentTrace(`${name} <${email}>`)) fail('commitAuthor (looks like an agent identity)');
+    commitAuthor = { name, email };
+  }
+  return { commitStyle: { mode: style.mode, guide: guide?.trim() || null }, commitAuthor, rules: rules.trim(), forbiddenPaths: [...forbiddenPaths] };
 }
 
 // ---- forbidden paths ------------------------------------------------------------------
@@ -208,13 +250,14 @@ export function buildProjectPrompt(settings: ProjectSettings, analysis: CommitSt
     sections.push(lines.join('\n'));
   }
   const style = settings.commitStyle.mode === 'manual' ? settings.commitStyle.guide : settings.commitStyle.mode === 'auto' ? analysis?.guide : null;
-  if (writable && settings.commitStyle.mode !== 'off') {
+  if (writable && (settings.commitStyle.mode !== 'off' || settings.commitAuthor)) {
     sections.push(
       [
         '--- Commit message ---',
         'Do not run git; the worker commits your changes. If you changed files, end your final answer with exactly one line:',
         `${COMMIT_SUBJECT_MARKER} <one-line commit subject describing the change>`,
         style ? `Commit style of this project: ${style}` : 'Match the usual style of a short, imperative commit subject.',
+        'Write it as the project owner would: no mention of AI, agents, tools, models or task ids, and no trailers.',
       ].join('\n'),
     );
   }
@@ -228,7 +271,8 @@ export function extractCommitSubject(text: string): string | null {
     const at = lines[i].indexOf(COMMIT_SUBJECT_MARKER);
     if (at === -1 || lines[i].slice(0, at).trim().replace(/[*_`>-]/g, '') !== '') continue;
     const subject = sanitizeLine(lines[i].slice(at + COMMIT_SUBJECT_MARKER.length).replace(/^[\s`"'*]+|[\s`"'*]+$/g, ''), LIMITS.subject);
-    return subject || null;
+    // A subject that names an agent or tool is not used (the neutral fallback is).
+    return subject && !hasAgentTrace(subject) ? subject : null;
   }
   return null;
 }
