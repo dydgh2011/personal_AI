@@ -2,7 +2,7 @@ import 'server-only';
 import { readSecret } from './server';
 import type {
   Assignment, AssignmentDetail, CodeExecution, Domain, Evaluation, EvaluationDetail, Gap, Goal, Idea, LearningStatus, Milestone, MilestoneProgress, Proposal,
-  ProposalDiff, Roadmap, RoadmapContent, RoadmapDetail, RoadmapVersion, Rubric, RubricVersion, Skill, SkillDetail, Submission, SubmissionFile, UploadLimits,
+  ProposalDiff, Roadmap, RoadmapContent, RoadmapDetail, RoadmapVersion, Rubric, RubricVersion, Skill, SchedulePeriod, ScheduleWindow, SkillDetail, StudyPlan, Submission, SubmissionFile, UploadLimits,
 } from './learning-types';
 
 export class LearningError extends Error {
@@ -88,6 +88,11 @@ export const learning = {
   reject: (r: string, p: string, by: string) => call<Proposal>('POST', `/roadmaps/${id(r)}/proposals/${id(p)}/reject`, {}, by),
   restore: (r: string, versionId: string, baseVersionId: string, by: string) => call<{ version: RoadmapVersion }>('POST', `/roadmaps/${id(r)}/restore`, { versionId, baseVersionId }, by),
   export: (by: string) => call<Record<string, unknown>>('GET', '/export', undefined, by, 30_000),
+
+  schedule: (date: string, period: SchedulePeriod) => call<StudyPlan>('GET', `/schedule${q({ date, period })}`),
+  updateScheduleAvailability: (windows: ScheduleWindow[], by: string) => call<StudyPlan['availability']>('PATCH', '/schedule/availability', { windows }, by),
+  proposeSchedule: (input: { date?: string; period: SchedulePeriod }, by: string) =>
+    call<{ proposal: { code: string; title: string; status: string } }>('POST', '/schedule/propose', input, by, 15_000),
 
   // L2: rubrics, milestones, assignments, submissions, evaluations, skills, gaps
   rubrics: () => call<{ items: Rubric[] }>('GET', '/rubrics').then((r) => r.items),

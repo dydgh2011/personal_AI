@@ -366,6 +366,13 @@ export const MIGRATIONS: readonly string[] = [
   ) STRICT;
   CREATE INDEX idx_gaps_status ON gaps (status, created_at);
   `,
+  // v3: L3 - owner's recurring weekly study windows. Proposals stay with the Planner.
+  `
+  CREATE TABLE schedule_preferences (
+    id      INTEGER PRIMARY KEY CHECK (id = 1),
+    windows TEXT NOT NULL CHECK (json_valid(windows) AND json_type(windows) = 'array')
+  ) STRICT;
+  `,
 ];
 
 export function migrate(db: Database): number {

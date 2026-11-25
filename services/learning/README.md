@@ -1,4 +1,4 @@
-# Learning Service (AI Learning OS · L1)
+# Learning Service (AI Learning OS)
 
 학습 분야(Domain), 아이디어(Idea Inbox), 목표(Goal), 버전이 있는 학습 로드맵, AI 로드맵 초안을 관리한다. 개발 프로젝트 로드맵(`docs/ROADMAP.md`)과는 **별도의 데이터**다.
 
@@ -15,6 +15,16 @@ Browser ─▶ Dashboard (/learning, 기존 로그인·CSRF) ──learning-inte
 - **AI 초안은 항상 proposal로만 저장한다.** 검증에 실패하면 `invalid` 상태가 되고, 현행 버전과 목표 Deadline(사용자 고정값)은 바뀌지 않는다. AI가 제안한 자료는 `ai_suggested`(미검증)로 표시한다.
 - **삭제 대신 보관한다.** 분야와 아이디어는 archived 상태로 바꾸며, 기록은 지우지 않는다.
 - **감사 로그**: 모든 변경에 대해 주체, 동작, 대상과 내용의 hash를 남긴다(내용 원문은 저장하지 않음).
+
+## 학습 일정과 복습
+
+Dashboard의 `/learning/planner`에서 Toronto 시간으로 오늘 또는 시작일부터 7일을 미리 봅니다. 주간 가용 시간과 Kelly의 바쁜 시간을 겹쳐 보고, 미완료 과제와 복습을 30분 또는 60분 블록에 배치합니다. 남은 과제는 다음 계획에도 포함됩니다. 고정 마감은 유지합니다. 복습일은 마지막 검증과 검증 수준에서 계산합니다. 오래된 검증을 갱신하려면 새 근거로 숙련도를 다시 검증합니다.
+
+`PATCH /schedule/availability`는 Dashboard만 사용할 수 있습니다. `POST /schedule/propose`는 Planner에 승인 대기 시안을 만듭니다. 시안 번호를 Kelly에서 열어 승인할 블록을 고릅니다. 기존 Planner에서 승인한 블록이 할 일과 Kelly 캘린더 일정으로 등록됩니다.
+
+연결 설정은 `LEARNING_PLANNER_URL`, `LEARNING_PLANNER_KEY_FILE`, `LEARNING_BROKER_KEY_FILE`입니다. Learning의 secret 초기화가 `learning-planner.key`와 `learning-broker.key`를 생성합니다. Planner와 Learning에 첫 번째 파일을, Hermes Broker와 Learning에 두 번째 파일을 각각 읽기 전용으로 마운트합니다. 연결은 각 서비스 쌍의 내부 네트워크를 사용합니다. 호출자 키가 설정되면 브로커는 허용된 분야·로드맵·일정 조회와 일정 시안 생성만 호출할 수 있습니다.
+
+DB v3로 갱신하기 전에 `scripts\stack.ps1 backup learning`을 실행합니다. JSON 내보내기에 직접 저장한 주간 가용 시간이 포함되며 v1·v2 내보내기도 가져올 수 있습니다.
 
 ## 설치와 실행
 ```powershell

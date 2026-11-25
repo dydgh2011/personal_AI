@@ -3,7 +3,7 @@ import type { Database } from 'better-sqlite3';
 import { IsInt, IsObject, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 import { randomUUID } from 'node:crypto';
 import { AuditService } from '../audit/audit.js';
-import { Actor } from '../auth/auth.js';
+import { Actor, AllowBroker } from '../auth/auth.js';
 import { Clock } from '../common/clock.js';
 import { conflict, notFound, parseJson, unprocessable } from '../common/errors.js';
 import { SQLITE_CONNECTION } from '../database/database.module.js';
@@ -333,6 +333,7 @@ function truncate(value: unknown): unknown {
 export class RoadmapsController {
   constructor(private readonly roadmaps: RoadmapsService) {}
 
+  @AllowBroker()
   @Get()
   list(@Query('goalId') goalId?: string) {
     return { items: this.roadmaps.list(goalId) };
@@ -343,6 +344,7 @@ export class RoadmapsController {
     return this.roadmaps.create(dto, actor);
   }
 
+  @AllowBroker()
   @Get(':id')
   get(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
     return this.roadmaps.detail(id);

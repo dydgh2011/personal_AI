@@ -3,7 +3,7 @@ import type { Database } from 'better-sqlite3';
 import { IsIn, IsInt, IsOptional, IsString, IsUUID, Max, MaxLength, Min, MinLength, ValidateIf } from 'class-validator';
 import { randomUUID } from 'node:crypto';
 import { AuditService } from '../audit/audit.js';
-import { Actor } from '../auth/auth.js';
+import { Actor, AllowBroker } from '../auth/auth.js';
 import { Clock } from '../common/clock.js';
 import { notFound, unprocessable } from '../common/errors.js';
 import { SQLITE_CONNECTION } from '../database/database.module.js';
@@ -121,6 +121,7 @@ export class DomainsService {
 export class DomainsController {
   constructor(private readonly domains: DomainsService) {}
 
+  @AllowBroker()
   @Get()
   list(@Query('status') status?: string) {
     return { items: this.domains.list(DOMAIN_STATUSES.includes(status as DomainStatus) ? status : undefined) };

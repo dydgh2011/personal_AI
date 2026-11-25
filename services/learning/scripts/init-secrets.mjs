@@ -7,6 +7,7 @@
 //   placeholders for the AI settings the owner fills in later.
 // - secrets/learning-dashboard.token: the same token, mounted only into the Admin Dashboard.
 // - secrets/learning-ai.key: empty placeholder for the AI provider key (owner adds it later).
+// - secrets/learning-broker.key and secrets/learning-planner.key: separate service credentials.
 // Never prints values; never overwrites existing files.
 import { randomBytes } from 'node:crypto';
 import { existsSync, writeFileSync } from 'node:fs';
@@ -51,4 +52,10 @@ if (!hasEnv) {
 if (!existsSync(keyFile)) {
   writeFileSync(keyFile, '', { mode: 0o600, flag: 'wx' });
   console.log(`created empty ${keyFile} (add the AI provider key later)`);
+}
+for (const name of ['learning-broker.key', 'learning-planner.key']) {
+  const path = join(secrets, name);
+  if (existsSync(path)) continue;
+  writeFileSync(path, `${randomBytes(32).toString('base64url')}\n`, { mode: 0o600, flag: 'wx' });
+  console.log(`created ${name}`);
 }

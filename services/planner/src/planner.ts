@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
 import type { GoogleConnection } from './connection.js';
 import { transaction } from './db.js';
@@ -29,7 +29,9 @@ export class PlannerError extends Error {
 
 const bad = (message: string) => new PlannerError(400, 'invalid_request', message);
 
-export type Actor = 'hermes' | 'system' | 'calendar';
+export type Actor = 'hermes' | 'system' | 'calendar' | 'learning';
+
+interface LearningTask { key: string; deadline: string | null; estimateMinutes: number; priority: number }
 export type TodoKind = 'task' | 'study' | 'habit';
 
 export interface Todo {
@@ -202,6 +204,7 @@ export class Planner {
 
   private verified: { id: string; at: number } | null = null;
   private ensuring: Promise<string> | null = null;
+  private applyingProposal = false;
 
   private meta(key: string): string | null {
     return (this.db.prepare('SELECT value FROM meta WHERE key = ?').get(key) as { value: string } | undefined)?.value ?? null;
@@ -420,6 +423,67 @@ export class Planner {
       .filter((e) => !e.plannerBlockId && !e.transparent && !e.declined)
       .map((e) => this.clip(e, day))
       .filter((i): i is Interval => i !== null);
+  }
+
+  /**
+   * Only wall-clock busy intervals leave the Planner. This read must not create a calendar,
+   * reconcile the database, or return titles and personal event details to Learning.
+   */
+  async learningAvailability(start: string, days: number) {
+    const known = this.meta('managed_calendar_id');
+    const cal = known ? this.google.account()?.calendar(known) : undefined;
+    const last = addDays(start, days - 1);
+    const events = cal ? await cal.listEvents(this.dayRange(start).timeMin, this.dayRange(last).timeMax) : [];
+    return {
+      timeZone: this.timeZone,
+      calendarConnected: !!cal,
+      reserved: this.learningReservations(),
+      days: Array.from({ length: days }, (_, index) => {
+        const date = addDays(start, index);
+        return { date, busy: this.learningBusy(events, date) };
+      }),
+    };
+  }
+
+  private learningReservations() {
+    const references = this.db.prepare(`
+      SELECT DISTINCT json_extract(spec, '$.learningTask.key') AS key
+      FROM proposal_items WHERE event_id IS NOT NULL AND json_type(spec, '$.learningTask.key') = 'text'
+    `).all() as Array<{ key: string }>;
+    const now = localParts(new Date(this.now()), this.timeZone);
+    const rows = this.db.prepare(`
+      SELECT date, start, end FROM blocks WHERE todo_id = ? AND removed = 0 AND date >= ?
+    `);
+    return references.map(({ key }) => {
+      const blocks = rows.all(stableUuid(`learning-todo:${key}`), now.date) as Array<{ date: string; start: string; end: string }>;
+      const minutes = blocks.reduce((sum, block) => {
+        const start = block.date === now.date ? Math.max(now.minutes, toMinutes(block.start)) : toMinutes(block.start);
+        return sum + Math.max(0, toMinutes(block.end) - start);
+      }, 0);
+      return { key, minutes };
+    }).filter((item) => item.minutes > 0);
+  }
+
+  private learningBusy(events: CalendarEvent[], date: string, ignore = new Set<string>()): Interval[] {
+    const { timeMin, timeMax } = this.dayRange(date);
+    const begin = Date.parse(timeMin);
+    const end = Date.parse(timeMax);
+    const blocks = this.blocks(date).map((b) => ({ start: toMinutes(b.start), end: toMinutes(b.end) }));
+    for (const event of events) {
+      if (ignore.has(event.id) || event.status === 'cancelled' || event.transparent || event.declined || event.deadlineTodoId) continue;
+      if (event.allDay) {
+        if (event.date && event.endDate && event.date <= date && date < event.endDate) blocks.push({ start: 0, end: 1440 });
+        continue;
+      }
+      if (!event.start || !event.end) continue;
+      const from = Math.max(begin, Date.parse(event.start));
+      const to = Math.min(end, Date.parse(event.end));
+      if (!(to > from)) continue;
+      const start = from === begin ? 0 : localParts(new Date(from), this.timeZone).minutes;
+      const finish = to === end ? 1440 : localParts(new Date(to), this.timeZone).minutes + (to % 60_000 === 0 ? 0 : 1);
+      if (finish > start) blocks.push({ start, end: finish });
+    }
+    return blocks;
   }
 
   // ---- plans ----------------------------------------------------------------------------
@@ -1067,12 +1131,76 @@ export class Planner {
     const title = text(body.title, 'title', MAX_TITLE)!;
     const notes = text(body.notes, 'notes', MAX_NOTES, false);
     const items = this.itemSpecs(body.items, 'items');
+    return this.saveProposal(title, notes, items, actor);
+  }
+
+  /** Called only with Learning's scoped key. Event and todo details remain in a draft together. */
+  createLearningProposal(body: Record<string, unknown>): ProposalView {
+    only(body, ['date', 'period', 'items']);
+    const start = date(body.date, 'date');
+    if (start < this.today()) throw new PlannerError(409, 'conflict', 'This learning plan is in the past');
+    const period = body.period;
+    if (period !== 'day' && period !== 'week') throw bad('period must be day or week');
+    const end = addDays(start, period === 'day' ? 0 : 6);
+    if (!Array.isArray(body.items) || body.items.length < 1 || body.items.length > 60) throw bad('items must list 1-60 learning blocks');
+    const items = body.items.map((item: unknown) => {
+      if (!item || typeof item !== 'object' || Array.isArray(item)) throw bad('Each learning block must be an object');
+      const row = item as Record<string, unknown>;
+      only(row, ['title', 'date', 'start', 'end', 'task']);
+      const plannedDate = date(row.date, 'item.date');
+      if (plannedDate < start || plannedDate > end) throw bad('Learning block lies outside the requested period');
+      const title = text(row.title, 'item.title', MAX_TITLE)!;
+      const event = { category: 'study', title, date: plannedDate, start: time(row.start, 'item.start'), end: time(row.end, 'item.end') };
+      this.eventSpec(event);
+      return { ...event, learningTask: this.learningTask(row.task) };
+    });
+    const title = period === 'day' ? `학습 계획 · ${start}` : `학습 계획 · ${start} ~ ${end}`;
+    const notes = '사용자가 고른 블록을 승인하면 학습 할 일과 Kelly 일정이 함께 등록됩니다. 기존 할 일과 고정 마감은 그대로 유지합니다.';
+    const requestKey = createHash('sha256').update(JSON.stringify({ start, period, items })).digest('hex');
+    return this.saveProposal(title, notes, items, 'learning', requestKey);
+  }
+
+  private learningTask(value: unknown): LearningTask {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw bad('Each learning block needs a task');
+    const task = value as Record<string, unknown>;
+    only(task, ['key', 'estimateMinutes', 'priority', 'deadline']);
+    const key = text(task.key, 'task.key', 90)!;
+    const { kind, id, due } = /^(?<kind>assignment|review):(?<id>[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})(?::(?<due>\d{4}-\d{2}-\d{2}))?$/
+      .exec(key)?.groups ?? {};
+    if (!id || (kind === 'review' ? !isValidDate(due) : due !== undefined)) throw bad('Invalid learning task reference');
+    const deadline = optionalDate(task.deadline, 'task.deadline');
+    if (kind === 'review' && deadline !== null) throw bad('A review date cannot become a user deadline');
+    return { key, deadline, estimateMinutes: int(task.estimateMinutes, 'task.estimateMinutes', 5, 6000), priority: int(task.priority, 'task.priority', 1, 3) };
+  }
+
+  private proposedEvent(fields: Record<string, unknown>): { spec: EventSpec; task: LearningTask | null } {
+    const { learningTask, ...event } = fields;
+    if (learningTask === undefined) return { spec: this.eventSpec(event), task: null };
+    if (event.allDay || event.endDate) throw bad('Learning blocks must start and end on the same study day');
+    const spec = this.eventSpec(event.end === '24:00'
+      ? { ...event, end: '00:00', endDate: addDays(date(event.date, 'item.date'), 1) }
+      : event);
+    if (spec.timing.kind !== 'timed' || spec.recurrence) throw bad('Learning blocks must be timed and cannot repeat');
+    return { spec, task: this.learningTask(learningTask) };
+  }
+
+  private saveProposal(title: string, notes: string | null, items: Array<Record<string, unknown>>, actor: Actor, requestKey?: string): ProposalView {
     const now = this.iso();
     const id = transaction(this.db, () => {
+      if (requestKey) {
+        const existing = this.db.prepare(`
+          SELECT p.id FROM change_log l
+          JOIN proposals p ON p.id = json_extract(l.detail, '$.proposalId')
+          WHERE l.entity = 'learning_proposal' AND l.entity_id = ? AND p.status <> 'discarded'
+          ORDER BY p.id DESC LIMIT 1
+        `).get(requestKey) as { id: number } | undefined;
+        if (existing) return existing.id;
+      }
       const result = this.db.prepare("INSERT INTO proposals (title, notes, status, created_at, updated_at) VALUES (?, ?, 'draft', ?, ?)").run(title, notes, now, now);
       const pid = Number(result.lastInsertRowid);
       items.forEach((spec, i) => this.db.prepare('INSERT INTO proposal_items (proposal_id, n, spec) VALUES (?, ?, ?)').run(pid, i + 1, JSON.stringify(spec)));
       this.log(actor, 'create', 'proposal', idToCode(pid), { title, notes, items });
+      if (requestKey) this.log(actor, 'create', 'learning_proposal', requestKey, { proposalId: pid });
       return pid;
     });
     return this.proposal(idToCode(id));
@@ -1089,8 +1217,12 @@ export class Planner {
     const p = this.proposalRow(code);
     const rows = this.db.prepare('SELECT n, spec, event_id FROM proposal_items WHERE proposal_id = ? ORDER BY n').all(p.id) as Array<{ n: number; spec: string; event_id: string | null }>;
     const items = rows.map((r) => {
-      const spec = this.eventSpec(JSON.parse(r.spec));
-      return { n: r.n, title: spec.title, category: spec.category, when: describeWhen(spec.timing, spec.recurrence, this.timeZone), location: spec.location, applied: r.event_id !== null, spec };
+      const { spec, task } = this.proposedEvent(JSON.parse(r.spec));
+      return {
+        n: r.n, title: spec.title, category: spec.category, when: describeWhen(spec.timing, spec.recurrence, this.timeZone),
+        location: spec.location, applied: r.event_id !== null, spec,
+        ...(task ? { todo: { title: spec.title, estimateMinutes: task.estimateMinutes, deadline: task.deadline } } : {}),
+      };
     });
     return {
       code: idToCode(p.id),
@@ -1119,9 +1251,10 @@ export class Planner {
       const row = this.db.prepare('SELECT spec, event_id FROM proposal_items WHERE proposal_id = ? AND n = ?').get(p.id, n) as { spec: string; event_id: string | null } | undefined;
       if (!row) throw new PlannerError(404, 'not_found', `Proposal ${code} has no item ${n}`);
       if (row.event_id) throw new PlannerError(409, 'conflict', `Item ${n} is already in the calendar; change it with event_update`);
+      if ('learningTask' in fields) throw bad('Learning task references cannot be edited');
       const spec = mergeSpec(JSON.parse(row.spec), fields);
       try {
-        this.eventSpec(spec);
+        this.proposedEvent(spec);
       } catch (error) {
         throw bad(`update ${n}: ${(error as Error).message}`);
       }
@@ -1142,6 +1275,20 @@ export class Planner {
 
   /** Writes the chosen items (default: all not yet written) into the Kelly calendar. */
   async applyProposal(code: string, body: Record<string, unknown>, actor: Actor): Promise<ProposalView & { written: Array<{ n: number; title: string }> }> {
+    if (this.applyingProposal) throw new PlannerError(409, 'conflict', 'A proposal is already being applied');
+    this.applyingProposal = true;
+    try {
+      return await this.writeProposal(code, body, actor);
+    } finally {
+      this.applyingProposal = false;
+    }
+  }
+
+  private learningEventId(proposal: number, number: number): string {
+    return `learning${createHash('sha256').update(`${proposal}:${number}`).digest('hex')}`;
+  }
+
+  private async writeProposal(code: string, body: Record<string, unknown>, actor: Actor): Promise<ProposalView & { written: Array<{ n: number; title: string }> }> {
     only(body, ['items']);
     const p = this.proposalRow(code);
     if (p.status === 'discarded') throw new PlannerError(409, 'conflict', `Proposal ${code} was discarded`);
@@ -1155,13 +1302,71 @@ export class Planner {
     }
     if (!chosen.length) throw bad('Nothing left to write: those items are already in the calendar');
     const cal = await this.requireCal();
+    const selected = chosen.map((row) => ({ row, ...this.proposedEvent(JSON.parse(row.spec)) }));
+    const learning = selected.flatMap(({ row, spec, task }) => task && spec.timing.kind === 'timed' ? [{
+      n: row.n, date: spec.timing.date, start: toMinutes(spec.timing.start),
+      end: spec.timing.endDate ? 1440 : toMinutes(spec.timing.end),
+      eventId: this.learningEventId(p.id, row.n),
+    }] : []);
+    const previous = new Set<string>();
+    const now = localParts(new Date(this.now()), this.timeZone);
+    for (const day of new Set(learning.map((b) => b.date))) {
+      const blocks = learning.filter((b) => b.date === day);
+      const events = await this.calendarEvents(cal, day);
+      const own = new Set(blocks.map((b) => b.eventId));
+      for (const event of events) if (own.has(event.id)) previous.add(event.id);
+      const busy = this.learningBusy(events, day, own);
+      for (const b of blocks) {
+        if (previous.has(b.eventId)) continue;
+        if (day < now.date || (day === now.date && b.start <= now.minutes) || busy.some((i) => b.start < i.end && i.start < b.end)) {
+          throw new PlannerError(409, 'plan_conflict', 'A learning block now overlaps another event or is in the past. Review the draft before applying it.');
+        }
+        busy.push(b);
+      }
+    }
+
     const written: Array<{ n: number; title: string }> = [];
-    for (const r of chosen) {
-      const spec = this.eventSpec(JSON.parse(r.spec));
-      const eventId = await cal.insertEvent(specInput(spec));
-      this.db.prepare('UPDATE proposal_items SET event_id = ? WHERE proposal_id = ? AND n = ?').run(eventId, p.id, r.n);
-      this.log(actor, 'create', 'event', eventId, { fromProposal: code, n: r.n, title: spec.title, category: spec.category, timing: spec.timing, recurrence: spec.recurrence });
-      written.push({ n: r.n, title: spec.title });
+    for (const { row, spec, task } of selected) {
+      let eventId: string;
+      if (task && spec.timing.kind === 'timed') {
+        const id = this.learningEventId(p.id, row.n);
+        const blockId = stableUuid(`learning-block:${p.id}:${row.n}`);
+        if (previous.has(id)) {
+          eventId = id;
+        } else {
+          try {
+            eventId = await cal.insertEvent({ ...specInput(spec), id, blockId });
+          } catch (error) {
+            const exists = error instanceof GoogleError && error.status === 409 ? await cal.getEvent(id) : null;
+            if (!exists || exists.status === 'cancelled' || exists.plannerBlockId !== blockId) throw error;
+            eventId = id;
+          }
+        }
+        const { date, start, end, endDate } = spec.timing;
+        const ending = endDate ? '24:00' : end;
+        transaction(this.db, () => {
+          const todoId = stableUuid(`learning-todo:${task.key}`);
+          const now = this.iso();
+          const inserted = this.db.prepare(`
+            INSERT INTO todos (id, title, kind, priority, estimate_minutes, deadline, created_at, updated_at)
+            VALUES (?, ?, 'study', ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING
+          `).run(todoId, spec.title, task.priority, task.estimateMinutes, task.deadline, now, now);
+          if (inserted.changes) this.log(actor, 'create', 'todo', todoId, { fromProposal: code, title: spec.title, deadline: task.deadline });
+          this.db.prepare(`
+            INSERT INTO blocks (id, date, start, end, title, todo_id, origin, category, google_event_id,
+              synced_date, synced_start, synced_end, synced_title, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(blockId, date, start, ending, spec.title, todoId, spec.category, eventId, date, start, ending, spec.title, now, now);
+          if (!this.plan(date)) this.touchPlan(date, 'confirmed');
+          this.db.prepare('UPDATE proposal_items SET event_id = ? WHERE proposal_id = ? AND n = ?').run(eventId, p.id, row.n);
+          this.log(actor, 'create', 'event', eventId, { fromProposal: code, n: row.n, title: spec.title, category: spec.category, timing: spec.timing });
+        });
+      } else {
+        eventId = await cal.insertEvent(specInput(spec));
+        this.db.prepare('UPDATE proposal_items SET event_id = ? WHERE proposal_id = ? AND n = ?').run(eventId, p.id, row.n);
+        this.log(actor, 'create', 'event', eventId, { fromProposal: code, n: row.n, title: spec.title, category: spec.category, timing: spec.timing, recurrence: spec.recurrence });
+      }
+      written.push({ n: row.n, title: spec.title });
     }
     const left = (this.db.prepare('SELECT COUNT(*) AS c FROM proposal_items WHERE proposal_id = ? AND event_id IS NULL').get(p.id) as { c: number }).c;
     this.db.prepare('UPDATE proposals SET status = ?, updated_at = ? WHERE id = ?').run(left ? 'draft' : 'applied', this.iso(), p.id);
@@ -1175,6 +1380,15 @@ export class Planner {
     this.log(actor, 'discard', 'proposal', code, { title: p.title });
     return { code, status: 'discarded' };
   }
+}
+
+/** Stable UUIDs keep retried proposals linked to the same local rows. */
+function stableUuid(name: string): string {
+  const bytes = createHash('sha256').update(name).digest().subarray(0, 16);
+  bytes[6] = (bytes[6] & 0x0f) | 0x40;
+  bytes[8] = (bytes[8] & 0x3f) | 0x80;
+  const hex = bytes.toString('hex');
+  return [hex.slice(0, 8), hex.slice(8, 12), hex.slice(12, 16), hex.slice(16, 20), hex.slice(20)].join('-');
 }
 
 function toTodo(r: TodoRow): Todo {
@@ -1256,7 +1470,10 @@ export interface ProposalView {
   title: string;
   notes: string | null;
   status: string;
-  items: Array<{ n: number; title: string; category: Category; when: string; location: string | null; applied: boolean }>;
+  items: Array<{
+    n: number; title: string; category: Category; when: string; location: string | null; applied: boolean;
+    todo?: { title: string; estimateMinutes: number; deadline: string | null };
+  }>;
   warnings: string[];
 }
 

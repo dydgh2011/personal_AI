@@ -377,7 +377,7 @@ describe('Learning service (L2: milestones, assignments, evaluations, mastery)',
     await http.post(`/skills/${skill.id}/verify`).set(owner).send({ level: 2, evaluationId: ev.id }).expect(201);
     await http.post('/gaps').set(owner).send({ title: 'More practice' }).expect(201);
     const exported = (await http.get('/export').set(owner).expect(200)).body;
-    expect(exported.schemaVersion).toBe(2);
+    expect(exported.schemaVersion).toBe(3);
     expect(exported.counts).toMatchObject({ rubrics: 1, rubricVersions: 1, milestones: 1, assignments: 1, assignmentDefinitions: 1, submissions: 1, submissionFiles: 1, evaluations: 1, evidence: 3, mastery: 1, masteryEvents: 1, gaps: 1 });
     expect(exported.submissionFiles[0].content_base64).toBe(b64(PNG));
 

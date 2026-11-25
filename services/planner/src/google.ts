@@ -186,6 +186,8 @@ export type Timing =
   | { kind: 'allDay'; date: string; endDate: string };
 
 export interface EventInput {
+  /** Optional stable id for retryable inserts (not included in patches). */
+  id?: string;
   summary: string;
   description?: string | null;
   location?: string | null;
@@ -327,7 +329,7 @@ export function googleAccount(getToken: () => Promise<string>, timeZone: string,
           }
         },
         async insertEvent(input) {
-          return ((await call('POST', base, eventBody(input))) as { id: string }).id;
+          return ((await call('POST', base, { ...eventBody(input), ...(input.id ? { id: input.id } : {}) })) as { id: string }).id;
         },
         async patchEvent(id, input) {
           await call('PATCH', `${base}/${encodeURIComponent(id)}`, eventBody(input));

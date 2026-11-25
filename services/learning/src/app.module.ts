@@ -18,6 +18,7 @@ import { MilestonesModule } from './milestones/milestones.js';
 import { ProviderModule } from './provider/provider.js';
 import { RoadmapsModule } from './roadmaps/roadmaps.js';
 import { RubricsModule } from './rubrics/rubrics.js';
+import { ScheduleModule } from './schedule/schedule.js';
 
 @Module({})
 export class AppModule {
@@ -41,6 +42,7 @@ export class AppModule {
         MilestonesModule,
         AssignmentsModule,
         EvaluationsModule,
+        ScheduleModule,
         ExportModule,
         HealthModule,
       ],

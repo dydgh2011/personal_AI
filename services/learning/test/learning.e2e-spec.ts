@@ -280,7 +280,7 @@ describe('Learning service (L1)', () => {
     const v1 = (await apply(roadmap.id, (await propose(roadmap.id, null, v1Content)).body.id, null)).body.version;
     await http.post('/ideas').set(owner).send({ text: 'idea' }).expect(201);
     const exported = (await http.get('/export').set(owner).expect(200)).body;
-    expect(exported).toMatchObject({ app: 'personal-ai-learning', schemaVersion: 2, counts: { domains: 1, goals: 1, roadmaps: 1, versions: 1, ideas: 1, proposals: 1 } });
+    expect(exported).toMatchObject({ app: 'personal-ai-learning', schemaVersion: 3, counts: { domains: 1, goals: 1, roadmaps: 1, versions: 1, ideas: 1, proposals: 1 } });
 
     // restart on the same file: everything is still there
     await app.close();
