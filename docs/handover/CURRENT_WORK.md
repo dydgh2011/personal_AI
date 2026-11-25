@@ -6,7 +6,7 @@
 마지막 갱신: 2026-11-24 · Claude Code
 
 ## 스택 잠금
-- **비어 있음** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
+- **Claude Code · Dashboard 스크롤 유지 배포 · 2026-11-24 22:55** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
 
 ## 지금 진행 중 (맡은 범위는 `docs/handover/CODEX_PLAN.md` 1절)
 - **C · Claude Code** (2026-11-24): 커밋 작성자=주인·AI 흔적 차단 배포. 비공개 저장소 실제 확인 완료(PAT로 discovery·동기화·export). GitHub App 연결·실제 게시 켬(대상: dydgh2011/personal-ai-sandbox만). sandbox 작업 6dfcb3df가 리뷰 승인 대기 — **승인·테스트·dry-run·게시 승인·게시는 주인이 Dashboard에서 직접**(에이전트가 대신 승인하지 않음). 남은 것: 게시 결과 확인, CI 결과 읽기(10). 브랜치 claude/publish.
