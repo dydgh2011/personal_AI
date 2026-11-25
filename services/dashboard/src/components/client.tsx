@@ -2,6 +2,9 @@
 
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type CSSProperties } from 'react';
+import { NAV_ORDER_COOKIE, orderItems, serializeNavOrder } from '@/lib/nav-order';
+
+export { orderItems };
 
 /** Re-renders the server page every `seconds` while enabled (no data is cached in the browser). */
 export function AutoRefresh({ seconds = 5 }: { seconds?: number }) {
@@ -35,51 +38,41 @@ export function ThemeToggle() {
 }
 
 /**
- * Sidebar links in the owner's order (temporary, 2026-11-25): the order can be changed here and is
- * kept in this browser (localStorage). Once the owner settles on one order it goes into
- * src/modules/registry.ts and this editing goes away. Links unknown to the saved order (new
- * modules) are added at the end in registry order.
+ * Sidebar links in the owner's order (temporary, 2026-11-25). The order comes from the server
+ * (pai_nav cookie, see src/lib/nav-order.ts), so a page load never shows the default order first.
+ * Once the owner settles on one order it goes into src/modules/registry.ts and this goes away.
  */
-const NAV_ORDER_KEY = 'pai-nav-order';
+const LEGACY_ORDER_KEY = 'pai-nav-order'; // the first version kept the order in localStorage
 
-function readOrder(): string[] {
-  try {
-    const v = JSON.parse(localStorage.getItem(NAV_ORDER_KEY) || 'null');
-    return Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : [];
-  } catch {
-    return [];
-  }
+function writeOrderCookie(order: string[]) {
+  document.cookie = order.length
+    ? `${NAV_ORDER_COOKIE}=${serializeNavOrder(order)}; path=/; max-age=31536000; samesite=strict`
+    : `${NAV_ORDER_COOKIE}=; path=/; max-age=0; samesite=strict`;
 }
 
-export function orderItems<T extends { href: string }>(items: T[], order: string[]): T[] {
-  const byHref = new Map(items.map((i) => [i.href, i]));
-  const seen = new Set<string>();
-  const out: T[] = [];
-  for (const href of order) {
-    const item = byHref.get(href);
-    if (item && !seen.has(href)) {
-      out.push(item);
-      seen.add(href);
-    }
-  }
-  for (const item of items) if (!seen.has(item.href)) out.push(item);
-  return out;
-}
-
-export function NavLinks({ items }: { items: Array<{ href: string; title: string }> }) {
+export function NavLinks({ items, initialOrder }: { items: Array<{ href: string; title: string }>; initialOrder: string[] }) {
   const path = usePathname();
-  const [order, setOrder] = useState<string[]>([]);
+  const [order, setOrder] = useState<string[]>(initialOrder);
   const [editing, setEditing] = useState(false);
   const [copied, setCopied] = useState(false);
-  useEffect(() => setOrder(readOrder()), []);
+  useEffect(() => {
+    // One-time move of an order saved by the first version (localStorage) into the cookie.
+    try {
+      const legacy: unknown = JSON.parse(localStorage.getItem(LEGACY_ORDER_KEY) || 'null');
+      localStorage.removeItem(LEGACY_ORDER_KEY);
+      if (initialOrder.length === 0 && Array.isArray(legacy)) {
+        const next = legacy.filter((x): x is string => typeof x === 'string');
+        writeOrderCookie(next);
+        setOrder(next);
+      }
+    } catch {
+      // storage blocked: nothing to move
+    }
+  }, [initialOrder]);
   const list = orderItems(items, order);
   const save = (next: string[]) => {
     setOrder(next);
-    try {
-      localStorage.setItem(NAV_ORDER_KEY, JSON.stringify(next));
-    } catch {
-      // storage blocked: the order still applies until the page reloads
-    }
+    writeOrderCookie(next);
   };
   const move = (index: number, delta: number) => {
     const hrefs = list.map((i) => i.href);
@@ -88,14 +81,7 @@ export function NavLinks({ items }: { items: Array<{ href: string; title: string
     [hrefs[index], hrefs[to]] = [hrefs[to], hrefs[index]];
     save(hrefs);
   };
-  const reset = () => {
-    setOrder([]);
-    try {
-      localStorage.removeItem(NAV_ORDER_KEY);
-    } catch {
-      // ignore
-    }
-  };
+  const reset = () => save([]);
   const copy = async () => {
     const text = list.map((i, n) => `${n + 1}. ${i.title} (${i.href})`).join('\n');
     try {
