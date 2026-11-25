@@ -1,4 +1,5 @@
 import type { AgentType } from '../tasks/task.model.js';
+import type { AgentInstructions, CommitAuthor, CommitStyle } from './agent-settings.js';
 
 export const PROJECT_SOURCES = ['local', 'github'] as const;
 export type ProjectSource = (typeof PROJECT_SOURCES)[number];
@@ -50,6 +51,10 @@ export interface Project {
   lastSyncError: string | null;
   /** Admin-approved verification commands (empty: none configured, nothing can be published). */
   testCommands: TestCommand[];
+  /** Stored for a later decision; workers do not commit as this identity (POLICY B, agent-settings.ts). */
+  commitAuthor: CommitAuthor | null;
+  commitStyle: CommitStyle;
+  agentInstructions: AgentInstructions;
   createdAt: string;
   updatedAt: string;
 }
@@ -79,6 +84,10 @@ export interface WorkerProjectView {
   allowCodeChanges: boolean;
   cachedHeadSha: string | null;
   syncStatus: SyncStatus;
+  /** How the agent should word the commit subject (the worker still makes the commit). */
+  commitStyle: CommitStyle;
+  /** Admin's coding rules (prompt) and forbidden paths (enforced by the worker before committing). */
+  agentInstructions: AgentInstructions;
 }
 
 export function delegatorView(p: Project): DelegatorProjectView {
@@ -104,5 +113,7 @@ export function workerView(p: Project): WorkerProjectView {
     allowCodeChanges: p.allowCodeChanges,
     cachedHeadSha: p.cachedHeadSha,
     syncStatus: p.syncStatus,
+    commitStyle: p.commitStyle,
+    agentInstructions: p.agentInstructions,
   };
 }

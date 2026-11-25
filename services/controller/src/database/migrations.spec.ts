@@ -73,4 +73,27 @@ describe('schema migrations', () => {
     expect(() => insert.run('c', 'local', 'x/y')).toThrow(/CHECK/);
     db.close();
   });
+  it('v7 adds agent settings to existing projects with "nothing configured" defaults', () => {
+    const path = join(dir, 'v6.db');
+    const v6 = new BetterSqlite3(path);
+    for (const sql of MIGRATIONS.slice(0, 6)) v6.exec(sql);
+    v6.pragma('user_version = 6');
+    v6.prepare(`INSERT INTO projects (id, source, full_name, default_branch, allowed_agents, enabled,
+      allow_code_changes, auth_mode, sync_status, test_commands, created_at, updated_at)
+      VALUES ('hello', 'github', 'o/r', 'main', '["claude"]', 1, 1, 'none', 'synced', '[{"name":"t","argv":["npm","test"],"timeoutSeconds":60}]', 'now', 'now')`).run();
+    v6.close();
+
+    const db = openDatabase(path);
+    expect(db.pragma('user_version', { simple: true })).toBe(MIGRATIONS.length);
+    const row = db.prepare('SELECT * FROM projects').get() as Record<string, unknown>;
+    expect(row).toMatchObject({
+      id: 'hello',
+      enabled: 1,
+      test_commands: '[{"name":"t","argv":["npm","test"],"timeoutSeconds":60}]',
+      commit_author: null,
+      commit_style: '{"mode":"off","guide":null}',
+      agent_instructions: '{"rules":"","forbiddenPaths":[]}',
+    });
+    db.close();
+  });
 });

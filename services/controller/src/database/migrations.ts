@@ -179,6 +179,16 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE publications ADD COLUMN idempotency_key TEXT;
   CREATE UNIQUE INDEX idx_publications_idempotency ON publications (idempotency_key) WHERE idempotency_key IS NOT NULL;
   `,
+  // v7: per-project agent settings (ROADMAP 11, 12), admin only.
+  // - commit_author: JSON {name, email} or NULL. Stored only: workers keep their own identity
+  //   (POLICY B, see projects/agent-settings.ts).
+  // - commit_style: JSON {mode: off|auto|manual, guide}. Existing projects start "off" (unchanged behaviour).
+  // - agent_instructions: JSON {rules, forbiddenPaths}. Existing projects start with none.
+  `
+  ALTER TABLE projects ADD COLUMN commit_author TEXT;
+  ALTER TABLE projects ADD COLUMN commit_style TEXT NOT NULL DEFAULT '{"mode":"off","guide":null}';
+  ALTER TABLE projects ADD COLUMN agent_instructions TEXT NOT NULL DEFAULT '{"rules":"","forbiddenPaths":[]}';
+  `,
 ];
 
 export function migrate(db: Database): number {

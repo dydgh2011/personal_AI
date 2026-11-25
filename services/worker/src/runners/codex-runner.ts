@@ -1,6 +1,6 @@
 import type { RunResult } from '../process-runner.js';
 import type { WorkspaceMode } from '../workspace.js';
-import { agentEnvironment, type AgentInput, type AgentInvocation, type AgentOutcome, type AgentRunner } from './agent-runner.js';
+import { agentEnvironment, systemPrompt, type AgentInput, type AgentInvocation, type AgentOutcome, type AgentRunner } from './agent-runner.js';
 
 export const PERMISSION_PROFILE = 'agent-worker';
 
@@ -95,7 +95,7 @@ export class CodexRunner implements AgentRunner {
     return {
       command: this.command[0],
       args,
-      stdin: `${UNATTENDED_PROMPT}\n\n--- Task ---\n${input.instruction}\n`,
+      stdin: `${systemPrompt(UNATTENDED_PROMPT, input.projectPrompt)}\n\n--- Task ---\n${input.instruction}\n`,
       env: agentEnvironment({ NO_COLOR: '1' }),
     };
   }

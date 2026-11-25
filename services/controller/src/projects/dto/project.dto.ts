@@ -8,6 +8,7 @@ import {
   IsISO8601,
   IsOptional,
   IsInt,
+  IsObject,
   IsString,
   Matches,
   Max,
@@ -16,10 +17,20 @@ import {
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { PROJECT_ID_PATTERN } from '../../config/app-config.js';
 import { FULL_NAME_PATTERN } from '../../github/github-client.js';
 import { AGENT_TYPES, type AgentType } from '../../tasks/task.model.js';
+import {
+  AUTHOR_EMAIL_PATTERN,
+  AUTHOR_NAME_PATTERN,
+  COMMIT_STYLE_MODES,
+  FORBIDDEN_PATH_PATTERN,
+  LIMITS,
+  normalizeText,
+  TEXT_PATTERN,
+  type CommitStyleMode,
+} from '../agent-settings.js';
 import { PROJECT_SOURCES, SYNC_STATUSES, type ProjectSource, type SyncStatus } from '../project.model.js';
 
 /** Git branch names we accept: no "..", no leading "/" or "-", no trailing "." or "/". */
@@ -88,6 +99,50 @@ export class TestCommandDto {
   timeoutSeconds: number;
 }
 
+/** Stored only (POLICY B: workers keep their own git identity). */
+export class CommitAuthorDto {
+  @IsString()
+  @MaxLength(LIMITS.authorName)
+  @Matches(AUTHOR_NAME_PATTERN, { message: 'commitAuthor.name must be one line without < or >' })
+  name: string;
+
+  @IsString()
+  @MaxLength(LIMITS.authorEmail)
+  @Matches(AUTHOR_EMAIL_PATTERN, { message: 'commitAuthor.email must be an e-mail address' })
+  email: string;
+}
+
+export class CommitStyleDto {
+  @IsIn(COMMIT_STYLE_MODES)
+  mode: CommitStyleMode;
+
+  /** Required (non-empty) for mode "manual"; checked by the service. */
+  @IsOptional()
+  @Transform(({ value }) => normalizeText(value))
+  @IsString()
+  @MaxLength(LIMITS.styleGuide)
+  @Matches(TEXT_PATTERN, { message: 'commitStyle.guide contains control characters' })
+  guide?: string | null;
+}
+
+export class AgentInstructionsDto {
+  @Transform(({ value }) => normalizeText(value))
+  @IsString()
+  @MaxLength(LIMITS.rules)
+  @Matches(TEXT_PATTERN, { message: 'agentInstructions.rules contains control characters' })
+  rules: string;
+
+  @IsArray()
+  @ArrayMaxSize(LIMITS.forbiddenPaths)
+  @IsString({ each: true })
+  @MaxLength(LIMITS.forbiddenPath, { each: true })
+  @Matches(FORBIDDEN_PATH_PATTERN, {
+    each: true,
+    message: 'agentInstructions.forbiddenPaths: each entry must be a relative path pattern (letters, digits, . _ - / * ? @ + ~ and spaces; no leading "/", no "." or ".." segments)',
+  })
+  forbiddenPaths: string[];
+}
+
 /** PATCH /projects/:id. Identity fields (id, source, fullName, remote) cannot change. */
 export class UpdateProjectDto {
   @IsOptional()
@@ -143,4 +198,25 @@ export class UpdateProjectDto {
   @ValidateNested({ each: true })
   @Type(() => TestCommandDto)
   testCommands?: TestCommandDto[];
+
+  /** null clears it. Stored only; see agent-settings.ts (POLICY B). */
+  @ValidateIf((o: UpdateProjectDto) => o.commitAuthor !== undefined && o.commitAuthor !== null)
+  @IsObject()
+  @ValidateNested()
+  @Type(() => CommitAuthorDto)
+  commitAuthor?: CommitAuthorDto | null;
+
+  /** Replaces the whole setting. */
+  @ValidateIf((o: UpdateProjectDto) => o.commitStyle !== undefined)
+  @IsObject()
+  @ValidateNested()
+  @Type(() => CommitStyleDto)
+  commitStyle?: CommitStyleDto;
+
+  /** Replaces the whole setting; { rules: "", forbiddenPaths: [] } removes it. */
+  @ValidateIf((o: UpdateProjectDto) => o.agentInstructions !== undefined)
+  @IsObject()
+  @ValidateNested()
+  @Type(() => AgentInstructionsDto)
+  agentInstructions?: AgentInstructionsDto;
 }
