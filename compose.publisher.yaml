@@ -20,30 +20,29 @@ services:
       PUBLISHER_MODE: dry-run
       CONTROLLER_URL: http://controller:3000
       PUBLISHER_TOKEN_FILE: /run/secrets/controller_token
-      # Repositories that may ever be targeted (owner/repo). The default is the sandbox fork used
-      # for every test so far; dry-run only, and the publisher has no write access to it anyway.
-      PUBLISHER_ALLOWED_REPOSITORIES: ${PUBLISHER_ALLOWED_REPOSITORIES:-octocat/hello-world}
+      # Repositories that may ever be targeted (owner/repo). The GitHub App is installed only on these.
+      PUBLISHER_ALLOWED_REPOSITORIES: ${PUBLISHER_ALLOWED_REPOSITORIES:-dydgh2011/personal-ai-sandbox}
       PUBLISHER_ARTIFACT_ROOTS: claude=/artifacts/claude,codex=/artifacts/codex
       PUBLISHER_EXPORT_ROOT: /repo-exports
       # Owner policies (fixed; the publisher refuses to start with any other value).
       PUBLISHER_REQUIRE_REPORTED_TESTS: "true"
       PUBLISHER_BRANCH_PREFIX: changes/            # pushed branch names carry no system or AI name
       PUBLISHER_COMMIT_AUTHOR_POLICY: owner             # POLICY B (2026-11-24): commits only as the owner, no agent trace
-      # Real publishing stays off in Phase E-2B (allowed: disabled | mock).
-      PUBLISHER_PUBLISH_BACKEND: disabled
+      # Real publishing through the GitHub App (owner decision 2026-11-24). disabled | mock | github.
+      PUBLISHER_PUBLISH_BACKEND: github
       PUBLISHER_TEST_EVIDENCE_KEY_FILE: /run/secrets/test_evidence_key
       GITHUB_API_URL: https://api.github.com
-      # GitHub App (E-2B, not configured yet). When it is:
-      #   PUBLISHER_GITHUB_APP_ID: "<app id>"
-      #   PUBLISHER_GITHUB_APP_INSTALLATION_ID: "<installation id>"
-      #   PUBLISHER_GITHUB_APP_KEY_FILE: /run/secrets/github_app_key   (+ the secret below)
+      # GitHub App (ids are not secret; the private key is a Docker secret, never printed or committed).
+      PUBLISHER_GITHUB_APP_ID: "5914563"
+      PUBLISHER_GITHUB_APP_INSTALLATION_ID: "185615307"
+      PUBLISHER_GITHUB_APP_KEY_FILE: /run/secrets/github_app_key
     secrets:
       - source: publisher_controller_token
         target: controller_token
       - source: test_evidence_key
         target: test_evidence_key
-      # - source: github_app_key
-      #   target: github_app_key
+      - source: github_app_key
+        target: github_app_key
     volumes:
       - publisher-artifacts-claude:/artifacts/claude:ro
       - publisher-artifacts-codex:/artifacts/codex:ro
@@ -83,5 +82,5 @@ secrets:
     file: ./secrets/publisher-controller.token   # services/github-publisher/scripts/init-secrets.mjs
   test_evidence_key:
     file: ./secrets/test-evidence.key            # services/test-runner/scripts/init-secrets.mjs
-  # github_app_key:
-  #   file: ./secrets/github-app.pem             # the App's private key (never printed, never committed)
+  github_app_key:
+    file: ./secrets/github-app.pem               # the App's private key (never printed, never committed)

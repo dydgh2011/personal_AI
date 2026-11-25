@@ -27,6 +27,10 @@ services:
       - ./secrets/controller.env      # tokens only; generate with services/controller/scripts/init-secrets.mjs
     environment:
       CONTROLLER_PROJECT_IDS: ${CONTROLLER_PROJECT_IDS:-sandbox}
+      # Real publishing (owner decision 2026-11-24): the controller accepts publish requests; the
+      # publisher still needs review approval, passed tests (POLICY A), the owner author (POLICY B)
+      # and a separate one-time publish authorization for every push.
+      CONTROLLER_PUBLISH_ENABLED: "true"
       # Workers heartbeat every 30s; a task whose worker stops renewing is failed after this.
       CONTROLLER_LEASE_SECONDS: ${CONTROLLER_LEASE_SECONDS:-300}
       CONTROLLER_LEASE_SWEEP_SECONDS: ${CONTROLLER_LEASE_SWEEP_SECONDS:-15}
