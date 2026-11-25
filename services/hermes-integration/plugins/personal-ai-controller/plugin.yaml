@@ -11,5 +11,6 @@ provides_tools:
   - personal_ai_planner
   - personal_ai_document
   - personal_ai_school
+  - personal_ai_learning
 provides_hooks:
   - pre_tool_call

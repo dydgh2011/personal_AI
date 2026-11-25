@@ -10,10 +10,9 @@ export interface BrokerConfig {
   upstreamTimeoutMs: number;
   /**
    * Shared key the Hermes plugin sends as X-Broker-Key. Requests without it are rejected before
-   * anything is forwarded. Only processes that can read the key file (the Hermes plugin, not the
-   * LLM's remaining tools such as the browser) can use the broker. null = not required.
+   * anything is forwarded. Processes that can read this file share the Hermes credential.
    */
-  clientKey: string | null;
+  clientKey: string;
   /** Planner service (compose.planner.yaml); null = planner routes answer 503. */
   planner?: { url: string; key: string } | null;
   /** Cap on planner write requests per minute (an LLM looping on a tool). */
@@ -24,6 +23,10 @@ export interface BrokerConfig {
   knowledgeWritesPerMinute?: number;
   /** School connector service (compose.school.yaml): read-only updates; null = school routes answer 503. */
   school?: { url: string; key: string } | null;
+  /** Learning caller key is scoped to queries and schedule proposals by the Learning service. */
+  learning?: { url: string; key: string } | null;
+  learningQueriesPerMinute?: number;
+  learningProposalsPerMinute?: number;
 }
 
 export interface Logger {
@@ -42,23 +45,25 @@ const IDEMPOTENCY_KEY_PATTERN = /^[A-Za-z0-9._:-]{8,128}$/;
 const MAX_BODY_BYTES = 64 * 1024;
 /** Knowledge writes carry whole chat turns and the text of attached documents. */
 const MAX_KNOWLEDGE_BODY_BYTES = 4 * 1024 * 1024;
+const MAX_LEARNING_BODY_BYTES = 1024;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MAX_INSTRUCTION_CHARS = 20_000;
 
-type Target = 'planner' | 'knowledge' | 'school';
+type Target = 'planner' | 'knowledge' | 'school' | 'learning';
 const TARGETS: Record<Target, { label: string; header: string }> = {
   planner: { label: 'planner', header: 'X-Planner-Key' },
   knowledge: { label: 'knowledge store', header: 'X-Knowledge-Key' },
   school: { label: 'school service', header: 'X-School-Key' },
+  learning: { label: 'learning service', header: 'X-Learning-Key' },
 };
 
 interface Route {
   method: 'GET' | 'POST';
   pattern: RegExp;
   name: string;
-  /** Upstream service; default the controller. Planner/knowledge routes get their own key, never the controller token. */
+  /** Upstream service; defaults to the controller. Other targets each get a distinct request header. */
   target?: Target;
-  /** Query parameters forwarded to the controller, each with its validator. Everything else is rejected. */
+  /** Validated query parameters to forward. Everything else is rejected. */
   query?: Record<string, (value: string) => boolean>;
 }
 
@@ -105,7 +110,44 @@ const ROUTES: Route[] = [
   ...knowledgeRoutes(),
   // School connectors (Quercus, Piazza, UofT mail, course sites): read-only, plus "check now".
   ...schoolRoutes(),
+  ...learningRoutes(),
 ];
+
+function learningRoutes(): Route[] {
+  const l = (method: Route['method'], path: string, name: string, query?: Route['query']): Route => ({
+    method,
+    pattern: new RegExp(`^/learning${path}$`),
+    name: `learning.${name}`,
+    target: 'learning',
+    query,
+  });
+  return [
+    l('GET', '/domains', 'domains.list'),
+    l('GET', '/roadmaps', 'roadmaps.list'),
+    l('GET', `/roadmaps/${UUID}`, 'roadmaps.get'),
+    l('GET', '/schedule/status', 'status'),
+    l('GET', '/schedule', 'schedule.query', { period: learningPeriod, date: learningDate }),
+    l('POST', '/schedule/propose', 'schedule.propose'),
+  ];
+}
+
+function learningPeriod(value: unknown): value is 'day' | 'week' {
+  return value === 'day' || value === 'week';
+}
+
+function learningDate(value: unknown): value is string {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const date = new Date(`${value}T00:00:00Z`);
+  return Number.isFinite(date.getTime()) && date.toISOString().slice(0, 10) === value;
+}
+
+function validateLearningProposal(value: Record<string, unknown>): void {
+  if (Object.keys(value).some((key) => key !== 'date' && key !== 'period')) {
+    throw new HttpError(400, 'The schedule proposal accepts only date and period');
+  }
+  if (value.date !== undefined && !learningDate(value.date)) throw new HttpError(400, 'date must be a valid YYYY-MM-DD date');
+  if (value.period !== undefined && !learningPeriod(value.period)) throw new HttpError(400, 'period must be day or week');
+}
 
 function schoolRoutes(): Route[] {
   const s = (method: Route['method'], path: string, name: string, query?: Route['query']): Route => ({
@@ -244,8 +286,29 @@ class HttpError extends Error {
  * The controller still enforces the delegator role on every forwarded request.
  */
 export function createBroker(config: BrokerConfig, logger: Logger, now: () => number = Date.now): Server {
+  if (typeof config.clientKey !== 'string' || config.clientKey.length < 32 || /\s/.test(config.clientKey)) {
+    throw new Error('A valid broker client key is required');
+  }
+  if (config.clientKey === config.token) throw new Error('The broker client key must differ from the controller token');
+  if (config.learning && [config.clientKey, config.token].includes(config.learning.key)) {
+    throw new Error('The learning key must differ from the broker client key and controller token');
+  }
+  const clientKeyDigest = digestKey(config.clientKey);
   const created: number[] = [];
-  const writes: Record<Target, number[]> = { planner: [], knowledge: [], school: [] };
+  const writes: Record<Target, number[]> = { planner: [], knowledge: [], school: [], learning: [] };
+  const learningQueries: number[] = [];
+  const writesPerMinute: Record<Target, number> = {
+    planner: config.plannerWritesPerMinute ?? 30,
+    knowledge: config.knowledgeWritesPerMinute ?? 120,
+    school: 10,
+    learning: config.learningProposalsPerMinute ?? 5,
+  };
+  const bodyLimit: Record<Target, number> = {
+    planner: MAX_BODY_BYTES,
+    knowledge: MAX_KNOWLEDGE_BODY_BYTES,
+    school: MAX_BODY_BYTES,
+    learning: MAX_LEARNING_BODY_BYTES,
+  };
 
   const rateLimit = () => {
     const t = now();
@@ -262,26 +325,34 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
 
   const handle = async (req: IncomingMessage, res: ServerResponse) => {
     const started = now();
-    const url = new URL(req.url ?? '/', 'http://broker');
-    const audit: Record<string, unknown> = { method: req.method, path: url.pathname };
+    const audit: Record<string, unknown> = { method: req.method };
     let status = 500;
     try {
+      const requestTarget = req.url ?? '/';
+      if (!requestTarget.startsWith('/') || requestTarget.startsWith('//') || requestTarget.includes('\\')) {
+        throw new HttpError(400, 'Invalid request target');
+      }
+      const url = new URL(requestTarget, 'http://broker');
       if (req.method === 'GET' && url.pathname === '/health') {
+        audit.path = '/health';
         status = 200;
         return send(res, 200, { status: 'ok' });
       }
-      if (config.clientKey !== null && !keyMatches(req.headers['x-broker-key'], config.clientKey)) {
+      const keys = req.headersDistinct['x-broker-key'];
+      if (keys?.length !== 1 || !timingSafeEqual(digestKey(keys[0]), clientKeyDigest)) {
         audit.op = 'auth';
         throw new HttpError(401, 'Missing or invalid broker client key');
       }
+      audit.caller = 'hermes';
       const candidates = ROUTES.filter((r) => r.pattern.test(url.pathname));
       if (candidates.length === 0) throw new HttpError(404, 'Not found');
       const route = candidates.find((r) => r.method === req.method);
       if (!route) throw new HttpError(405, 'Method not allowed');
       audit.op = route.name;
+      audit.path = url.pathname;
 
       for (const [key, value] of url.searchParams) {
-        const valid = route.query?.[key];
+        const valid = route.query && Object.hasOwn(route.query, key) ? route.query[key] : undefined;
         if (!valid || !valid(value) || url.searchParams.getAll(key).length > 1) {
           throw new HttpError(400, `Query parameter "${key}" is not allowed or invalid`);
         }
@@ -292,20 +363,15 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
         const upstreamConfig = config[target];
         const label = TARGETS[target].label;
         if (!upstreamConfig) throw new HttpError(503, `The ${label} is not set up`);
-        const perMinute =
-          target === 'planner' ? (config.plannerWritesPerMinute ?? 30) : target === 'knowledge' ? (config.knowledgeWritesPerMinute ?? 120) : 10;
         let body: string | undefined;
         if (route.method === 'POST') {
-          const value = await readJson(req, false, true, target === 'knowledge' ? MAX_KNOWLEDGE_BODY_BYTES : MAX_BODY_BYTES);
+          const value = await readJson(req, false, true, bodyLimit[target]);
           if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HttpError(400, 'Body must be a JSON object');
+          if (target === 'learning') validateLearningProposal(value as Record<string, unknown>);
           body = JSON.stringify(value);
-          const t = now();
-          const recent = writes[target];
-          while (recent.length && recent[0] <= t - 60_000) recent.shift();
-          if (recent.length >= perMinute) {
-            throw new HttpError(429, `Too many ${label} changes: at most ${perMinute} per minute`, { retryAfterSeconds: 60 });
-          }
-          recent.push(t);
+          consumeRateLimit(writes[target], writesPerMinute[target], now(), target === 'learning' ? 'learning proposals' : `${label} changes`);
+        } else if (target === 'learning') {
+          consumeRateLimit(learningQueries, config.learningQueriesPerMinute ?? 60, now(), 'learning queries');
         }
         const header = TARGETS[target].header;
         let upstream: Response;
@@ -393,11 +459,16 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
   return createServer((req, res) => void handle(req, res));
 }
 
-function keyMatches(header: string | string[] | undefined, key: string): boolean {
-  if (typeof header !== 'string') return false;
-  const a = createHash('sha256').update(header).digest();
-  const b = createHash('sha256').update(key).digest();
-  return timingSafeEqual(a, b);
+function digestKey(key: string): Buffer {
+  return createHash('sha256').update(key).digest();
+}
+
+function consumeRateLimit(recent: number[], perMinute: number, now: number, label: string): void {
+  while (recent.length && recent[0] <= now - 60_000) recent.shift();
+  if (recent.length >= perMinute) {
+    throw new HttpError(429, `Too many ${label}: at most ${perMinute} per minute`, { retryAfterSeconds: 60 });
+  }
+  recent.push(now);
 }
 
 function validateTask(value: unknown): { agent: string; projectId: string; instruction: string } {
@@ -419,9 +490,12 @@ function validateTask(value: unknown): { agent: string; projectId: string; instr
 async function readJson(req: IncomingMessage, mustBeEmpty = false, emptyIsObject = false, maxBytes = MAX_BODY_BYTES): Promise<unknown> {
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of req) {
+  for await (const chunk of req.iterator({ destroyOnReturn: false })) {
     size += (chunk as Buffer).length;
-    if (size > maxBytes) throw new HttpError(413, 'Request body too large');
+    if (size > maxBytes) {
+      req.resume();
+      throw new HttpError(413, 'Request body too large');
+    }
     chunks.push(chunk as Buffer);
   }
   const text = Buffer.concat(chunks).toString('utf8').trim();

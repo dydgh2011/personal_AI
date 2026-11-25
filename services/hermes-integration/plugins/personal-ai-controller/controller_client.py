@@ -128,12 +128,19 @@ class Config:
 # ---- HTTP -------------------------------------------------------------------------------
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # Keep credential-bearing requests on the configured origin.
+        return None
+
+
 class Client:
     def __init__(self, config: Config, timeout: float = REQUEST_TIMEOUT, retries: int = 3, sleep=time.sleep):
         self.config = config
         self.timeout = timeout
         self.retries = retries
         self.sleep = sleep
+        self.opener = urllib.request.build_opener(_NoRedirect())
 
     def request(self, method: str, path: str, body: Any = None, headers: dict[str, str] | None = None,
                 retry: bool = True) -> tuple[int, dict[str, str], Any]:
@@ -155,7 +162,7 @@ class Client:
         for attempt in range(attempts):
             req = urllib.request.Request(self.config.url + path, data=data, method=method, headers=all_headers)
             try:
-                with urllib.request.urlopen(req, timeout=self.timeout) as res:
+                with self.opener.open(req, timeout=self.timeout) as res:
                     return res.status, {k.lower(): v for k, v in res.headers.items()}, _json(res.read())
             except urllib.error.HTTPError as err:
                 with err:

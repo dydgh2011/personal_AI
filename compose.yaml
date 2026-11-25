@@ -30,9 +30,8 @@ services:
       # hermes-broker (compose.controller.yaml), which adds the restricted delegator token.
       PERSONAL_AI_BROKER_URL: http://hermes-broker:8080
       PERSONAL_AI_HOST_WORKSPACES: 'D:\personal_ai\workspaces'
-      # Broker client key, read only by the personal_ai_task plugin (Hermes has no file or
-      # terminal tools, and the guard blocks /run/secrets). Not a hard boundary against code
-      # running as the hermes user; the controller credential itself stays in hermes-broker.
+      # Broker client key used by the mounted Hermes plugins. Code running as the
+      # Hermes user can access this file. The controller credential stays in hermes-broker.
       PERSONAL_AI_BROKER_KEY_FILE: /run/secrets/broker_client_key
 
     secrets:

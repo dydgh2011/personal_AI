@@ -170,11 +170,11 @@ class ToolTest(unittest.TestCase):
         self.assertIn("Written to the Kelly calendar: 1", applied["note"])
         self.assertEqual(self.planner(action="proposal_show", proposal="../x")["error"]["code"], "usage_error")
 
-    def test_registers_five_tools_and_the_guard_hook(self):
+    def test_registers_tools_and_the_guard_hook(self):
         ctx = FakeContext()
         plugin.register(ctx)
         self.assertEqual(list(ctx.tools), ["personal_ai_task", "personal_ai_worker_login", "personal_ai_planner",
-                                           "personal_ai_document", "personal_ai_school"])
+                                           "personal_ai_document", "personal_ai_school", "personal_ai_learning"])
         document = ctx.tools["personal_ai_document"]
         self.assertEqual(document["toolset"], "personal_ai")
         self.assertEqual(document["schema"]["parameters"]["properties"]["action"]["enum"], ["list", "find", "read"])
@@ -188,6 +188,10 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(spec["toolset"], "personal_ai")
         self.assertEqual(spec["schema"]["parameters"]["required"], ["action"])
         self.assertFalse(spec["schema"]["parameters"]["additionalProperties"])
+        learning = ctx.tools["personal_ai_learning"]
+        self.assertEqual(learning["toolset"], "personal_ai")
+        self.assertEqual(learning["schema"]["parameters"]["properties"]["action"]["enum"], ["query", "propose"])
+        self.assertEqual(json.loads(learning["handler"]({"action": "apply"}))["error"]["code"], "usage_error")
         self.assertIs(ctx.hooks["pre_tool_call"], guard.pre_tool_call)
         # The handler returns a JSON string, as Hermes expects.
         self.assertEqual(json.loads(spec["handler"]({"action": "nope"}))["error"]["code"], "usage_error")
@@ -335,7 +339,8 @@ class GuardTest(unittest.TestCase):
 
     def test_blocks_the_browser_from_local_files_and_internal_services(self):
         for url in ["file:///run/secrets/x", "http://hermes-broker:8080/tasks", "http://controller:3000/tasks",
-                    "http://127.0.0.1:8700/projects", "http://172.18.0.4:3000/", "http://localhost:9119/", "http://[::1]:8080/"]:
+                    "http://127.0.0.1:8700/projects", "http://172.18.0.4:3000/", "http://localhost:9119/", "http://[::1]:8080/",
+                    "http://learning:3000/schedule"]:
             self.assertIsNotNone(self.blocked("browser_navigate", {"url": url}), url)
         for url in ["https://github.com/octocat", "https://docs.python.org/3/", "https://example.com/controller/docs"]:
             self.assertIsNone(self.blocked("browser_navigate", {"url": url}), url)
