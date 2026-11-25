@@ -1,6 +1,9 @@
 import 'server-only';
 import { readSecret } from './server';
-import type { Domain, Goal, Idea, LearningStatus, Proposal, ProposalDiff, Roadmap, RoadmapContent, RoadmapDetail, RoadmapVersion } from './learning-types';
+import type {
+  Assignment, AssignmentDetail, CodeExecution, Domain, Evaluation, EvaluationDetail, Gap, Goal, Idea, LearningStatus, Milestone, MilestoneProgress, Proposal,
+  ProposalDiff, Roadmap, RoadmapContent, RoadmapDetail, RoadmapVersion, Rubric, RubricVersion, Skill, SkillDetail, Submission, SubmissionFile, UploadLimits,
+} from './learning-types';
 
 export class LearningError extends Error {
   constructor(message: string, readonly status: number | null, readonly code: string | null = null, readonly details: unknown = null) {
@@ -85,4 +88,41 @@ export const learning = {
   reject: (r: string, p: string, by: string) => call<Proposal>('POST', `/roadmaps/${id(r)}/proposals/${id(p)}/reject`, {}, by),
   restore: (r: string, versionId: string, baseVersionId: string, by: string) => call<{ version: RoadmapVersion }>('POST', `/roadmaps/${id(r)}/restore`, { versionId, baseVersionId }, by),
   export: (by: string) => call<Record<string, unknown>>('GET', '/export', undefined, by, 30_000),
+
+  // L2: rubrics, milestones, assignments, submissions, evaluations, skills, gaps
+  rubrics: () => call<{ items: Rubric[] }>('GET', '/rubrics').then((r) => r.items),
+  rubric: (r: string) => call<Rubric & { versions: RubricVersion[] }>('GET', `/rubrics/${id(r)}`),
+  rubricVersion: (v: string) => call<RubricVersion>('GET', `/rubrics/versions/${id(v)}`),
+  createRubric: (body: Record<string, unknown>, by: string) => call<Rubric>('POST', '/rubrics', body, by),
+  addRubricVersion: (r: string, body: Record<string, unknown>, by: string) => call<RubricVersion>('POST', `/rubrics/${id(r)}/versions`, body, by),
+  updateRubric: (r: string, body: Record<string, unknown>, by: string) => call<Rubric>('PATCH', `/rubrics/${id(r)}`, body, by),
+  milestones: (f: { roadmapId?: string; status?: string } = {}) => call<{ items: Milestone[]; progress: MilestoneProgress | null }>('GET', `/milestones${q(f)}`),
+  milestone: (m: string) => call<Milestone>('GET', `/milestones/${id(m)}`),
+  createMilestone: (body: Record<string, unknown>, by: string) => call<Milestone>('POST', '/milestones', body, by),
+  updateMilestone: (m: string, body: Record<string, unknown>, by: string) => call<Milestone>('PATCH', `/milestones/${id(m)}`, body, by),
+  acceptSuggestedDeadline: (m: string, date: string, by: string) => call<Milestone>('POST', `/milestones/${id(m)}/suggested-deadline/accept`, { date }, by),
+  dismissSuggestedDeadline: (m: string, by: string) => call<Milestone>('POST', `/milestones/${id(m)}/suggested-deadline/dismiss`, {}, by),
+  assignments: (f: { milestoneId?: string; status?: string } = {}) => call<{ items: Assignment[]; uploadLimits: UploadLimits; codeExecution: CodeExecution }>('GET', `/assignments${q(f)}`),
+  assignment: (a: string) => call<AssignmentDetail>('GET', `/assignments/${id(a)}`),
+  createAssignment: (body: Record<string, unknown>, by: string) => call<Assignment>('POST', '/assignments', body, by),
+  updateAssignment: (a: string, body: Record<string, unknown>, by: string) => call<Assignment>('PATCH', `/assignments/${id(a)}`, body, by),
+  // Uploads travel as base64 JSON (at most a few MB); the learning service checks them again.
+  submit: (a: string, body: { body?: string; note?: string; files?: Array<{ name: string; contentBase64: string }> }, by: string) =>
+    call<Submission>('POST', `/assignments/${id(a)}/submissions`, body, by, 30_000),
+  decide: (a: string, body: { evaluationId: string; decision: 'passed' | 'revision_required' }, by: string) => call<Assignment>('POST', `/assignments/${id(a)}/decision`, body, by),
+  submissionFile: (s: string, f: string) => call<SubmissionFile & { contentBase64: string }>('GET', `/submissions/${id(s)}/files/${id(f)}`),
+  submissionEvaluations: (s: string) => call<{ items: Evaluation[] }>('GET', `/submissions/${id(s)}/evaluations`).then((r) => r.items),
+  evaluations: (f: { status?: string; limit?: string } = {}) => call<{ items: Evaluation[]; codeExecution: CodeExecution }>('GET', `/evaluations${q(f)}`),
+  evaluation: (e: string) => call<EvaluationDetail>('GET', `/evaluations/${id(e)}`),
+  // AI calls can take up to the provider timeout (plus one retry).
+  evaluateWithAi: (s: string, by: string) => call<EvaluationDetail>('POST', `/submissions/${id(s)}/evaluate`, {}, by, 90_000),
+  evaluateAsOwner: (s: string, body: Record<string, unknown>, by: string) => call<EvaluationDetail>('POST', `/submissions/${id(s)}/evaluations`, body, by),
+  skills: () => call<{ items: Skill[]; freshDays: number }>('GET', '/skills'),
+  skill: (s: string) => call<SkillDetail>('GET', `/skills/${id(s)}`),
+  createSkill: (name: string, by: string) => call<Skill>('POST', '/skills', { name }, by),
+  selfAssess: (s: string, body: { level: number | undefined; note?: string }, by: string) => call<Skill>('POST', `/skills/${id(s)}/self-assessment`, body, by),
+  verifySkill: (s: string, body: { level: number | undefined; evaluationId: string | undefined; note?: string }, by: string) => call<Skill>('POST', `/skills/${id(s)}/verify`, body, by),
+  gaps: (f: { status?: string; skillId?: string } = {}) => call<{ items: Gap[] }>('GET', `/gaps${q(f)}`).then((r) => r.items),
+  createGap: (body: Record<string, unknown>, by: string) => call<Gap>('POST', '/gaps', body, by),
+  updateGap: (g: string, status: string | undefined, by: string) => call<Gap>('PATCH', `/gaps/${id(g)}`, { status }, by),
 };

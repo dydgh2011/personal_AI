@@ -123,6 +123,246 @@ export interface ProposalDiff {
 
 export interface LearningStatus {
   schemaVersion: number;
-  counts: { domains: number; ideasInbox: number; goals: number; roadmaps: number; pendingProposals: number };
+  supportedSchema?: number;
+  /** The L2 counts are absent while the learning service still runs L1 (schema 1). */
+  counts: { domains: number; ideasInbox: number; goals: number; roadmaps: number; pendingProposals: number } & Partial<LearningStatusL2>;
   ai: { provider: string; model: string | null; configured: boolean; missing: string[]; month: string; spentUsd: number; budgetUsd: number | null; calls: number };
+  codeExecution?: CodeExecution;
+  uploadLimits?: UploadLimits;
+}
+
+// ---------------------------------------------------------------- L2
+
+export const MILESTONE_STATUSES = ['planned', 'active', 'completed', 'archived'] as const;
+export const ASSIGNMENT_KINDS = ['text', 'file', 'code', 'photo', 'experiment'] as const;
+export const ASSIGNMENT_STATUSES = ['planned', 'available', 'submitted', 'evaluated', 'passed', 'revision_required', 'archived'] as const;
+export const GAP_STATUSES = ['suggested', 'open', 'addressed', 'dismissed'] as const;
+export const EVALUATION_STATUSES = ['pending', 'completed', 'failed'] as const;
+
+export interface LearningStatusL2 {
+  milestones: number;
+  assignmentsOpen: number;
+  awaitingEvaluation: number;
+  awaitingDecision: number;
+  assignmentsPassed: number;
+  evaluationsFailed: number;
+  skills: number;
+  skillsVerified: number;
+  skillsSelfOnly: number;
+  gapsOpen: number;
+  gapsSuggested: number;
+}
+
+export interface RubricCriterion {
+  key: string;
+  title: string;
+  description: string | null;
+  maxScore: number;
+}
+
+export interface RubricVersion {
+  id: string;
+  rubricId: string;
+  version: number;
+  criteria: RubricCriterion[];
+  passingScore: number;
+  maxScore: number;
+  contentHash: string;
+  createdBy: string;
+  createdAt: string;
+}
+
+export interface Rubric {
+  id: string;
+  title: string;
+  status: 'active' | 'archived';
+  latestVersion: RubricVersion | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Milestone {
+  id: string;
+  roadmapId: string;
+  nodeKey: string | null;
+  title: string;
+  description: string | null;
+  passingCriteria: string | null;
+  rubricVersionId: string | null;
+  skillIds: string[];
+  weight: number;
+  status: (typeof MILESTONE_STATUSES)[number];
+  deadline: {
+    fixed: string | null;
+    fixedSetBy: string | null;
+    fixedSetAt: string | null;
+    suggested: string | null;
+    suggestedSource: 'ai' | 'planner' | null;
+    suggestedReason: string | null;
+    suggestedAt: string | null;
+  };
+  assignments: { total: number; passed: number; open: number };
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface MilestoneProgress {
+  weightTotal: number;
+  weightCompleted: number;
+  percent: number | null;
+  milestones: number;
+}
+
+export interface Assignment {
+  id: string;
+  milestoneId: string;
+  title: string;
+  kind: (typeof ASSIGNMENT_KINDS)[number];
+  instructions: string;
+  rubricVersionId: string | null;
+  definitionVersion: number;
+  status: (typeof ASSIGNMENT_STATUSES)[number];
+  decidedBy: string | null;
+  decidedAt: string | null;
+  decisionEvaluationId: string | null;
+  submissions: number;
+  latestSubmissionId: string | null;
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SubmissionFile {
+  id: string;
+  position: number;
+  name: string;
+  mediaType: string;
+  category: 'text' | 'image' | 'pdf';
+  size: number;
+  sha256: string;
+}
+
+export interface Submission {
+  id: string;
+  assignmentId: string;
+  revision: number;
+  definitionVersion: number;
+  body: string | null;
+  note: string | null;
+  contentHash: string;
+  files: SubmissionFile[];
+  submittedBy: string;
+  submittedAt: string;
+}
+
+export interface CodeExecution {
+  available: boolean;
+  reason: string;
+}
+
+export interface UploadLimits {
+  maxFileBytes: number;
+  maxFiles: number;
+  maxTotalBytes: number;
+  maxBodyChars: number;
+  extensions: string[];
+}
+
+export interface AssignmentDetail {
+  assignment: Assignment;
+  definitions: Array<{ version: number; title: string; kind: Assignment['kind']; instructions: string; rubricVersionId: string | null; createdBy: string; createdAt: string }>;
+  submissions: Submission[];
+  codeExecution: CodeExecution;
+  uploadLimits: UploadLimits;
+}
+
+export interface CriterionScore {
+  criterion: string;
+  title: string;
+  score: number;
+  maxScore: number;
+  rationale: string;
+}
+
+export interface Evidence {
+  id: string;
+  type: 'criterion_score' | 'excerpt' | 'owner_check' | 'reference';
+  criterion: string | null;
+  sourceRef: string;
+  excerpt: string | null;
+  hash: string | null;
+  verified: boolean;
+  score: number | null;
+  note: string | null;
+  limitations: string | null;
+  createdAt: string;
+}
+
+export interface Evaluation {
+  id: string;
+  submissionId: string;
+  assignmentId: string;
+  assignmentTitle: string;
+  revision: number;
+  rubricVersionId: string | null;
+  evaluatorType: 'ai' | 'owner';
+  evaluator: string;
+  status: (typeof EVALUATION_STATUSES)[number];
+  outcome: 'meets_rubric' | 'below_rubric' | 'inconclusive' | null;
+  scores: CriterionScore[];
+  totalScore: number | null;
+  maxScore: number | null;
+  passingScore: number | null;
+  feedback: string | null;
+  confidence: number | null;
+  limitations: string[];
+  suggestions: {
+    gaps?: Array<{ skill: string | null; title: string; description: string | null; gapId: string | null }>;
+    levels?: Array<{ skill: string; skillId: string | null; level: number; rationale: string | null }>;
+  };
+  error: { code: string; message: string | null } | null;
+  ai: { provider: string | null; model: string | null; promptVersion: string | null; inputTokens: number | null; outputTokens: number | null; costUsd: number | null } | null;
+  evidenceCount: number;
+  requestedBy: string;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+export type EvaluationDetail = Evaluation & { evidence: Evidence[] };
+
+export interface SkillMastery {
+  self: { level: number; note: string | null; at: string } | null;
+  verified: { level: number; at: string; by: string; evaluationId: string; confidence: number | null; ageDays: number; stale: boolean } | null;
+}
+
+export interface Skill {
+  id: string;
+  canonicalName: string;
+  displayName: string;
+  createdAt: string;
+  mastery: SkillMastery;
+  openGaps: number;
+}
+
+export interface Gap {
+  id: string;
+  skillId: string | null;
+  title: string;
+  description: string | null;
+  source: 'owner' | 'ai';
+  evaluationId: string | null;
+  status: (typeof GAP_STATUSES)[number];
+  createdBy: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface SkillDetail {
+  skill: Skill;
+  history: Array<{ id: string; kind: 'self' | 'verified'; level: number; evaluationId: string | null; note: string | null; actor: string; at: string }>;
+  gaps: Gap[];
+  milestones: Array<{ id: string; title: string; roadmapId: string; status: string }>;
+  freshDays: number;
 }
