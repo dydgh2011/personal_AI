@@ -3,21 +3,29 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
-import { ServiceMapView } from '@/app/(admin)/services/view';
+import { LinkPanel, ServiceMapView } from '@/app/(admin)/services/view';
 import {
   ageSeconds,
+  allowedOpsOf,
+  callsOf,
   checkSnapshot,
+  countsMatch,
   countFindings,
   dotSize,
   graphIdOf,
   healthOf,
   layoutMap,
+  linkWidth,
+  opGroups,
   selectionOf,
   serviceGraph,
   SIZE_METRICS,
   sizeMetric,
+  unlistedCalls,
   NODE_H,
   NODE_W,
+  type LinkRuleSet,
+  type MapLink,
   type MapService,
   type ServiceMapSnapshot,
 } from '@/lib/service-map';
@@ -150,7 +158,11 @@ describe('service map snapshot', () => {
     expect(mem.find((e) => e.data.id === 's:stray')!.data.size).toBe(14);
     expect(mem.find((e) => e.data.id === 's:web')!.data.size).toBe(dotSize(128, 128));
     expect(sizeMetric('nope').id).toBe('links');
-    expect(SIZE_METRICS.map((m) => m.id)).toEqual(['links', 'memory']);
+    expect(SIZE_METRICS.map((m) => m.id)).toEqual(['links', 'memory', 'calls-in', 'calls-out', 'allowed-ops']);
+    // a stage-1 snapshot has no counts: every call view is "no data" and lines keep the plain width
+    const old = serviceGraph(snap, { ...base, sizeBy: 'calls-in' });
+    expect(old.filter((e) => String(e.data.id).startsWith('s:')).every((e) => e.data.size === 14)).toBe(true);
+    expect(old.filter((e) => String(e.data.id).startsWith('l:')).every((e) => e.data.width === 1.8)).toBe(true);
   });
 
   it('graph: toggles and the network filter', () => {
@@ -205,5 +217,134 @@ describe('service map snapshot', () => {
 
   it('is in the navigation', () => {
     expect(MODULES.find((m) => m.id === 'services')).toMatchObject({ href: '/services', permission: 'admin' });
+  });
+  // ---------------------------------------------------------------- stages 2 and 3
+
+  const brokerSet: LinkRuleSet = {
+    by: 'api',
+    role: 'callee',
+    source: 'services/api/src/routes.ts',
+    ops: [
+      { name: 'items.list', method: 'GET', path: '/items' },
+      { name: 'items.add', method: 'POST', path: '/items' },
+      { name: 'items.get', method: 'GET', path: '/items/:id' },
+      { name: 'users.list', method: 'GET', path: '/users' },
+      { name: 'users.add', method: 'POST', path: '/users' },
+      { name: 'users.get', method: 'GET', path: '/users/:id' },
+      { name: 'jobs.run', method: 'POST', path: '/jobs' },
+      { name: 'jobs.list', method: 'GET', path: '/jobs' },
+      { name: 'status', method: 'GET', path: '/status' },
+    ],
+  };
+
+  function staged(): ServiceMapSnapshot {
+    const snap = snapshot();
+    snap.links[0] = {
+      ...snap.links[0],
+      allowed: [brokerSet],
+      calls: {
+        total: 40,
+        failed: 3,
+        source: 'api 로그',
+        ops: [
+          { name: 'items.list', total: 30, failed: 0 },
+          { name: 'items.add', total: 6, failed: 1 },
+          { name: 'auth', total: 2, failed: 2 },
+          { name: 'status', total: 2, failed: 0 },
+        ],
+      },
+    };
+    snap.links[1] = { ...snap.links[1], allowed: [], calls: { total: 0, failed: 0, source: 'zeta 로그', ops: [] } };
+    snap.callWindow = { hours: 24, since: '2026-11-23T12:00:00Z', sources: [{ id: 'api', ok: true }, { id: 'gateway', ok: false, error: 'x' }] };
+    return snap;
+  }
+
+  it('snapshot: new link fields are kept when well formed and dropped when not', () => {
+    const good = checkSnapshot(JSON.parse(JSON.stringify(staged())));
+    expect(good.ok && good.snapshot.links[0].allowed?.[0].ops).toHaveLength(9);
+    expect(good.ok && good.snapshot.links[0].calls?.total).toBe(40);
+    expect(good.ok && good.snapshot.callWindow?.hours).toBe(24);
+    const bad = JSON.parse(JSON.stringify(staged()));
+    bad.links[0].allowed = [{ by: 'api', role: 'boss', source: 'x', ops: [] }];
+    bad.links[0].calls = { total: '40' };
+    bad.callWindow = { hours: 24 };
+    const checked = checkSnapshot(bad);
+    expect(checked.ok).toBe(true);
+    if (!checked.ok) return;
+    expect('allowed' in checked.snapshot.links[0]).toBe(false);
+    expect('calls' in checked.snapshot.links[0]).toBe(false);
+    expect(checked.snapshot.callWindow).toBeUndefined();
+    // stage-1 snapshots still pass untouched
+    expect(checkSnapshot(JSON.parse(JSON.stringify(snapshot())))).toEqual({ ok: true, snapshot: snapshot() });
+  });
+
+  it('graph: line width follows recent calls; size views count calls and allowed operations', () => {
+    expect(linkWidth(null, 10)).toBe(1.8);
+    expect(linkWidth(0, 10)).toBe(1);
+    expect(linkWidth(10, 10)).toBe(7);
+    expect(linkWidth(1, 100)).toBeLessThan(linkWidth(50, 100));
+    const snap = staged();
+    const els = serviceGraph(snap, { sizeBy: 'calls-in', reach: false, external: false, networks: false, network: '', layout: 'force' });
+    const el = (id: string) => els.find((e) => e.data.id === id)!;
+    expect(el('l:web>api').data.width).toBe(7);
+    expect(el('l:web>api').data.calls).toBe(40);
+    expect(el('l:bot>zeta').data.width).toBe(1);
+    expect(el('l:bot>zeta').classes).toContain('quiet');
+    expect(el('l:api>db').data.width).toBe(1.8);
+    expect(el('s:api').data.size).toBe(dotSize(40, 40));
+    expect(el('s:zeta').data.metric).toBe(0);
+    expect(el('s:db').data.metric).toBeNull();
+    expect(callsOf(snap, 'web', 'out')).toBe(40);
+    expect(callsOf(snap, 'api', 'out')).toBeNull();
+    expect(allowedOpsOf(snap, 'api')).toBe(9);
+    expect(allowedOpsOf(snap, 'zeta')).toBeNull();
+    expect(sizeMetric('calls-in').label).toBe('최근 24시간 받은 호출');
+  });
+
+  it('operations are grouped by area with their counts; unlisted calls are kept apart', () => {
+    const snap = staged();
+    const groups = opGroups(brokerSet, snap.links[0].calls);
+    expect(groups.map((gr) => `${gr.key}:${gr.ops.length}:${gr.total}`)).toEqual(['items:3:36', 'jobs:2:0', 'status:1:2', 'users:3:0']);
+    expect(groups[0].ops.map((o) => `${o.name}=${o.total}/${o.failed}`)).toEqual(['items.list=30/0', 'items.add=6/1', 'items.get=0/0']);
+    // short lists stay in one group
+    const short = { ...brokerSet, ops: brokerSet.ops.slice(0, 3) };
+    expect(opGroups(short, undefined)).toEqual([{ key: '', total: null, ops: expect.any(Array) }]);
+    expect(opGroups(short, undefined)[0].ops.every((o) => o.total === null)).toBe(true);
+    // counts under other names (e.g. a caller-side log) are not spread over the callee's names
+    const other = { total: 5, failed: 0, source: 'x', ops: [{ name: 'api.items.list', total: 5, failed: 0 }] };
+    expect(countsMatch(brokerSet, other)).toBe(false);
+    expect(opGroups(brokerSet, other).every((gr) => gr.total === null)).toBe(true);
+    expect(unlistedCalls(snap.links[0]).map((o) => o.name)).toEqual(['auth']);
+    expect(unlistedCalls({ ...snap.links[0], calls: other })).toEqual([]);
+  });
+
+  it('link panel: allowed commands, counts and honest gaps', () => {
+    const snap = staged();
+    const render = (link: MapLink, w: ServiceMapSnapshot['callWindow'] | null = snap.callWindow ?? null) =>
+      renderToStaticMarkup(<LinkPanel link={link} window={w ?? undefined} name={(id) => id.toUpperCase()} go={(id) => <span>{id.toUpperCase()}</span>} />);
+    const html = render(snap.links[0]);
+    expect(html).toContain('최근 24시간');
+    expect(html).toContain('<b>40회</b>');
+    expect(html).toContain('실패 3');
+    expect(html).toContain('API의 허용 목록');
+    expect(html).toContain('services/api/src/routes.ts');
+    expect(html).toContain('/items/:id');
+    expect(html).toContain('items.list');
+    expect(html).toContain('목록 밖 기록');
+    expect(html).not.toContain('다음 단계에서');
+    expect(render(snap.links[1])).toContain('코드에서 읽지 못했습니다');
+    const old = render(snapshot().links[0], null);
+    expect(old).toContain('이 스냅샷에는 허용 명령이 없습니다');
+    expect(old).not.toContain('최근 24시간');
+    expect(render(snapshot().links[2])).toContain('측정 안 함');
+  });
+
+  it('summary shows recent calls and says when a source could not be read', () => {
+    const html = renderToStaticMarkup(<ServiceMapView snapshot={staged()} ageSeconds={5} />);
+    expect(html).toContain('최근 24시간 호출 <b>40</b>');
+    expect(html).toContain('일부 못 읽음');
+    expect(html).toContain('굵기 = 최근 24시간 호출 수');
+    expect(html).toContain('최근 24시간 받은 호출');
+    expect(renderToStaticMarkup(<ServiceMapView snapshot={snapshot()} ageSeconds={5} />)).not.toContain('최근 24시간 호출');
   });
 });

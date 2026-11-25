@@ -30,6 +30,48 @@ export interface MapService {
   status: { state: string; health: string | null; startedAt: string | null; restartCount: number; exitCode: number | null } | null;
 }
 
+/** One operation a caller may use on a link (stage 2), read from the service's own code. */
+export interface LinkOp {
+  name: string;
+  method: string;
+  path: string;
+}
+
+/**
+ * One list of allowed operations. `role` says who enforces it: 'callee' = the called service checks
+ * this caller; 'caller' = the calling service only forwards these (hermes-broker's ROUTES).
+ */
+export interface LinkRuleSet {
+  by: string;
+  role: 'callee' | 'caller';
+  source: string;
+  ops: LinkOp[];
+}
+
+/** Calls seen on a link in the window (stage 3). Absent = not measured; total 0 = measured, none. */
+export interface LinkCalls {
+  total: number;
+  failed: number;
+  ops: Array<{ name: string; total: number; failed: number }>;
+  source: string;
+}
+
+export interface CallWindow {
+  hours: number;
+  since: string;
+  sources: Array<{ id: string; ok: boolean; error?: string }>;
+}
+
+export interface MapLink {
+  from: string;
+  to: string;
+  via: string[];
+  networks: string[];
+  /** Stage 2; absent in older snapshots. */
+  allowed?: LinkRuleSet[];
+  /** Stage 3; absent in older snapshots and on links no source can see. */
+  calls?: LinkCalls;
+}
 export interface ServiceMapSnapshot {
   version: 1;
   generatedAt: string;
@@ -38,9 +80,11 @@ export interface ServiceMapSnapshot {
   layers: Array<{ id: string; label: string }>;
   services: MapService[];
   networks: Array<{ id: string; internal: boolean; members: string[] }>;
-  links: Array<{ from: string; to: string; via: string[]; networks: string[] }>;
+  links: MapLink[];
   reachable: Array<{ a: string; b: string; networks: string[]; used: boolean }>;
   findings: Array<{ level: FindingLevel; code: string; services: string[]; message: string }>;
+  /** Stage 3: the window the link counts cover and which sources could be read. Absent in older snapshots. */
+  callWindow?: CallWindow;
 }
 
 /** A snapshot older than this means the host collector stopped (it runs every minute). */
@@ -61,7 +105,113 @@ export function checkSnapshot(value: unknown): { ok: true; snapshot: ServiceMapS
   if (!services.every((s) => isObj(s) && typeof s.id === 'string' && isArr(s.networks) && isObj(s.hardening))) {
     return { ok: false, reason: 'malformed services' };
   }
-  return { ok: true, snapshot: value as unknown as ServiceMapSnapshot };
+  const snapshot = value as unknown as ServiceMapSnapshot;
+  // Stage 2/3 fields are optional: drop any that are malformed instead of refusing the whole map.
+  for (const l of snapshot.links) {
+    const link = l as unknown as Record<string, unknown>;
+    if ('allowed' in link && !validAllowed(link.allowed)) delete link.allowed;
+    if ('calls' in link && !validCalls(link.calls)) delete link.calls;
+  }
+  if ('callWindow' in snapshot && !validWindow(snapshot.callWindow)) delete snapshot.callWindow;
+  return { ok: true, snapshot };
+}
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0;
+const isStr = (v: unknown): v is string => typeof v === 'string';
+
+function validAllowed(v: unknown): boolean {
+  return (
+    isArr(v) &&
+    v.every(
+      (set) =>
+        isObj(set) &&
+        isStr(set.by) &&
+        (set.role === 'callee' || set.role === 'caller') &&
+        isStr(set.source) &&
+        isArr(set.ops) &&
+        set.ops.every((o) => isObj(o) && isStr(o.name) && isStr(o.method) && isStr(o.path)),
+    )
+  );
+}
+
+function validCalls(v: unknown): boolean {
+  return isObj(v) && isNum(v.total) && isNum(v.failed) && isStr(v.source) && isArr(v.ops) && v.ops.every((o) => isObj(o) && isStr(o.name) && isNum(o.total) && isNum(o.failed));
+}
+
+function validWindow(v: unknown): boolean {
+  return isObj(v) && isNum(v.hours) && isStr(v.since) && isArr(v.sources) && v.sources.every((s) => isObj(s) && isStr(s.id) && typeof s.ok === 'boolean');
+}
+
+// ---------------------------------------------------------------- allowed operations and calls
+
+/** Edge width for a link's recent calls: not measured = the plain width, none = thin, busiest = 7. */
+export function linkWidth(total: number | null, max: number): number {
+  if (total === null) return 1.8;
+  if (total <= 0 || !(max > 0)) return 1;
+  return Math.round((1.4 + 5.6 * Math.sqrt(Math.min(total, max) / max)) * 10) / 10;
+}
+
+/** Calls into or out of a service in the window; null when none of those links was measured. */
+export function callsOf(snap: Pick<ServiceMapSnapshot, 'links'>, id: string, dir: 'in' | 'out'): number | null {
+  const measured = snap.links.filter((l) => (dir === 'in' ? l.to : l.from) === id && l.calls);
+  return measured.length ? measured.reduce((n, l) => n + (l.calls?.total ?? 0), 0) : null;
+}
+
+/** Distinct operations other services may ask this one for (lists it enforces itself); null = unknown. */
+export function allowedOpsOf(snap: Pick<ServiceMapSnapshot, 'links'>, id: string): number | null {
+  const sets = snap.links.filter((l) => l.to === id).flatMap((l) => l.allowed ?? []).filter((set) => set.by === id);
+  if (!sets.length) return null;
+  return new Set(sets.flatMap((set) => set.ops.map((o) => `${o.method} ${o.path}`))).size;
+}
+
+export interface OpRow extends LinkOp {
+  /** Calls in the window; null when this link's counts use other names (or were not measured). */
+  total: number | null;
+  failed: number;
+}
+
+export interface OpGroup {
+  key: string;
+  ops: OpRow[];
+  total: number | null;
+}
+
+/** Whether a link's counts are named like this list's operations (so they can be shown per operation). */
+export function countsMatch(set: LinkRuleSet, calls: LinkCalls | undefined): calls is LinkCalls {
+  if (!calls) return false;
+  const names = new Set(set.ops.map((o) => o.name));
+  return calls.total === 0 || calls.ops.some((o) => names.has(o.name));
+}
+
+const groupKey = (o: LinkOp) => (o.name.includes('.') && !o.name.includes(' ') ? o.name.split('.')[0] : (o.path.split('/').filter(Boolean)[0] ?? '/'));
+
+/**
+ * A list's operations with their counts, grouped by area (`knowledge.*`, `planner.*`, `/tasks`…) when
+ * the list is long. Busiest first inside a group; groups in name order.
+ */
+export function opGroups(set: LinkRuleSet, calls?: LinkCalls): OpGroup[] {
+  const counted = countsMatch(set, calls);
+  const byName = new Map((counted ? calls.ops : []).map((o) => [o.name, o]));
+  const rows: OpRow[] = set.ops.map((o) => ({ ...o, total: counted ? (byName.get(o.name)?.total ?? 0) : null, failed: byName.get(o.name)?.failed ?? 0 }));
+  const sortRows = (list: OpRow[]) => list.sort((a, b) => (b.total ?? 0) - (a.total ?? 0) || a.name.localeCompare(b.name) || a.method.localeCompare(b.method));
+  const sum = (list: OpRow[]) => (counted ? list.reduce((n, r) => n + (r.total ?? 0), 0) : null);
+  const keys = new Set(rows.map(groupKey));
+  if (rows.length <= 8 || keys.size < 2) return [{ key: '', ops: sortRows(rows), total: sum(rows) }];
+  return [...keys]
+    .sort((a, b) => a.localeCompare(b))
+    .map((key) => {
+      const ops = sortRows(rows.filter((r) => groupKey(r) === key));
+      return { key, ops, total: sum(ops) };
+    });
+}
+
+/** Recorded operations that no list on the link names (refused before routing, bad key, …). */
+export function unlistedCalls(link: MapLink): LinkCalls['ops'] {
+  const calls = link.calls;
+  if (!calls || !link.allowed?.length) return [];
+  const matching = link.allowed.filter((set) => countsMatch(set, calls));
+  if (!matching.length) return [];
+  const names = new Set(matching.flatMap((set) => set.ops.map((o) => o.name)));
+  return calls.ops.filter((o) => !names.has(o.name));
 }
 
 export function ageSeconds(snapshot: Pick<ServiceMapSnapshot, 'generatedAt'>, now: Date): number {
@@ -183,6 +333,24 @@ export const SIZE_METRICS: Array<{ id: string; label: string; note: string; valu
     note: 'Compose mem_limit이 클수록 큼',
     value: (s) => s.hardening.memLimitMb,
   },
+  {
+    id: 'calls-in',
+    label: '최근 24시간 받은 호출',
+    note: '다른 서비스가 부른 횟수가 많을수록 큼 (로그·게이트웨이 기록, 측정 안 된 곳은 가장 작게)',
+    value: (s, snap) => callsOf(snap, s.id, 'in'),
+  },
+  {
+    id: 'calls-out',
+    label: '최근 24시간 보낸 호출',
+    note: '다른 서비스를 부른 횟수가 많을수록 큼 (측정 안 된 곳은 가장 작게)',
+    value: (s, snap) => callsOf(snap, s.id, 'out'),
+  },
+  {
+    id: 'allowed-ops',
+    label: '허용된 명령 수',
+    note: '다른 서비스가 쓸 수 있는 명령이 많을수록 큼 (코드에서 읽음)',
+    value: (s, snap) => allowedOpsOf(snap, s.id),
+  },
 ];
 
 export function sizeMetric(id: string | null | undefined) {
@@ -249,12 +417,14 @@ export function serviceGraph(snap: ServiceMapSnapshot, o: ServiceGraphOptions): 
     });
   }
 
+  const maxCalls = Math.max(0, ...snap.links.map((l) => l.calls?.total ?? 0));
   for (const l of snap.links) {
     const dim = Boolean(o.network) && !l.networks.includes(o.network);
+    const quiet = l.calls !== undefined && l.calls.total === 0;
     out.push({
       group: 'edges',
-      data: { id: `l:${l.from}>${l.to}`, source: `s:${l.from}`, target: `s:${l.to}` },
-      classes: ['call', l.networks.length === 0 ? 'broken' : '', dim ? 'dim' : ''].filter(Boolean).join(' '),
+      data: { id: `l:${l.from}>${l.to}`, source: `s:${l.from}`, target: `s:${l.to}`, width: linkWidth(l.calls?.total ?? null, maxCalls), calls: l.calls?.total ?? null },
+      classes: ['call', l.networks.length === 0 ? 'broken' : '', quiet ? 'quiet' : '', l.calls?.failed ? 'failing' : '', dim ? 'dim' : ''].filter(Boolean).join(' '),
     });
   }
 
@@ -375,4 +545,8 @@ export const FINDING_TITLES: Record<string, string> = {
   'caps-kept': '남겨 둔 capabilities',
   uncatalogued: '설명 없는 서비스',
   'catalog-extra': 'Compose에 없는 설명',
+  'rules-extract-failed': '코드에서 허용 명령을 읽지 못함',
+  'link-no-rules': '허용 명령을 모르는 연결',
+  'call-outside-rules': '허용 목록 밖의 성공한 호출',
+  'calls-unavailable': '호출 수를 못 읽은 곳',
 };

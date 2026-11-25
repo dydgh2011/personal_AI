@@ -3,7 +3,7 @@
 // container gets the Docker socket). It reads the running Compose project and writes a snapshot
 // that the Dashboard only reads:
 //
-//   node services/service-map/collect.mjs [--project personal_ai] [--out <file>] [--stdout]
+//   node services/service-map/collect.mjs [--project personal_ai] [--out <file>] [--stdout] [--no-calls]
 //
 // Default output: <project dir>/data/service-map/service-map.json (written atomically).
 // Only whitelisted fields are copied. Environment values, build args, labels, secret file paths and
@@ -15,8 +15,12 @@ import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { aggregateCalls, CALLEE_LOGS, GATEWAY_QUERY, NO_OP, parseGatewayRows, parseRequestLog, WINDOW_HOURS } from './calls.mjs';
 import { LAYERS, SERVICES } from './catalog.mjs';
+import { extractRules } from './rules.mjs';
 
+// Stages 2 and 3 only ADD optional fields (links[].allowed, links[].calls, callWindow), so the
+// version stays 1: an older Dashboard ignores them, a newer one renders old snapshots without them.
 export const SNAPSHOT_VERSION = 1;
 const LOCAL_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
@@ -73,8 +77,12 @@ function pairKey(a, b) {
 /**
  * Build the snapshot from the resolved Compose config (`docker compose config --format json`),
  * container states and the hand-written catalog.
+ *
+ * Optional (stages 2 and 3):
+ *   rules  { rules: Map<'from>to' | '*>to', RuleSet[]>, errors }  from rules.mjs extractRules
+ *   calls  { hours, since, sources: [{ id, ok, error? }], broker, callees, gateway }  see calls.mjs
  */
-export function buildMap({ config, containers = [], catalog = { LAYERS, SERVICES }, project, projectDir, composeFiles = [], now = new Date() }) {
+export function buildMap({ config, containers = [], catalog = { LAYERS, SERVICES }, project, projectDir, composeFiles = [], now = new Date(), rules = null, calls = null }) {
   const serviceIds = Object.keys(config.services || {}).sort();
   const known = new Set(serviceIds);
   const netDefs = config.networks || {};
@@ -177,6 +185,45 @@ export function buildMap({ config, containers = [], catalog = { LAYERS, SERVICES
   const linkList = [...links.values()]
     .map((l) => ({ ...l, via: l.via.sort(), networks: [...netsOf.get(l.from)].filter((n) => netsOf.get(l.to).has(n)).sort() }))
     .sort((a, b) => a.from.localeCompare(b.from) || a.to.localeCompare(b.to));
+
+  // Stage 2: what the code allows on each link (caller filter and/or callee check).
+  if (rules) {
+    for (const l of linkList) {
+      const sets = [...(rules.rules.get(`${l.from}>${l.to}`) || []), ...(rules.rules.get(`*>${l.to}`) || [])];
+      l.allowed = sets.map((s) => ({ by: s.by, role: s.role, source: s.source, ops: s.ops.map((o) => ({ name: o.name, method: o.method, path: o.path })) }));
+      if (sets.length === 0) {
+        findings.push({ level: 'info', code: 'link-no-rules', services: [l.from, l.to], message: `${l.from} → ${l.to}: 허용 명령을 코드에서 읽지 못했다 (rules.mjs에 이 연결의 파서가 없다).` });
+      }
+    }
+    for (const e of rules.errors) {
+      findings.push({ level: 'warn', code: 'rules-extract-failed', services: [], message: `허용 명령 읽기 실패 — ${e}` });
+    }
+  }
+
+  // Stage 3: recent calls per link, from request logs and the gateway's calls table (counts only).
+  let callWindow = null;
+  if (calls) {
+    const counted = aggregateCalls(linkList, calls);
+    for (const l of linkList) {
+      const c = counted.get(`${l.from}>${l.to}`);
+      if (!c) continue;
+      l.calls = c;
+      if (!l.allowed?.length) continue;
+      const names = new Set(l.allowed.flatMap((s) => s.ops.map((o) => o.name)));
+      const outside = c.ops.filter((o) => o.total > o.failed && ![NO_OP, 'auth', 'notify'].includes(o.name) && !names.has(o.name));
+      if (outside.length) {
+        findings.push({ level: 'warn', code: 'call-outside-rules', services: [l.from, l.to], message: `${l.from} → ${l.to}: 코드의 허용 목록에 없는 명령이 성공했다 (${outside.map((o) => o.name).join(', ')}). 실행 중인 코드와 저장소가 다를 수 있다.` });
+      }
+    }
+    callWindow = {
+      hours: calls.hours,
+      since: calls.since,
+      sources: calls.sources.map((s) => ({ id: s.id, ok: Boolean(s.ok), ...(s.ok ? {} : { error: String(s.error || '').slice(0, 200) }) })),
+    };
+    for (const s of callWindow.sources) {
+      if (!s.ok) findings.push({ level: 'info', code: 'calls-unavailable', services: [s.id], message: `${s.id}: 최근 호출 수를 읽지 못했다 (${s.error}).` });
+    }
+  }
   for (const l of linkList) {
     if (l.networks.length === 0) {
       findings.push({ level: 'warn', code: 'link-unreachable', services: [l.from, l.to], message: `${l.from} → ${l.to}: 설정은 부르는데 같은 네트워크가 없다.` });
@@ -232,6 +279,7 @@ export function buildMap({ config, containers = [], catalog = { LAYERS, SERVICES
     links: linkList,
     reachable: reachableList,
     findings,
+    ...(callWindow ? { callWindow } : {}),
   };
 }
 
@@ -256,19 +304,62 @@ function docker(args, cwd) {
 }
 
 function parseArgs(argv) {
-  const out = { project: 'personal_ai', out: null, stdout: false };
+  const out = { project: 'personal_ai', out: null, stdout: false, calls: true };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a === '--project') out.project = argv[++i];
     else if (a === '--out') out.out = argv[++i];
     else if (a === '--stdout') out.stdout = true;
+    else if (a === '--no-calls') out.calls = false;
     else throw new Error(`unknown argument ${a}`);
   }
   if (!/^[a-z0-9][a-z0-9_-]*$/.test(out.project || '')) throw new Error('--project must be a Compose project name');
   return out;
 }
 
-export function collect({ project }) {
+/** Repository the collector lives in: the source code stage 2 reads (same checkout as the running stack). */
+export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+
+const firstError = (err) => (err instanceof Error ? err.message : String(err)).split('\n')[0].slice(0, 200);
+
+/**
+ * Stage 3 sources, read-only: `docker logs --since` of the services that write request lines, and one
+ * aggregate query in the gateway container. A source that fails is reported; the others still count.
+ */
+export function collectCalls(project, brokerRoutes, now = new Date()) {
+  const since = new Date(now.getTime() - WINDOW_HOURS * 3600_000);
+  const containerOf = (service) => {
+    const id = docker(['ps', '-q', '--filter', `label=com.docker.compose.project=${project}`, '--filter', `label=com.docker.compose.service=${service}`]).trim().split(/\s+/)[0];
+    if (!id) throw new Error('실행 중인 컨테이너 없음');
+    return id;
+  };
+  const logRows = (service) => parseRequestLog(docker(['logs', '--since', since.toISOString(), containerOf(service)]), { sinceMs: since.getTime() });
+  const sources = [];
+  const attempt = (id, fn) => {
+    try {
+      const value = fn();
+      sources.push({ id, ok: true });
+      return value;
+    } catch (err) {
+      sources.push({ id, ok: false, error: firstError(err) });
+      return null;
+    }
+  };
+  const brokerRows = brokerRoutes ? attempt('hermes-broker', () => logRows('hermes-broker')) : null;
+  const callees = {};
+  for (const s of CALLEE_LOGS) callees[s] = attempt(s, () => logRows(s));
+  const gateway = attempt('llm-gateway', () => parseGatewayRows(docker(['exec', containerOf('llm-gateway'), 'node', '-e', GATEWAY_QUERY, since.toISOString()])));
+  return {
+    hours: WINDOW_HOURS,
+    since: since.toISOString(),
+    sources,
+    broker: brokerRows ? { rows: brokerRows, routes: brokerRoutes } : null,
+    callees,
+    gateway,
+  };
+}
+
+export function collect({ project, calls: withCalls = true }) {
   const listed = JSON.parse(docker(['compose', 'ls', '--all', '--format', 'json']) || '[]');
   const entry = listed.find((p) => p.Name === project);
   if (!entry) throw new Error(`Compose project ${project} not found (is Docker running?)`);
@@ -279,7 +370,9 @@ export function collect({ project }) {
   const config = JSON.parse(docker(['compose', '-p', project, ...fileArgs, 'config', '--format', 'json'], projectDir));
   const ids = docker(['ps', '-a', '-q', '--filter', `label=com.docker.compose.project=${project}`]).split(/\s+/).filter(Boolean);
   const containers = ids.length ? parseInspectLines(docker(['inspect', '--format', INSPECT_FORMAT, ...ids])) : [];
-  return { snapshot: buildMap({ config, containers, project, projectDir, composeFiles }), projectDir };
+  const rules = extractRules(REPO_ROOT);
+  const calls = withCalls ? collectCalls(project, rules.brokerRoutes) : null;
+  return { snapshot: buildMap({ config, containers, project, projectDir, composeFiles, rules, calls }), projectDir };
 }
 
 function writeAtomic(file, text) {
@@ -301,7 +394,10 @@ function main() {
   writeAtomic(out, text);
   const counts = snapshot.findings.reduce((acc, f) => ({ ...acc, [f.level]: (acc[f.level] || 0) + 1 }), {});
   const running = snapshot.services.filter((s) => s.status?.state === 'running').length;
-  console.log(`service map: ${snapshot.services.length} services (${running} running), ${snapshot.links.length} links, findings ${JSON.stringify(counts)} -> ${out}`);
+  const withRules = snapshot.links.filter((l) => l.allowed?.length).length;
+  const total = snapshot.links.reduce((n, l) => n + (l.calls?.total || 0), 0);
+  const calls = snapshot.callWindow ? `, ${total} calls in ${snapshot.callWindow.hours}h` : '';
+  console.log(`service map: ${snapshot.services.length} services (${running} running), ${snapshot.links.length} links (${withRules} with rules${calls}), findings ${JSON.stringify(counts)} -> ${out}`);
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
