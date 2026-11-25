@@ -34,6 +34,10 @@ services:
       KNOWLEDGE_DB_FILE: /var/lib/knowledge/knowledge.db
       KNOWLEDGE_BLOB_DIR: /var/lib/knowledge-blobs
       KNOWLEDGE_DOCUMENTS_DIR: /imports/hermes-documents
+      KNOWLEDGE_IMAGES_DIR: /imports/hermes-images
+      KNOWLEDGE_AUDIO_DIR: /imports/hermes-audio
+      KNOWLEDGE_NIGHTLY_AT: "00:15"
+      KNOWLEDGE_MEDIA_SOCKET: /run/knowledge-media/worker.sock
       OLLAMA_URL: http://host.docker.internal:11434
       EMBED_MODEL: bge-m3
     secrets:
@@ -45,6 +49,9 @@ services:
       - knowledge-data:/var/lib/knowledge                                 # knowledge.db (Docker disk; keep Docker's disk image on D:)
       - ./data/knowledge/blobs:/var/lib/knowledge-blobs                   # stored originals, <sha256>.<ext>, on D:
       - ./data/hermes/cache/documents:/imports/hermes-documents:ro        # chat attachments only (no Hermes secrets)
+      - ./data/hermes/cache/images:/imports/hermes-images:ro
+      - ./data/hermes/cache/audio:/imports/hermes-audio:ro
+      - knowledge-media-ipc:/run/knowledge-media:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
     networks:
@@ -71,6 +78,39 @@ services:
       driver: json-file
       options:
         max-size: "10m"
+        max-file: "3"
+
+  # Local media processing uses an isolated Unix socket and a read-only view of stored originals.
+  knowledge-media:
+    build:
+      context: ./services/knowledge-media
+    image: personal_ai-knowledge-media:local
+    restart: unless-stopped
+    init: true
+    network_mode: none
+    volumes:
+      - knowledge-media-ipc:/run/knowledge-media
+      - ./data/knowledge/blobs:/blobs:ro
+      - ./data/knowledge/models:/models:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=384m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 3g
+    cpus: 2.0
+    pids_limit: 64
+    healthcheck:
+      test: ["CMD", "python", "worker.py", "--check"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    logging:
+      driver: json-file
+      options:
+        max-size: "5m"
         max-file: "3"
 
   # Overlay: Hermes loads the knowledge store as its memory provider (data/hermes/config.yaml:
@@ -106,6 +146,7 @@ services:
 
 volumes:
   knowledge-data:
+  knowledge-media-ipc:
 
 networks:
   knowledge-internal:

@@ -65,6 +65,7 @@ function relativeSource(source, projectDir) {
 }
 
 function networkNames(service) {
+  if (service.network_mode === 'none') return [];
   const n = service.networks;
   if (!n) return ['default'];
   return (Array.isArray(n) ? n : Object.keys(n)).slice().sort();

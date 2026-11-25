@@ -57,7 +57,14 @@ logger = logging.getLogger("personal_ai_knowledge")
 NAME = "personal-ai-knowledge"
 RECALL_TIMEOUT = 3.0
 # "[The user sent a document: 'x.pdf'. It is saved at: /opt/data/cache/documents/..../doc_..._x.pdf." (Hermes gateway)
-DOCUMENT_PATH = re.compile(r"saved at:?\s+(/opt/data/cache/documents/[^\s\]]+?)(?=[.,;\]]?(?:\s|$))")
+LEGACY_DOCUMENT_PATH = re.compile(r"saved at:?\s+(/opt/data/cache/documents/[^\s\]]+?)(?=[.,;\]]?(?:\s|$))")
+ATTACHMENT_PATH = re.compile(
+    r"(?:saved at:?\s+|\[User sent (?:an image|audio|a video|a file):\s+)"
+    r"/opt/data/cache/(documents|images|audio)/(?:native-inputs/[A-Za-z0-9_-]+/)?"
+    r"([^/\\\]\r\n]{1,255}?\.(?:pdf|docx|txt|md|csv|ics|png|jpe?g|gif|webp|bmp|tiff?|"
+    r"mp3|wav|m4a|aac|flac|ogg|opus|mp4|mov|mkv|avi|webm|m4v|wmv))(?=[.,;]?(?:[\]\s]|$))",
+    re.IGNORECASE,
+)
 
 RULES = (
     "# Knowledge store (Personal AI OS)\n"
@@ -190,6 +197,8 @@ class KnowledgeProvider(MemoryProvider):
                   messages: list[dict[str, Any]] | None = None, turn_author: dict[str, Any] | None = None) -> None:
         if not self._client or not self._primary or not (user_content or "").strip():
             return
+        if isinstance(turn_author, dict) and turn_author.get("is_bot") is True:
+            return
         sid = session_id or self._session_id
         author = (turn_author or {}).get("name") if isinstance(turn_author, dict) else None
         spawn_context_thread(self._store_turn, args=(user_content, assistant_content or "", sid, author),
@@ -211,19 +220,29 @@ class KnowledgeProvider(MemoryProvider):
             self._client.call("POST", "/raw", body=body, timeout=30)
         except kc.KnowledgeError as err:
             logger.warning("knowledge: chat turn not stored: %s", err.code)
-        for path in dict.fromkeys(DOCUMENT_PATH.findall(user_content)):
-            self._store_document(Path(path).name)
+        matches = {(cache.lower(), name) for cache, name in ATTACHMENT_PATH.findall(user_content)}
+        for path in LEGACY_DOCUMENT_PATH.findall(user_content):
+            name = Path(path).name
+            if not any(cache == "documents" and full.startswith(name + " ") for cache, full in matches):
+                matches.add(("documents", name))
+        for cache, file_name in sorted(matches):
+            cache = cache.lower()
+            if cache == "documents" or kc.is_media_file(file_name, cache):
+                self._store_document(file_name, cache)
 
-    def _store_document(self, file_name: str) -> None:
+    def _store_document(self, file_name: str, cache: str = "documents") -> None:
+        body = {"file": file_name, "text": ""}
+        if kc.is_media_file(file_name, cache):
+            body["cache"] = cache
+        else:
+            try:
+                document_client = _document_client()
+                doc = document_client.extract(file_name, self._environ())
+                body = {"file": doc["file"], "text": kc.redact(doc["text"]), "contentType": doc["contentType"], "pageCount": doc["count"]}
+            except Exception as err:  # noqa: BLE001 - the original remains useful when text extraction fails
+                logger.info("knowledge: attachment text unavailable (%s)", type(err).__name__)
         try:
-            document_client = _document_client()
-            doc = document_client.extract(file_name, self._environ())
-            body = {"file": doc["file"], "text": kc.redact(doc["text"]), "contentType": doc["contentType"], "pageCount": doc["count"]}
-        except Exception as err:  # noqa: BLE001 - keep the original even when the text cannot be extracted
-            logger.info("knowledge: no text for %s (%s)", file_name, type(err).__name__)
-            body = {"file": file_name, "text": ""}
-        try:
-            self._client.call("POST", "/raw/document", body=body, timeout=60)
+            self._client.call("POST", "/raw/document", body=body, timeout=90)
         except kc.KnowledgeError as err:
             logger.warning("knowledge: document not stored: %s", err.code)
 
@@ -236,7 +255,7 @@ class KnowledgeProvider(MemoryProvider):
         if tool_name != kc.TOOL_NAME:
             return json.dumps({"ok": False, "error": {"code": "usage_error", "message": f"unknown tool {tool_name}"}})
         try:
-            result = kc.run_tool(args or {}, client=self._client) if self._client else kc.run_tool(args or {}, self._environ())
+            result = kc.run_tool(args or {}, self._environ(), client=self._client)
         except Exception as err:  # noqa: BLE001 - never crash the agent loop
             logger.warning("%s failed: %s", kc.TOOL_NAME, type(err).__name__)
             result = {"ok": False, "error": {"code": "server_error", "message": f"Unexpected error ({type(err).__name__})"}}

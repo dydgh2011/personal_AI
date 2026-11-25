@@ -161,6 +161,21 @@ const MIGRATIONS: string[] = [
   ALTER TABLE facts ADD COLUMN kind TEXT;
   CREATE INDEX facts_kind ON facts(kind, status) WHERE kind IS NOT NULL;
   `,
+  // 4: derived media text and retry state. Purging the original also removes this row.
+  `
+  CREATE TABLE media_extractions (
+    raw_id TEXT PRIMARY KEY REFERENCES raw_items(id) ON DELETE CASCADE,
+    status TEXT NOT NULL CHECK (status IN ('complete', 'empty', 'failed')),
+    method TEXT NOT NULL CHECK (method IN ('ocr', 'transcription')),
+    text TEXT NOT NULL DEFAULT '',
+    code TEXT,
+    attempts INTEGER NOT NULL,
+    retry_at TEXT,
+    updated_at TEXT NOT NULL
+  );
+  CREATE INDEX raw_media_pending ON raw_items(received_at, id) WHERE blob IS NOT NULL AND text = '';
+  CREATE INDEX facts_observed_active ON facts(observed_on) WHERE status = 'active';
+  `,
 ];
 
 export interface OpenOptions {

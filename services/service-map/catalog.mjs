@@ -51,6 +51,12 @@ export const SERVICES = {
     description: '주인에 대해 아는 것(원본, 활동, 페이지·사실, 프로필). 대화와 첨부는 원본으로 남는다.',
     external: [{ name: '호스트 Ollama', purpose: '검색용 임베딩(꺼져 있으면 키워드 검색)' }],
   },
+  'knowledge-media': {
+    title: '첨부 OCR과 받아쓰기',
+    layer: 'core',
+    description: '지식 저장소의 이미지와 강의 음성·영상을 로컬에서 처리한다. 전용 Unix 소켓으로 결과를 돌려준다.',
+    external: [],
+  },
   school: {
     title: '학교 연결',
     layer: 'core',
