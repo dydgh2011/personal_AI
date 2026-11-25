@@ -32,17 +32,24 @@ services:
     environment:
       LEARNING_DB_PATH: /var/lib/learning/learning.db
       LEARNING_AI_KEY_FILE: /run/secrets/ai_key
-      LEARNING_PLANNER_URL: ${LEARNING_PLANNER_URL:-}
-      LEARNING_PLANNER_KEY_FILE: ${LEARNING_PLANNER_KEY_FILE:-}
-      LEARNING_BROKER_KEY_FILE: ${LEARNING_BROKER_KEY_FILE:-}
+      # L3: study blocks are proposed to the planner (owner approves there); its own key.
+      LEARNING_PLANNER_URL: http://planner:8091
+      LEARNING_PLANNER_KEY_FILE: /run/secrets/planner_learning_key
+      # L4-01: hermes-broker reads learning and proposes schedules with this key (query/propose only).
+      LEARNING_BROKER_KEY_FILE: /run/secrets/learning_broker_key
     secrets:
       - source: learning_ai_key
         target: ai_key
+      - source: learning_planner_key
+        target: planner_learning_key
+      - source: learning_broker_key
+        target: learning_broker_key
     volumes:
       - learning-data:/var/lib/learning
     networks:
       - learning-internal
       - learning-egress
+      - learning-link-internal      # learning, planner, hermes-broker only
     read_only: true
     tmpfs:
       - /tmp:size=16m
@@ -65,13 +72,34 @@ services:
         max-size: "10m"
         max-file: "3"
 
+  # Overlay: the broker forwards Kelly's learning queries and schedule proposals (fixed routes).
+  hermes-broker:
+    environment:
+      LEARNING_URL: http://learning:3000
+      LEARNING_KEY_FILE: /run/secrets/learning_key
+    secrets:
+      - source: learning_broker_key
+        target: learning_key
+    networks:
+      - learning-link-internal
+
 volumes:
   learning-data:
 
 networks:
   learning-egress:
     driver: bridge
+  # learning, planner and hermes-broker: learning <-> planner (study proposals) and broker -> learning
+  # (Kelly). broker -> planner already exists on planner-internal, so this adds no unused path. One
+  # network instead of two: Docker has only a few address ranges left (scripts/stack.ps1 verify-networks).
+  learning-link-internal:
+    driver: bridge
+    internal: true
 
 secrets:
   learning_ai_key:
     file: ./secrets/learning-ai.key      # empty until the owner adds a key
+  learning_planner_key:
+    file: ./secrets/learning-planner.key # services/learning/scripts/init-secrets.mjs (never printed)
+  learning_broker_key:
+    file: ./secrets/learning-broker.key  # services/learning/scripts/init-secrets.mjs (never printed)

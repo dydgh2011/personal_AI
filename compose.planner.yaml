@@ -22,7 +22,7 @@ services:
       TZ: America/Toronto
       PLANNER_TIME_ZONE: America/Toronto
       PLANNER_CLIENTS: hermes-broker=/run/secrets/broker_key
-      PLANNER_LEARNING_KEY_FILE: ${PLANNER_LEARNING_KEY_FILE:-}
+      PLANNER_LEARNING_KEY_FILE: /run/secrets/planner_learning_key   # Learning's key (GET /learning/availability, POST /learning/proposals only)
       PLANNER_DB_FILE: /var/lib/planner/planner.db
       GOOGLE_OAUTH_CLIENT_FILE: /run/secrets/google_oauth_client
       PLANNER_REDIRECT_URI: http://127.0.0.1:8720/oauth/callback
@@ -36,6 +36,8 @@ services:
         target: notifier_key
       - source: google_oauth_client
         target: google_oauth_client
+      - source: learning_planner_key        # defined in compose.learning.yaml
+        target: planner_learning_key
     volumes:
       - planner-data:/var/lib/planner      # planner.db: todos, plans, change log, Google tokens
     ports:
@@ -43,6 +45,7 @@ services:
     networks:
       - planner-internal     # hermes-broker and the notifier (no internet)
       - planner-egress
+      - learning-link-internal      # learning and hermes-broker (compose.learning.yaml)
     read_only: true
     tmpfs:
       - /tmp:size=16m
