@@ -34,18 +34,28 @@ HEADING = "📌 저장소 기록 (답에서 빠진 내용을 코드가 붙임)"
 
 # What the owner asked about -> which facts must show up in the answer: (question pattern, fact kinds,
 # word rule). A typed fact counts by its kind; an untyped one (stored before kinds) by the word rule.
+# The owner asks in Korean or English; facts are stored in English since 2026-11-26 and older ones are
+# Korean, so every pattern carries both.
 INTENTS = {
-    "weak": (re.compile(r"약점|약한|약해|틀린|틀렸|실수|부족|못하|weak", re.I), ("mistake", "score"), None),   # rule: _weak_words
-    "grading": (re.compile(r"비중|배점|성적|grading|weight", re.I), ("grading",), re.compile(r"배점|비중")),
-    "exam": (re.compile(r"기말|중간|시험\s*(날짜|일정|언제)|final|midterm", re.I), ("exam",),
+    "weak": (re.compile(r"약점|약한|약해|틀린|틀렸|실수|부족|못하|weak|mistakes?|wrong|lost\s+(?:points?|marks?)|"
+                        r"struggl|bad\s+at|not\s+good\s+at", re.I), ("mistake", "score"), None),   # rule: _weak_words
+    "grading": (re.compile(r"비중|배점|성적|grading|grade\s*(?:breakdown|scheme|split)|weight|worth|marking\s*scheme|"
+                           r"how\s+much\s+(?:is|are|does)\b.*\b(?:count|worth)", re.I), ("grading",),
+                re.compile(r"배점|비중|grading|weight(?:s|ing)?\b|\bworth\b|marking\s*scheme|\d+\s*%\s*(?:each|of\s+the)", re.I)),
+    "exam": (re.compile(r"기말|중간|시험\s*(날짜|일정|언제)|final|midterm|exam\s*(?:date|time|schedule|room)|"
+                        r"when\s+is\s+(?:the|my)\s+\w*\s*(?:exam|test)", re.I), ("exam",),
              re.compile(r"\b\d{2}:\d{2}\s*[–-]\s*\d{2}:\d{2}")),   # 09:00–12:00, not 2.1:10
-    "practice": (re.compile(r"연습|문제는?\s*어디|어디서\s*풀|교재|exercise|practice", re.I), ("resource",),
-                 re.compile(r"연습문제|Exercise|\d+\s*문제")),
+    "practice": (re.compile(r"연습|문제는?\s*어디|어디서\s*풀|교재|exercise|practi[cs]e|problem\s*sets?|past\s*(?:exams?|papers?)|"
+                            r"textbook|where\s+(?:can|do|should)\s+i\s+(?:practi|study|find)", re.I), ("resource",),
+                 re.compile(r"연습문제|Exercise|\d+\s*문제|\b\d+\s*(?:problems|questions)\b|problem\s*sets?|past\s*(?:exams?|papers?)|"
+                            r"practice\s*(?:problems|questions|exams?)", re.I)),
 }
 TOTAL_SCORE = re.compile(r"\d+(?:\.\d+)?/\d+(?:\.\d+)?\s*\(\d+(?:\.\d+)?%")
-HEADLINE_COUNT = re.compile(r"(?<![\d.])(\d{2,})\s*(?:개|문제)")   # "Exercise 109개", "63문제": the total of a list
+# "Exercise 109개", "63문제", "109 exercises", "63 problems": the total of a list
+HEADLINE_COUNT = re.compile(r"(?<![\d.])(\d{2,})\s*(?:개|문제|exercises\b|problems\b|questions\b)", re.I)
 DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b|(?<=\()\d{1,2}/\d{1,2}(?=[\s)])")   # 2026-10-15, (11/05), (12/03 목)
 PAGE_REF = re.compile(r"\bp\d+(?:[–-]\d*)?")
+HANGUL = re.compile(r"[가-힣]")   # two-letter Korean names (선대) are specific enough; two-letter Latin ones are not
 NUMBER = re.compile(r"(?<![A-Za-z\d.])\d+(?:\.\d+)?(?:/\d+(?:\.\d+)?)?%?")   # not codes like MAT223, Q2
 
 _lock = threading.Lock()
@@ -93,14 +103,18 @@ def _page_index(client) -> list[dict[str, Any]]:
         if p.get("type") not in ("course", "topic"):
             continue
         names = {_squash(p.get("title", ""))}
-        if p.get("type") == "course":   # course codes have aliases (MAT223H5, 선형대수)
+        # aliases: course codes and Korean names of English pages (MAT223H5, 선형대수, 고유값), so a Korean
+        # question finds an English page. /pages lists them; an older service without them: one read per course.
+        if isinstance(p.get("aliases"), list):
+            names |= {_squash(str(a)) for a in p["aliases"]}
+        elif p.get("type") == "course":
             try:
                 full = client.call("GET", "/page", {"ref": p["slug"]})
                 names |= {_squash(a) for a in (full.get("page") or {}).get("aliases") or []}
             except kc.KnowledgeError:
                 pass
         pages.append({"slug": p["slug"], "title": p["title"], "type": p["type"],
-                      "names": sorted(n for n in names if len(n) >= 3)})
+                      "names": sorted(n for n in names if len(n) >= 3 or (len(n) == 2 and HANGUL.search(n)))})
     with _lock:
         _index.update(at=time.time(), pages=pages)
     return pages
@@ -117,7 +131,7 @@ def _render(result: dict[str, Any]) -> str:
     page = result.get("page") or {}
     lines = [f"### {page.get('title')} ({page.get('type')})"]
     if page.get("summary"):
-        lines.append(f"요약: {page['summary']}")
+        lines.append(f"Summary: {page['summary']}")
     for f in result.get("facts") or []:
         lines.append(f"- {f.get('text')}")
     for group in result.get("linkedFacts") or []:

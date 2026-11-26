@@ -316,6 +316,92 @@ class CourseBriefTest(unittest.TestCase):
             plugin.cb.check, plugin.sb.check = old
 
 
+class EnglishStoreTest(unittest.TestCase):
+    """Stored text is English since 2026-11-26; the owner may still ask in Korean, older facts stay Korean."""
+
+    def setUp(self):
+        cb = plugin.cb
+        cb._index.update(at=0.0, pages=[])
+        cb._pending.clear()
+        pages = {
+            "linear-algebra": {"page": {"slug": "linear-algebra", "title": "Linear Algebra", "type": "course",
+                                        "aliases": ["MAT223", "선형대수"]},
+                               "facts": [{"id": "1", "text": "Test 1: 47/50 (94%). Q2 calculation mistake (10→18)"},
+                                         {"id": "2", "text": "Grading: 2 tests 20% each · final 40%"},
+                                         {"id": "3", "text": "Final exam 2026-12-19 (Sat) 09:00–12:00, RA Gym"},
+                                         {"id": "4", "text": "Practice: 109 exercises by chapter: ch1 10 · ch2 18"}],
+                               "links": [{"relation": "covers", "to": {"slug": "eigen", "title": "Eigenvalues", "type": "topic"}}]},
+            "eigen": {"page": {"slug": "eigen", "title": "Eigenvalues", "type": "topic", "aliases": ["고유값"]},
+                      "facts": [{"id": "5", "text": "MAT223 Test 1 5(c): wrong justification, lost 2.5 marks"}]},
+        }
+        self.client = FakeClient({
+            ("GET", "/pages"): {"pages": [
+                {"slug": "linear-algebra", "title": "Linear Algebra", "type": "course", "aliases": ["MAT223", "선형대수"]},
+                {"slug": "eigen", "title": "Eigenvalues", "type": "topic", "aliases": ["고유값"]},
+                {"slug": "gym", "title": "Gym", "type": "habit", "aliases": ["헬스"]}]},
+            ("GET", "/page"): lambda q: pages[q["ref"]],
+        })
+        self.cb = cb
+
+    def test_rules_and_tool_say_store_in_english_with_korean_aliases(self):
+        self.assertIn("Store in English", plugin.RULES)
+        self.assertIn("Korea", plugin.RULES)
+        self.assertNotIn("(Korean, course codes)", plugin.RULES)
+        self.assertIn("written in English", kc.SCHEMA["description"])
+        self.assertNotIn("Korean, course codes", kc.SCHEMA["description"])
+        self.assertIn("선형대수", kc.SCHEMA["parameters"]["properties"]["aliases"]["description"])
+        skill = (PLUGIN_DIR.parents[1] / "skills" / "personal-ai-knowledge" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertIn("## Stored language: English", skill)
+        self.assertNotIn("in the owner's language", skill)
+        self.assertNotIn("Korean and course codes", skill)
+
+    def test_korean_question_finds_english_pages_by_alias_without_extra_reads(self):
+        text = self.cb.brief(self.client, "선형대수 약점 알려줘", "s1")
+        self.assertIn("### Linear Algebra (course)", text)
+        self.assertEqual(self.cb.brief(self.client, "고유값 어디서 틀렸지", "s2").count("### Eigenvalues"), 1)
+        self.assertEqual(self.cb.brief(self.client, "오늘 헬스 갔어", "s3"), "")          # not a course/topic
+        page_reads = [c for c in self.client.calls if c[1] == "/page" and c[2]["ref"] not in ("linear-algebra", "eigen")]
+        self.assertEqual(page_reads, [])
+        self.assertEqual(sum(1 for c in self.client.calls if c[1] == "/pages"), 1)        # aliases came with the index
+
+    def test_english_untyped_facts_are_picked_for_each_question(self):
+        page = "Linear Algebra"
+        facts = [(page, {"text": t}) for t in (
+            "Test 1: 47/50 (94%). Q2 calculation mistake (10→18)",
+            "Grading: 2 tests 20% each · final 40%",
+            "Final exam 2026-12-19 (Sat) 09:00–12:00, RA Gym",
+            "Practice: 109 exercises by chapter: ch1 10 · ch2 18",
+            "MAT223 Test 1 5(c): wrong justification, lost 2.5 marks",
+            "Late: -10% per day",
+            "Office hours Mon 14:00–15:00 (not an exam)",
+        )]
+        texts = lambda query: [t for _, t in self.cb._required(query, facts)]
+        weak = ["Test 1: 47/50 (94%). Q2 calculation mistake (10→18)", "MAT223 Test 1 5(c): wrong justification, lost 2.5 marks"]
+        self.assertEqual(texts("What are my weak points in MAT223?"), weak)
+        self.assertEqual(texts("선형대수 약점 알려줘"), weak)
+        self.assertEqual(texts("How is MAT223 weighted? grading?"), ["Grading: 2 tests 20% each · final 40%"])
+        self.assertEqual(texts("배점 알려줘"), ["Grading: 2 tests 20% each · final 40%"])
+        self.assertIn("Final exam 2026-12-19 (Sat) 09:00–12:00, RA Gym", texts("When is the final exam?"))
+        self.assertEqual(texts("Where can I practice? past exams?"), ["Practice: 109 exercises by chapter: ch1 10 · ch2 18"])
+        self.assertEqual(texts("연습문제 어디서 풀어"), ["Practice: 109 exercises by chapter: ch1 10 · ch2 18"])
+        # English mistake words, without catching rules
+        for text in ("Q3 wrong denominator", "lost 2 marks on Q4", "careless sign error, missed (b)", "weak point: proofs"):
+            self.assertTrue(kc.MISTAKE.search(text), text)
+        for text in ("Late: -10% per day", "No justification means 0 marks", "Grading: final 40%"):
+            self.assertFalse(kc.MISTAKE.search(text), text)
+
+    def test_english_headline_count_is_never_optional(self):
+        fact = "Practice: 109 exercises by chapter: ch1 10 · ch2 18 · ch3 17"
+        self.assertFalse(self.cb._covered(fact, "ch1 10, ch2 18, ch3 17"))
+        self.assertTrue(self.cb._covered(fact, "109 exercises (10, 18, 17)"))
+
+    def test_check_appends_english_facts_left_out(self):
+        self.cb.brief(self.client, "MAT223 weak points?", "s1")
+        out = self.cb.check("Justification T/F is weak.", "s1")
+        self.assertIn("[Linear Algebra] Test 1: 47/50 (94%)", out)
+        self.assertIn("[Eigenvalues] MAT223 Test 1 5(c): wrong justification", out)
+
+
 class ScheduleBriefTest(unittest.TestCase):
     """Code lists every dated item, so 'first/next' never comes from one course."""
 

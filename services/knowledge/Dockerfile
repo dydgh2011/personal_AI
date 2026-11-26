@@ -6,6 +6,8 @@ COPY package.json package-lock.json .npmrc ./
 RUN npm ci
 COPY tsconfig.json ./
 COPY src ./src
+# Only for the build-time test of the operator script (src/english-apply.test.ts); not in the runtime image.
+COPY scripts/english-apply.mjs ./scripts/
 RUN npm run build && npm test && find dist -name '*.test.js*' -delete
 
 FROM node:24-bookworm-slim

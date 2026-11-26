@@ -23,7 +23,7 @@ export function chunk(text: string, size = CHUNK_CHARS): string[] {
   return parts.filter(Boolean);
 }
 
-/** URL-safe, readable slug; keeps Korean letters. */
+/** URL-safe, readable slug; keeps Korean letters (older Korean pages keep their slug when renamed). */
 export function slugify(title: string): string {
   const slug = title
     .normalize('NFKC')
@@ -49,10 +49,32 @@ export function queryWords(q: string): string[] {
   return [...new Set(words.filter((w) => w.length >= 2 || /[가-힣]/.test(w)))].slice(0, 12);
 }
 
-/** FTS5 query: any of the words, each as a prefix. Words contain only letters/digits, so no quoting issues. */
-export function ftsQuery(q: string): string | null {
-  const words = queryWords(q);
+/**
+ * FTS5 query: any of the words, each as a prefix. Words contain only letters/digits, so no quoting issues.
+ * `extra` adds the words of other names for what the question mentions (a page's English title when the
+ * question used its Korean alias, and the other way round), so a Korean question finds English text.
+ */
+export function ftsQuery(q: string, extra: string[] = []): string | null {
+  const words = [...new Set([...queryWords(q), ...extra.flatMap((e) => queryWords(e))])].slice(0, 24);
   return words.length ? words.map((w) => `"${w}"*`).join(' OR ') : null;
+}
+
+/** Lowercase letters and digits only: "Linear Algebra" -> "linearalgebra", "선형대수는" -> "선형대수는". */
+export function squash(text: string): string {
+  return text.normalize('NFKC').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+/**
+ * Whether a page name (title or alias) is mentioned in a question, spaces and punctuation ignored, so a
+ * Korean particle after the name still counts ("선형대수는"). Short names must be a whole word, so
+ * "me" or "AI" does not match inside "game" or "said".
+ */
+export function mentions(question: string, name: string): boolean {
+  const n = squash(name);
+  if (!n) return false;
+  if (/[가-힣]/.test(n)) return n.length >= 2 && squash(question).includes(n);
+  if (n.length >= 4) return squash(question).includes(n);
+  return n.length >= 2 && queryWords(question).some((w) => w === n);
 }
 
 /** A short excerpt around the first query word (or the start). */

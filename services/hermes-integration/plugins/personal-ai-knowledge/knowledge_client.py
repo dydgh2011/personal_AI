@@ -124,10 +124,14 @@ SCHEMA: dict[str, Any] = {
         "Pages (one per subject: courses, topics, goals, projects, people, habits, places) hold facts with dates "
         "and links; activities are a timeline of what the owner did; every chat turn and attached document is "
         "kept as a raw original automatically. "
-        "search (q, kinds?): keyword + meaning search (use the store's words: Korean, course codes); use it before "
-        "saying you don't know. page (page): one page with facts, links, recent activities, and linkedFacts (facts "
+        "search (q, kinds?): keyword + meaning search; stored text is English (Korean only for Korea-specific names; "
+        "older entries may be Korean), and a page's Korean alias also finds its English facts. Search with the English "
+        "subject name or course code, and try the Korean name too when nothing comes back; use it before saying you "
+        "don't know. page (page): one page with facts, links, recent activities, and linkedFacts (facts "
         "on linked pages that mention it). pages (type?): the index. page_save (page or title+type, summary?, "
-        "aliases?): create/update a page. fact_add (page, text, fact_kind, observed_on?): a new fact; fact_kind says "
+        "aliases?): create/update a page; titles, summaries, facts and activities are written in English (keep only "
+        "Korea-specific names in Korean) and the Korean name the owner uses goes in aliases. "
+        "fact_add (page, text, fact_kind, observed_on?): a new fact; fact_kind says "
         "what it records: score (test result), mistake (lost point, weak point), exam (exam date/time/place), "
         "deadline, grading (weights, rules), resource (book, notes, exercises), habit, preference, other. "
         "fact_change (fact_id, text and/or fact_kind | remove+reason): correct, re-kind or drop a fact (history is "
@@ -155,9 +159,10 @@ SCHEMA: dict[str, Any] = {
             "title": {"type": "string", "description": "page_save: page title (new pages need title and type). activity_add/note: title."},
             "type": {"type": "string", "enum": PAGE_TYPES, "description": "page_save: page type (pages: filter)."},
             "summary": {"type": "string", "description": "page_save: 1-5 sentences: what this is to the owner now."},
-            "aliases": {"type": "array", "items": {"type": "string"}, "description": "page_save: other names (e.g. course code)."},
+            "aliases": {"type": "array", "items": {"type": "string"}, "description": "page_save: other names: course code, "
+                        "the Korean name the owner uses (e.g. MAT223, 선형대수)."},
             "archived": {"type": "boolean", "description": "page_save: true hides a page that no longer matters."},
-            "text": {"type": "string", "description": "fact_add/fact_change: one short fact. note: the text to keep."},
+            "text": {"type": "string", "description": "fact_add/fact_change: one short fact, in English. note: the text to keep."},
             "fact_kind": {"type": "string", "enum": FACT_KINDS, "description": "fact_add/fact_change: what the fact records."},
             "observed_on": {"type": "string", "description": "fact_add/fact_change: YYYY-MM-DD the fact was true (default today)."},
             "source_raw_id": {"type": "string", "description": "fact_add/activity_add: id of the raw original it came from."},
@@ -266,10 +271,13 @@ COURSE_NOTE = ("Answering about this course: keep the specifics written here ins
                "records a lost point or a mistake: for weak points, first give each test's total score and percent as context, then cover each of them with its own detail (which "
                "question, what exactly went wrong, what was miscalculated); a linked topic is weak only if a fact says "
                "so. Before replying, check that every number in the facts you used (total score and percent, per-question points, per-chapter exercise counts) is in your reply. Tell the owner in plain words: never name fields or tools (linkedFacts, recordedMistakes, page, ids).")
-# Untyped facts only (typed ones go by kind == "mistake"): a fact that records a lost point or a mistake
-# (Korean store text): "계산 실수", "정당화 실패", "0/2.5", "0점", "잘못" ...
-# Not "감점"/"0점" alone: rules such as "늦으면 10% 감점" or "근거 없는 T/F는 0점" are not the owner's mistakes.
-MISTAKE = re.compile(r"실수|실패|못\s?함|못했|약함|약점|잘못|틀림|틀렸|근거가 틀|누락|빠짐|(?<![\d.])0/\d")
+# Untyped facts only (typed ones go by kind == "mistake"): a fact that records a lost point or a mistake.
+# Korean (older store text): "계산 실수", "정당화 실패", "0/2.5", "잘못" ...; English (stored since 2026-11-26):
+# "calculation mistake", "wrong justification", "lost 2 marks", "weak point", "missed (c)" ...
+# Not "감점"/"0점"/"penalty" alone: rules such as "늦으면 10% 감점" or "late: -10% per day" are not the owner's mistakes.
+MISTAKE = re.compile(r"실수|실패|못\s?함|못했|약함|약점|잘못|틀림|틀렸|근거가 틀|누락|빠짐|(?<![\d.])0/\d|"
+                     r"\bmistakes?\b|\bwrong\b|\bincorrect(?:ly)?\b|\blost\s+(?:\d+(?:\.\d+)?\s*)?(?:points?|marks?)\b|"
+                     r"\bweak(?:ness|nesses)?\b|\bmissed\b|\bforgot\b|\bcareless\b|\bfailed\b|\bconfused\b", re.I)
 MISTAKES_MAX = 12
 
 
@@ -294,7 +302,7 @@ def _linked_facts(client: Client, result: dict[str, Any]) -> list[dict[str, Any]
     """Facts on directly linked pages that mention this page (title or alias).
 
     Course results and weak points are often kept on topic pages ("MAT223 Test 1 5(c) ..." on
-    "고유값과 대각화"); without this a course page only shows the topic titles. One level, read-only.
+    "Eigenvalues and Diagonalization"); without this a course page only shows the topic titles. One level, read-only.
     """
     page = result.get("page") or {}
     names = {_squash(n) for n in [page.get("title"), *(page.get("aliases") or [])] if n and len(_squash(n)) >= 2}

@@ -272,10 +272,13 @@ describe('nightly knowledge review', () => {
     const summaries = kb.listRaw(new URLSearchParams({ source: 'system' }));
     const daily = summaries.find((item) => item.kind === 'daily-review')!;
     assert.equal(daily.date, '2026-11-24');
-    assert.match(kb.getRaw(daily.id, new URLSearchParams()).text, /활동 1건.*45분/);
+    assert.match(kb.getRaw(daily.id, new URLSearchParams()).text, /activities: 1 · recorded time: 45 min/);
+    assert.match(kb.getRaw(daily.id, new URLSearchParams()).text, /Activities\n- 2026-11-24 CSC207 study \(45 min\)/);
+    assert.equal(daily.title, 'Daily knowledge review 2026-11-24');
+    assert.equal(timeline.activities[0].title, 'CSC207 study');
     assert.deepEqual(kb.runNightlyReview('00:15'), { days: 0, weeks: 0, activities: 0, facts: 0 });
     kb.changeActivity(timeline.activities[0].id, { remove: true }, 'hermes');
-    assert.match(kb.getRaw(daily.id, new URLSearchParams()).text, /활동 0건/);
+    assert.match(kb.getRaw(daily.id, new URLSearchParams()).text, /activities: 0/);
     now = new Date('2026-11-26T05:14:59Z');
     assert.equal(kb.runNightlyReview('00:15').days, 0);
     now = new Date('2026-11-26T05:15:00Z');
@@ -442,6 +445,100 @@ describe('search and recall', () => {
     assert.doesNotMatch(p.text, /사실 0/); // me facts are still capped
     assert.doesNotMatch(p.pages, /취향과 피드백/);
     assert.equal(kb.getPage('피드백').page.slug, 'preferences'); // found by alias too
+  });
+});
+
+describe('stored in English (owner decision 2026-11-26)', () => {
+  it('creates the default pages in English with the Korean names as aliases', () => {
+    const { kb } = setup();
+    assert.equal(kb.getPage('me').page.title, 'Me (owner)');
+    const prefs = kb.getPage('preferences').page;
+    assert.equal(prefs.title, 'Preferences and feedback');
+    assert.match(prefs.summary, /^Preferences and feedback the owner gave/);
+    assert.equal(kb.findPage('취향과 피드백')?.slug, 'preferences');
+    assert.equal(kb.findPage('나')?.slug, 'me');
+  });
+
+  it('renames the old Korean default pages once on start, logged, slug kept, old title as alias', () => {
+    const { kb, db, dir } = setup();
+    // An existing store from before the decision.
+    db.prepare("UPDATE pages SET title = '나 (owner)', aliases = '[]' WHERE slug = 'me'").run();
+    db.prepare("UPDATE pages SET title = '취향과 피드백', summary = '주인이 시스템에 준 취향과 피드백. 모든 대화와 작업에서 항상 따른다.', aliases = ? WHERE slug = 'preferences'")
+      .run(JSON.stringify(['preferences', '피드백', '취향', '선호']));
+    kb.addFact({ page: 'preferences', text: 'Prefers short answers', kind: 'preference' }, 'hermes');
+    const before = kb.changes(200).length;
+    const restart = () => new Knowledge(db, { timeZone: 'America/Toronto', blobDir: join(dir, 'blobs'), documentsDir: null, embedder: null });
+    const again = restart();
+    const me = again.getPage('me').page;
+    assert.deepEqual([me.slug, me.title, me.aliases], ['me', 'Me (owner)', ['나 (owner)']]);
+    const prefs = again.getPage('preferences');
+    assert.equal(prefs.page.slug, 'preferences');
+    assert.equal(prefs.page.title, 'Preferences and feedback');
+    assert.deepEqual(prefs.page.aliases, ['preferences', '피드백', '취향', '선호', '취향과 피드백']);
+    assert.match(prefs.page.summary, /^Preferences and feedback/);
+    assert.deepEqual(prefs.facts.map((f) => f.text), ['Prefers short answers']); // facts untouched
+    const logged = again.changes(200).slice(0, again.changes(200).length - before);
+    assert.equal(logged.length, 2);
+    assert.ok(logged.every((c) => c.actor === 'system' && c.action === 'update' && /owner decision 2026-11-26/.test(String((c.detail as { reason: string }).reason))));
+    assert.ok(logged.some((c) => (c.detail as { before: { title: string } }).before.title === '취향과 피드백'));
+    // Idempotent: a second start changes nothing; a title the owner chose later is left alone.
+    restart();
+    assert.equal(again.changes(200).length, before + 2);
+    again.savePage({ page: 'me', title: '용호' }, 'hermes');
+    restart();
+    assert.equal(again.getPage('me').page.title, '용호');
+    assert.equal(again.changes(200).length, before + 3);
+  });
+
+  it('finds English pages and facts from a Korean question through aliases, and old Korean facts from English', async () => {
+    const { kb } = setup();
+    kb.savePage({ title: 'Linear Algebra', type: 'course', aliases: ['MAT223', '선형대수'] }, 'hermes');
+    kb.addFact({ page: 'Linear Algebra', text: 'Final exam: 2026-12-16 09:00–12:00, RA Gym A/B', kind: 'exam' }, 'hermes');
+    kb.savePage({ title: 'Eigenvalues', type: 'topic', aliases: ['고유값'] }, 'hermes');
+    kb.addFact({ page: 'Eigenvalues', text: 'MAT223 Test 1 5(c): wrong justification, lost 2.5/2.5', kind: 'mistake' }, 'hermes');
+    kb.savePage({ title: 'Gym', type: 'habit', aliases: ['헬스'] }, 'hermes');
+    kb.addFact({ page: 'Gym', text: '월·수·금 아침 7시' }, 'hermes'); // an older Korean fact
+    const exam = await kb.search('선형대수 기말 언제야?');
+    assert.ok(exam.some((h) => h.kind === 'fact' && /Final exam/.test(h.snippet)), JSON.stringify(exam));
+    assert.ok(exam.some((h) => h.kind === 'page' && h.page?.title === 'Linear Algebra'));
+    const weak = await kb.search('고유값에서 틀린 거');
+    assert.ok(weak.some((h) => h.kind === 'fact' && /wrong justification/.test(h.snippet)));
+    const recall = await kb.recall('선형대수는 시험이 언제지');
+    assert.match(recall.text, /Final exam: 2026-12-16/);
+    const old = await kb.search('When do I go to the gym?');
+    assert.ok(old.some((h) => h.kind === 'fact' && /아침 7시/.test(h.snippet)));
+    assert.equal(kb.findPage('선형대수')?.title, 'Linear Algebra');
+    // Short Latin names only as whole words: "me"-like aliases do not drag in unrelated pages.
+    kb.savePage({ title: 'Artificial Intelligence', type: 'topic', aliases: ['AI'] }, 'hermes');
+    assert.ok(!(await kb.search('I said hello')).some((h) => h.page?.title === 'Artificial Intelligence'));
+  });
+
+  it('records activities reported in English or Korean with English titles', () => {
+    const now = new Date('2026-11-25T05:16:00Z');
+    const { kb } = setup({ now: () => now });
+    kb.savePage({ title: 'CSC263', type: 'course' }, 'hermes');
+    kb.addRaw({
+      source: 'chat', kind: 'discord-turn', occurredAt: '2026-11-24T23:00:00Z',
+      text: [
+        'owner: I studied CSC263 for 1.5 hours',
+        'worked out for half an hour',
+        'did laundry',
+        'I will study CSC207 tomorrow',
+        '오늘 CSC263 5장 1시간 반 복습했어',
+        '빨래 했어',
+        '',
+        'kelly: ok',
+      ].join('\n'),
+    }, 'hermes');
+    kb.runNightlyReview('00:15');
+    const acts = kb.timeline(new URLSearchParams({ from: '2026-11-24', to: '2026-11-24' })).activities
+      .map((a) => [a.title, a.kind, a.minutes]).sort();
+    assert.deepEqual(acts, [
+      ['CSC263 chapter 5 review', 'study', 90],
+      ['CSC263 study', 'study', 90],
+      ['laundry', 'chore', null], // "did laundry" and "빨래 했어" in one message: the same activity, kept once
+      ['workout', 'exercise', 30],
+    ].sort());
   });
 });
 

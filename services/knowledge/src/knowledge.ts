@@ -5,7 +5,7 @@ import { basename, extname, join, sep } from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { EMBED_DIMENSIONS, transaction } from './db.js';
 import { EmbedError, type Embedder } from './embed.js';
-import { chunk, clip, ftsQuery, slugify, snippet } from './text.js';
+import { chunk, clip, ftsQuery, mentions, slugify, snippet } from './text.js';
 import { IMAGE_EXTENSIONS, MAX_MEDIA_BYTES, SOUND_EXTENSIONS, mediaKind, type MediaJob, type MediaResult } from './media.js';
 import { closedDay, isDay, lastClosedWeek, normalizedActivity, reportedEntries, shiftDay, utcDayStart, type ReviewPeriod } from './review.js';
 
@@ -27,6 +27,15 @@ const conflict = (message: string, extra: Record<string, unknown> = {}) => new K
 export type Actor = 'hermes' | 'system' | 'operator' | 'dashboard';
 
 export const PREFERENCES_SLUG = 'preferences';
+/** Default pages, in English; the Korean titles they had before 2026-11-26 become aliases on deploy. */
+const ME = { title: 'Me (owner)', oldTitle: '나 (owner)', aliases: ['나'] };
+const PREFERENCES = {
+  title: 'Preferences and feedback',
+  oldTitle: '취향과 피드백',
+  summary: 'Preferences and feedback the owner gave the system. Always follow them, in every conversation and task.',
+  oldSummary: '주인이 시스템에 준 취향과 피드백. 모든 대화와 작업에서 항상 따른다.',
+  aliases: ['preferences', 'feedback', '취향과 피드백', '피드백', '취향', '선호'],
+};
 export const PAGE_TYPES = ['me', 'course', 'topic', 'goal', 'project', 'person', 'habit', 'place', 'org', 'other'] as const;
 export const ACTIVITY_KINDS = [
   'study', 'class', 'assignment', 'exam', 'project', 'coding', 'reading', 'experiment', 'exercise',
@@ -36,10 +45,10 @@ export const ACTIVITY_KINDS = [
  * What a fact records, so code picks facts by kind instead of matching words. Optional: null = untyped
  * (facts stored before kinds existed, or when nothing fits); readers fall back to their old rules for those.
  *   score       a test/quiz/assignment result (47/50 (94%), Term Test 2 11.5/25)
- *   mistake     a lost point, mistake or weak point (Test 1 5(c) 근거가 틀려 0점)
- *   exam        an exam's date, time or place (기말 2026-12-16 09:00–12:00, RA Gym)
- *   deadline    a due date (A2 마감 2026-11-28)
- *   grading     grading rules and weights (배점, 비중, 늦으면 10% 감점)
+ *   mistake     a lost point, mistake or weak point (Test 1 5(c): wrong justification, 0/2.5)
+ *   exam        an exam's date, time or place (Final exam 2026-12-16 09:00–12:00, RA Gym)
+ *   deadline    a due date (A2 due 2026-11-28)
+ *   grading     grading rules and weights (weights, 10% off per late day)
  *   resource    where to study or practise (textbook, notes, exercise lists)
  *   habit       a routine the owner keeps
  *   preference  how the owner wants things done (likes, feedback)
@@ -263,29 +272,52 @@ export class Knowledge {
       .run(this.iso(), actor, action, entity, entityId, JSON.stringify(detail));
   }
 
+  // Default pages. Stored text is English (owner decision 2026-11-26: the owner learns in English, so Korean
+  // page names were unrecognisable); the Korean names stay as aliases so Korean questions still find them.
   private ensureMe() {
-    if (this.db.prepare("SELECT 1 FROM pages WHERE slug = 'me'").get()) return;
+    if (this.db.prepare("SELECT 1 FROM pages WHERE slug = 'me'").get()) return this.englishDefault('me', ME.title, { from: ME.oldTitle });
     const ts = this.iso();
     const id = randomUUID();
     this.db
-      .prepare("INSERT INTO pages (id, slug, title, type, summary, aliases, created_at, updated_at) VALUES (?, 'me', ?, 'me', '', '[]', ?, ?)")
-      .run(id, '나 (owner)', ts, ts);
+      .prepare("INSERT INTO pages (id, slug, title, type, summary, aliases, created_at, updated_at) VALUES (?, 'me', ?, 'me', '', ?, ?, ?)")
+      .run(id, ME.title, JSON.stringify(ME.aliases), ts, ts);
     this.indexPage(id);
   }
 
   /**
-   * The owner's preferences and feedback ("요약은 마감일 먼저", "광고 메일은 무시"): one page whose
+   * The owner's preferences and feedback ("deadline first in summaries", "ignore ad mail"): one page whose
    * active facts all go into every Hermes system prompt (profile compact), so feedback given once is
    * followed everywhere, in every later session.
    */
   private ensurePreferences() {
-    if (this.db.prepare(`SELECT 1 FROM pages WHERE slug = '${PREFERENCES_SLUG}'`).get()) return;
+    if (this.db.prepare(`SELECT 1 FROM pages WHERE slug = '${PREFERENCES_SLUG}'`).get()) {
+      return this.englishDefault(PREFERENCES_SLUG, PREFERENCES.title, { from: PREFERENCES.oldTitle, summary: PREFERENCES.summary, oldSummary: PREFERENCES.oldSummary });
+    }
     const ts = this.iso();
     const id = randomUUID();
     this.db
       .prepare("INSERT INTO pages (id, slug, title, type, summary, aliases, created_at, updated_at) VALUES (?, ?, ?, 'other', ?, ?, ?, ?)")
-      .run(id, PREFERENCES_SLUG, '취향과 피드백', '주인이 시스템에 준 취향과 피드백. 모든 대화와 작업에서 항상 따른다.', JSON.stringify(['preferences', '피드백', '취향', '선호']), ts, ts);
+      .run(id, PREFERENCES_SLUG, PREFERENCES.title, PREFERENCES.summary, JSON.stringify(PREFERENCES.aliases), ts, ts);
     this.indexPage(id);
+  }
+
+  /**
+   * Renames a default page created with the old Korean title, once, through savePage (same update path,
+   * change_log entry with before/after, actor "system"). The slug never changes; the old title is kept as an
+   * alias. Only the exact old default title (and summary) is replaced, so a name or summary the owner chose
+   * is left alone, and a second start finds nothing to do.
+   */
+  private englishDefault(slug: string, title: string, old: { from: string; summary?: string; oldSummary?: string }) {
+    const p = this.db.prepare('SELECT * FROM pages WHERE slug = ?').get(slug) as unknown as PageRow;
+    const change: Record<string, unknown> = {};
+    if (p.title === old.from) {
+      change.title = title;
+      const aliases = JSON.parse(p.aliases) as string[];
+      if (!aliases.includes(old.from)) change.aliases = [...aliases, old.from].slice(-20);
+    }
+    if (old.summary !== undefined && p.summary === old.oldSummary) change.summary = old.summary;
+    if (!Object.keys(change).length) return;
+    this.savePage({ page: slug, ...change, reason: 'Default page in English (owner decision 2026-11-26); the old Korean title stays as an alias' }, 'system');
   }
 
   // ---- search index maintenance ----
@@ -886,11 +918,12 @@ export class Knowledge {
     if (type) oneOf(type, 'type', PAGE_TYPES);
     const rows = this.db
       .prepare(
-        `SELECT p.slug, p.title, p.type, p.summary, (SELECT count(*) FROM facts f WHERE f.page_id = p.id AND f.status = 'active') AS facts
+        `SELECT p.slug, p.title, p.type, p.summary, p.aliases, (SELECT count(*) FROM facts f WHERE f.page_id = p.id AND f.status = 'active') AS facts
          FROM pages p WHERE p.archived = 0 ${type ? 'AND p.type = ?' : ''} ORDER BY p.type, p.title`,
       )
-      .all(...(type ? [type] : [])) as Array<{ slug: string; title: string; type: string; summary: string; facts: number }>;
-    return rows.map((r) => ({ slug: r.slug, title: r.title, type: r.type, summary: clip(r.summary, 140), facts: r.facts }));
+      .all(...(type ? [type] : [])) as Array<{ slug: string; title: string; type: string; summary: string; aliases: string; facts: number }>;
+    // aliases: a Korean question names an English page by its Korean alias (course brief matching).
+    return rows.map((r) => ({ slug: r.slug, title: r.title, type: r.type, summary: clip(r.summary, 140), aliases: JSON.parse(r.aliases) as string[], facts: r.facts }));
   }
 
   /**
@@ -1196,7 +1229,12 @@ export class Knowledge {
     return counts;
   }
 
-  private hasReportedActivity(entry: { at: string; title: string; kind: string; minutes?: number }, raw: Pick<RawRow, 'id' | 'occurred_at'>): boolean {
+  /** Kelly may have recorded it already, under the English title or (older activities) the owner's words. */
+  private hasReportedActivity(entry: { at: string; title: string; spoken: string; kind: string; minutes?: number }, raw: Pick<RawRow, 'id' | 'occurred_at'>): boolean {
+    return [entry.title, entry.spoken].some((title) => this.hasReportedTitle({ ...entry, title }, raw));
+  }
+
+  private hasReportedTitle(entry: { at: string; title: string; kind: string; minutes?: number }, raw: Pick<RawRow, 'id' | 'occurred_at'>): boolean {
     const stamp = Date.parse(raw.occurred_at);
     const nearbyStart = new Date(stamp - 15 * 60_000).toISOString();
     const nearbyEnd = new Date(stamp + 15 * 60_000).toISOString();
@@ -1215,11 +1253,12 @@ export class Knowledge {
   }
 
   private saveReview(kind: ReviewKind, period: ReviewPeriod): boolean {
-    const label = kind === 'daily-review' ? '일간 지식 정리' : '주간 지식 정리';
+    // English (owner decision 2026-11-26). Reviews saved before keep their Korean title: originals never change.
+    const label = kind === 'daily-review' ? 'Daily knowledge review' : 'Weekly knowledge review';
     const dates = period.from === period.to ? period.to : period.from + ' ~ ' + period.to;
     const result = this.addRaw({
       source: 'system', kind, externalId: kind + ':' + period.to, title: label + ' ' + dates,
-      occurredAt: utcDayStart(period.to, this.timeZone), text: label + '\n' + dates + '\n활동 기록과 저장된 사실 요약',
+      occurredAt: utcDayStart(period.to, this.timeZone), text: label + '\n' + dates + '\nSummary of recorded activities and stored facts',
       meta: { review: period },
     }, 'system');
     return !result.duplicate;
@@ -1247,13 +1286,13 @@ export class Knowledge {
     const dates = period.from === period.to ? period.to : period.from + ' ~ ' + period.to;
     const lines = [
       dates + ' · ' + this.timeZone,
-      '원본 ' + rawCount + '건 · 활동 ' + total.n + '건 · 기록된 시간 ' + total.minutes + '분' +
-        (total.withoutMinutes ? ' · 시간 미기록 ' + total.withoutMinutes + '건' : ''),
+      'Originals: ' + rawCount + ' · activities: ' + total.n + ' · recorded time: ' + total.minutes + ' min' +
+        (total.withoutMinutes ? ' · without time: ' + total.withoutMinutes : ''),
     ];
-    if (activity.length) lines.push('', '활동', ...activity.map((a) =>
-      '- ' + a.started_at + ' ' + a.title + (a.minutes === null ? '' : ' (' + a.minutes + '분)')));
-    if (total.n > activity.length) lines.push('나머지 활동은 타임라인에서 볼 수 있습니다.');
-    if (facts.length) lines.push('', '최근 사실', ...facts.map((f) =>
+    if (activity.length) lines.push('', 'Activities', ...activity.map((a) =>
+      '- ' + a.started_at + ' ' + a.title + (a.minutes === null ? '' : ' (' + a.minutes + ' min)')));
+    if (total.n > activity.length) lines.push('The other activities are in the timeline.');
+    if (facts.length) lines.push('', 'Recent facts', ...facts.map((f) =>
       '- ' + f.observed_on + ' ' + f.title + ' · ' + clip(f.text, 250)));
     return lines.join('\n');
   }
@@ -1644,7 +1683,7 @@ export class Knowledge {
       ranks.set(rowid, r);
     };
 
-    const fts = ftsQuery(query);
+    const fts = ftsQuery(query, this.otherNames(query));
     if (fts) {
       const rows = this.db
         .prepare('SELECT s.rowid, s.kind FROM search_fts JOIN search_items s ON s.rowid = search_fts.rowid WHERE search_fts MATCH ? ORDER BY bm25(search_fts) LIMIT 200')
@@ -1691,6 +1730,24 @@ export class Knowledge {
       hits.push(this.hit(item, query, r.keyword ? (r.similarity !== undefined ? 'both' : 'keyword') : 'meaning', r.similarity));
     }
     return hits;
+  }
+
+  /**
+   * The other names of pages the question mentions: stored text is English (owner decision 2026-11-26)
+   * while the owner may ask in Korean, and older text is Korean. A question naming a page by its title
+   * or any alias ("선형대수 시험 언제야") also searches its title and other aliases ("Linear Algebra",
+   * "MAT223"), so facts written under either name are found. Archived pages and "me" are left out.
+   */
+  private otherNames(query: string): string[] {
+    const pages = this.db.prepare("SELECT title, aliases FROM pages WHERE archived = 0 AND slug != 'me'").all() as Array<{ title: string; aliases: string }>;
+    const out: string[] = [];
+    for (const p of pages) {
+      const names = [p.title, ...(JSON.parse(p.aliases) as string[])];
+      if (!names.some((n) => mentions(query, n))) continue;
+      for (const n of names) if (!mentions(query, n) && !out.includes(n)) out.push(n);
+      if (out.length >= 12) break;
+    }
+    return out;
   }
 
   private hit(item: ItemRow, q: string, match: SearchHit['match'], similarity?: number): SearchHit {
