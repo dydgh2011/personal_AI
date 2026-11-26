@@ -139,3 +139,17 @@ pre.block { background: var(--panel-2); border: 1px solid var(--border); border-
   .kv { grid-template-columns: 1fr; }
   .kv dt { margin-top: 4px; }
 }
+
+/*
+ * Language switch (i18n): English labels run longer than Korean. On phones, buttons, link
+ * buttons, table headers and badges wrap instead of pushing the page sideways.
+ */
+.side-controls { flex-wrap: wrap; }
+button, a.btn { max-width: 100%; overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  button, a.btn { white-space: normal; text-align: center; }
+  th { white-space: normal; min-width: 4em; }
+  .badge { white-space: normal; overflow-wrap: anywhere; }
+  .row > * { min-width: 0; }
+  .side-controls { width: 100%; }
+}

@@ -1,5 +1,6 @@
 'use client';
 
+import { useT } from '@/i18n/client';
 import cytoscape, { type Core, type ElementDefinition, type StylesheetJson } from 'cytoscape';
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import s from './graph.module.css';
@@ -104,6 +105,7 @@ export function CytoGraph({
   label: string;
   tools?: ReactNode;
 }) {
+  const ui = useT().graphUi;
   const box = useRef<HTMLDivElement>(null);
   const cy = useRef<Core | null>(null);
   /** The view before the current focus began; restored when the selection is cleared. */
@@ -228,13 +230,13 @@ export function CytoGraph({
     <div className={s.wrap}>
       <div className={s.tools}>
         <label className={s.search}>
-          <span className={s.srOnly}>검색</span>
+          <span className={s.srOnly}>{ui.search}</span>
           <input type="search" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={searchPlaceholder} />
         </label>
-        {query.trim() && <span className="muted">{hits}개 찾음</span>}
+        {query.trim() && <span className="muted">{ui.found(hits)}</span>}
         {tools}
         <button type="button" onClick={() => cy.current?.animate({ fit: { eles: cy.current.elements(), padding: 30 }, duration: 250 })}>
-          전체 보기
+          {ui.fit}
         </button>
       </div>
       <div ref={box} className={s.canvas} role="img" aria-label={label} />

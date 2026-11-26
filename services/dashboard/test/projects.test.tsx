@@ -5,6 +5,9 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { changedSettings, latestStyleAnalysis, parseSettingsForm, settingsSummary, type SettingsPatch } from '@/lib/project-settings';
 import type { Project, Task } from '@/lib/types';
+import { ko } from '@/i18n';
+
+const err = ko.projects.err;
 
 // Route handlers and pages read the session cookie through next/headers.
 const cookie: { value: string | undefined } = { value: undefined };
@@ -62,39 +65,39 @@ describe('settings form', () => {
     const r = parseSettingsForm(form({
       ...base, styleMode: 'manual', styleGuide: ' feat: lower-case ', rules: 'Strict TS.\r\nNo deps.\r\n',
       forbiddenPaths: 'secrets/\r\n\r\n# keys\r\n*.pem\r\nsecrets/\r\n', authorName: 'Dev', authorEmail: 'dev@example.com',
-    }));
+    }), ko);
     expect(r).toEqual({ patch: {
       commitAuthor: { name: 'Dev', email: 'dev@example.com' },
       commitStyle: { mode: 'manual', guide: 'feat: lower-case' },
       agentInstructions: { rules: 'Strict TS.\nNo deps.', forbiddenPaths: ['secrets/', '*.pem'] },
     } });
-    expect(parseSettingsForm(form(base))).toEqual({ patch: {
+    expect(parseSettingsForm(form(base), ko)).toEqual({ patch: {
       commitAuthor: null, commitStyle: { mode: 'off', guide: null }, agentInstructions: { rules: '', forbiddenPaths: [] },
     } });
   });
 
   it.each([
-    [{ authorName: 'Dev' }, /both a name and an e-mail/],
-    [{ authorName: 'Dev <x>', authorEmail: 'a@example.com' }, /no < or >/],
-    [{ authorName: 'Dev', authorEmail: 'nope' }, /not a valid address/],
-    [{ styleMode: 'copy' }, /Choose a commit style mode/],
-    [{ styleMode: 'manual', styleGuide: '  ' }, /needs a guide/],
-    [{ rules: 'x'.repeat(4001) }, /at most 4000/],
-    [{ forbiddenPaths: '/etc/passwd' }, /not a relative path pattern/],
-    [{ forbiddenPaths: 'a/../b' }, /not a relative path pattern/],
-    [{ forbiddenPaths: 'a\\b' }, /not a relative path pattern/],
-    [{ forbiddenPaths: Array.from({ length: 51 }, (_, i) => `p${i}`).join('\n') }, /At most 50/],
+    [{ authorName: 'Dev' }, err.authorBoth],
+    [{ authorName: 'Dev <x>', authorEmail: 'a@example.com' }, err.authorName(100)],
+    [{ authorName: 'Dev', authorEmail: 'nope' }, err.authorEmail],
+    [{ styleMode: 'copy' }, err.chooseMode],
+    [{ styleMode: 'manual', styleGuide: '  ' }, err.manualNeedsGuide],
+    [{ rules: 'x'.repeat(4001) }, err.rules(4000)],
+    [{ forbiddenPaths: '/etc/passwd' }, err.badPath('/etc/passwd')],
+    [{ forbiddenPaths: 'a/../b' }, err.badPath('a/../b')],
+    [{ forbiddenPaths: 'a\\b' }, err.badPath('a\\b')],
+    [{ forbiddenPaths: Array.from({ length: 51 }, (_, i) => `p${i}`).join('\n') }, err.tooManyPaths(50)],
   ])('rejects %o', (fields, message) => {
-    const r = parseSettingsForm(form({ ...base, ...fields }));
-    expect('error' in r && r.error).toMatch(message);
+    const r = parseSettingsForm(form({ ...base, ...fields }), ko);
+    expect('error' in r && r.error).toBe(message);
   });
 
   it('names changed settings without values, and summarises a project', () => {
     const patch: SettingsPatch = { commitAuthor: { name: 'a', email: 'a@example.com' }, commitStyle: { mode: 'auto', guide: null }, agentInstructions: { rules: '', forbiddenPaths: ['x/'] } };
     expect(changedSettings(project(), patch)).toEqual(['commitAuthor', 'commitStyle', 'forbiddenPaths']);
     expect(changedSettings(project({ ...patch }), patch)).toEqual([]);
-    expect(settingsSummary(project({ ...patch }))).toBe('style auto · 1 forbidden · author (stored)');
-    expect(settingsSummary(project())).toBe('-');
+    expect(settingsSummary(project({ ...patch }), ko)).toBe([ko.projects.summary.style('auto'), ko.projects.summary.forbidden(1), ko.projects.summary.author].join(' · '));
+    expect(settingsSummary(project(), ko)).toBe('-');
   });
 
   it('finds the newest commit-style analysis in worker reports', () => {
@@ -128,7 +131,7 @@ describe('POST /api/projects/:id/settings', () => {
       ...base, csrf: session.csrf, styleMode: 'auto', rules: 'No deps.', forbiddenPaths: 'secrets/', authorName: 'Dev', authorEmail: 'dev@example.com',
     });
     expect(res.status).toBe(303);
-    expect(res.headers.get('location')).toMatch(/^\/projects\/hello\?ok=Saved/);
+    expect(res.headers.get('location')).toBe(`/projects/hello?ok=${encodeURIComponent(ko.flash.settingsSaved('commitAuthor, commitStyle, rules, forbiddenPaths'))}`);
     const patch = fetch.mock.calls.find(([, init]) => (init as RequestInit).method === 'PATCH')!;
     expect(patch[0]).toBe('http://controller.test:3000/projects/hello');
     expect((patch[1] as RequestInit & { headers: Record<string, string> }).headers.Authorization).toBe('Bearer tok');
@@ -159,7 +162,7 @@ describe('POST /api/projects/:id/settings', () => {
     res = await post('hello', { ...base, csrf: session.csrf, forbiddenPaths: '../x' });
     expect(res.headers.get('x-pai-rejected')).toBe('input');
     res = await post('..', { ...base, csrf: session.csrf });
-    expect(res.headers.get('location')).toMatch(/^\/projects\?error=Invalid%20project%20id/);
+    expect(res.headers.get('location')).toBe(`/projects?error=${encodeURIComponent(ko.flash.invalidProjectId)}`);
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -201,7 +204,7 @@ describe('project page', () => {
     const { commitStyle: _s, agentInstructions: _a, commitAuthor: _c, ...old } = project();
     vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(String(url).includes('/tasks') ? { items: [], total: 0, limit: 25, offset: 0 } : old), { status: 200 })));
     const html = renderToStaticMarkup(await page.default({ params: Promise.resolve({ id: 'hello' }), searchParams: Promise.resolve({}) }));
-    expect(html).toContain('registry before v7');
-    expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Save settings/);
+    expect(html).toContain(ko.projects.oldController);
+    expect(html).toMatch(new RegExp(`<button[^>]*disabled=""[^>]*>${ko.projects.save}`));
   });
 });

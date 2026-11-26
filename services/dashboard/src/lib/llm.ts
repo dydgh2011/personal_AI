@@ -47,7 +47,7 @@ async function gatewayGet<T>(path: string): Promise<T> {
   try {
     key = readSecret(settings.keyFile);
   } catch {
-    throw new Error('LLM gateway key is not configured (compose.llm.yaml)');
+    throw Object.assign(new Error('LLM gateway key is not configured (compose.llm.yaml)'), { local: 'llm_key' as const });
   }
   let res: Response;
   try {
@@ -57,9 +57,9 @@ async function gatewayGet<T>(path: string): Promise<T> {
       signal: AbortSignal.timeout(8000),
     });
   } catch {
-    throw new Error('LLM gateway unreachable');
+    throw Object.assign(new Error('LLM gateway unreachable'), { local: 'llm_unreachable' as const });
   }
-  if (!res.ok) throw new Error(`LLM gateway answered ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(`LLM gateway answered ${res.status}`), { local: 'llm_http' as const, status: res.status });
   return (await res.json()) as T;
 }
 
@@ -70,6 +70,6 @@ export async function llmUsage(days = 14): Promise<LlmUsage> {
 /** Aggregates for the usage graphs (GET /usage/series): sums and percentiles only, no rows. */
 export async function llmUsageSeries(q: { from: string; to: string; bucket: 'hour' | 'day'; by: 'client' | 'alias' | 'model' }): Promise<UsageSeries> {
   const data = await gatewayGet<UsageSeries>(`/usage/series?${new URLSearchParams(q).toString()}`);
-  if (!Array.isArray(data?.buckets) || !Array.isArray(data?.series)) throw new Error('LLM gateway sent an unexpected answer (is it updated?)');
+  if (!Array.isArray(data?.buckets) || !Array.isArray(data?.series)) throw Object.assign(new Error('LLM gateway sent an unexpected answer (is it updated?)'), { local: 'llm_unexpected' as const });
   return data;
 }

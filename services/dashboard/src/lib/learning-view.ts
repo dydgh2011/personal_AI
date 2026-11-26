@@ -3,61 +3,38 @@
  * Status words are always shown as text next to any color (color is never the only signal).
  */
 
+import type { Dict } from '@/i18n';
+
 export type Tone = 'ok' | 'warn' | 'bad' | 'info' | 'muted' | 'accent';
 export type LearningSearchParams = Promise<Record<string, string | string[] | undefined>>;
 
 export const LEARNING_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
 
-/** Skill levels 0-4 (same scale as goals' target level). */
-export const LEVELS = [
-  { level: 0, label: 'None', hint: 'not started' },
-  { level: 1, label: 'Aware', hint: 'knows the words' },
-  { level: 2, label: 'Guided', hint: 'can do it with help' },
-  { level: 3, label: 'Independent', hint: 'does it alone' },
-  { level: 4, label: 'Can teach', hint: 'explains and adapts it' },
-] as const;
+/** Skill levels 0-4 (same scale as goals' target level). Words: t.learn.levels[level]. */
+export const LEVELS = [0, 1, 2, 3, 4] as const;
 
-export const levelLabel = (level: number | null | undefined) => (level === null || level === undefined ? 'unverified' : `${level} · ${LEVELS[level]?.label ?? '?'}`);
+export const levelLabel = (level: number | null | undefined, t: Dict) =>
+  level === null || level === undefined ? t.learn.unverified : t.learn.levelWord(level, t.learn.levels[level]?.label ?? '?');
 
-const STATUS: Record<string, { tone: Tone; label: string }> = {
+const TONE: Record<string, Tone> = {
   // milestones
-  planned: { tone: 'muted', label: 'planned' },
-  active: { tone: 'info', label: 'active' },
-  completed: { tone: 'ok', label: 'completed' },
-  archived: { tone: 'muted', label: 'archived' },
+  planned: 'muted', active: 'info', completed: 'ok', archived: 'muted',
   // assignments
-  available: { tone: 'info', label: 'open' },
-  submitted: { tone: 'warn', label: 'awaiting evaluation' },
-  evaluated: { tone: 'warn', label: 'awaiting your decision' },
-  passed: { tone: 'ok', label: 'passed' },
-  revision_required: { tone: 'bad', label: 'revision required' },
+  available: 'info', submitted: 'warn', evaluated: 'warn', passed: 'ok', revision_required: 'bad',
   // evaluations
-  pending: { tone: 'info', label: 'running' },
-  failed: { tone: 'bad', label: 'failed' },
-  meets_rubric: { tone: 'ok', label: 'meets rubric' },
-  below_rubric: { tone: 'bad', label: 'below rubric' },
-  inconclusive: { tone: 'warn', label: 'inconclusive' },
+  pending: 'info', failed: 'bad', meets_rubric: 'ok', below_rubric: 'bad', inconclusive: 'warn',
   // gaps
-  suggested: { tone: 'warn', label: 'AI suggestion' },
-  open: { tone: 'bad', label: 'open' },
-  addressed: { tone: 'ok', label: 'addressed' },
-  dismissed: { tone: 'muted', label: 'dismissed' },
+  suggested: 'warn', open: 'bad', addressed: 'ok', dismissed: 'muted',
   // proposals
-  awaiting_user_approval: { tone: 'warn', label: 'awaiting approval' },
-  applied: { tone: 'ok', label: 'applied' },
-  rejected: { tone: 'muted', label: 'rejected' },
-  invalid: { tone: 'bad', label: 'invalid' },
+  awaiting_user_approval: 'warn', applied: 'ok', rejected: 'muted', invalid: 'bad',
   // domains / goals
-  exploring: { tone: 'info', label: 'exploring' },
-  paused: { tone: 'muted', label: 'paused' },
-  maintaining: { tone: 'ok', label: 'maintaining' },
-  achieved: { tone: 'ok', label: 'achieved' },
-  abandoned: { tone: 'muted', label: 'abandoned' },
+  exploring: 'info', paused: 'muted', maintaining: 'ok', achieved: 'ok', abandoned: 'muted',
 };
 
-export function statusView(status: string | null | undefined): { tone: Tone; label: string } {
-  if (!status) return { tone: 'muted', label: 'unknown' };
-  return STATUS[status] ?? { tone: 'muted', label: status.replace(/_/g, ' ') };
+export function statusView(status: string | null | undefined, t: Dict): { tone: Tone; label: string } {
+  if (!status) return { tone: 'muted', label: t.learn.statusUnknown };
+  const label = t.learn.status[status];
+  return label ? { tone: TONE[status] ?? 'muted', label } : { tone: 'muted', label: status.replace(/_/g, ' ') };
 }
 
 /** Today's calendar date (YYYY-MM-DD) in the given or the server's timezone. */
@@ -72,13 +49,12 @@ export function todayIso(now = new Date(), timeZone?: string): string {
 const dayNumber = (iso: string) => Math.round(Date.UTC(+iso.slice(0, 4), +iso.slice(5, 7) - 1, +iso.slice(8, 10)) / 86_400_000);
 
 /** How a calendar-date deadline relates to today. */
-export function deadlineState(date: string | null | undefined, today: string): { days: number; tone: Tone; label: string } | null {
+export function deadlineState(date: string | null | undefined, today: string, t: Dict): { days: number; tone: Tone; label: string } | null {
   if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) return null;
   const days = dayNumber(date) - dayNumber(today);
-  if (days < 0) return { days, tone: 'bad', label: `${-days} day${days === -1 ? '' : 's'} overdue` };
-  if (days === 0) return { days, tone: 'warn', label: 'due today' };
-  if (days <= 7) return { days, tone: 'warn', label: `in ${days} day${days === 1 ? '' : 's'}` };
-  return { days, tone: 'muted', label: `in ${days} days` };
+  if (days < 0) return { days, tone: 'bad', label: t.learn.deadline.overdue(-days) };
+  if (days === 0) return { days, tone: 'warn', label: t.learn.deadline.today };
+  return { days, tone: days <= 7 ? 'warn' : 'muted', label: t.learn.deadline.inDays(days) };
 }
 
 export function formatBytes(n: number): string {
@@ -105,32 +81,34 @@ export const submissionHref = (assignmentId: string, submissionId: string) =>
 /** Upload limits as the learning service reports them (used before any bytes are sent). */
 export const DEFAULT_UPLOAD_LIMITS = { maxFileBytes: 2 * 1024 * 1024, maxFiles: 4, maxTotalBytes: 6 * 1024 * 1024 };
 
-export function uploadProblem(files: Array<{ name: string; size: number }>, limits = DEFAULT_UPLOAD_LIMITS): string | null {
-  if (files.length > limits.maxFiles) return `파일은 최대 ${limits.maxFiles}개까지 올릴 수 있습니다.`;
+export function uploadProblem(files: Array<{ name: string; size: number }>, limits: typeof DEFAULT_UPLOAD_LIMITS, t: Dict): string | null {
+  const u = t.learn.upload;
+  if (files.length > limits.maxFiles) return u.tooMany(limits.maxFiles);
   const empty = files.find((f) => f.size === 0);
-  if (empty) return `"${empty.name}" 파일이 비어 있습니다.`;
+  if (empty) return u.empty(empty.name);
   const big = files.find((f) => f.size > limits.maxFileBytes);
-  if (big) return `"${big.name}" 파일이 ${formatBytes(limits.maxFileBytes)}보다 큽니다.`;
+  if (big) return u.tooBig(big.name, formatBytes(limits.maxFileBytes));
   const total = files.reduce((s, f) => s + f.size, 0);
-  if (total > limits.maxTotalBytes) return `파일 합계가 ${formatBytes(limits.maxTotalBytes)}보다 큽니다.`;
+  if (total > limits.maxTotalBytes) return u.totalTooBig(formatBytes(limits.maxTotalBytes));
   return null;
 }
 
 /** "submission:<id>#file:<fileId>" -> a readable source label. */
-export function evidenceSource(ref: string, files: Array<{ id: string; name: string }> = []): string {
-  if (ref.endsWith('#body')) return 'answer text';
+export function evidenceSource(ref: string, files: Array<{ id: string; name: string }>, t: Dict): string {
+  const x = t.learn.evidenceSource;
+  if (ref.endsWith('#body')) return x.answer;
   const file = /#file:([0-9a-f-]{36})$/.exec(ref);
-  if (file) return files.find((f) => f.id === file[1])?.name ?? 'attached file';
-  if (ref.startsWith('submission:')) return 'submission';
-  if (ref.startsWith('rubric:')) return `rubric · ${ref.split('#')[1] ?? ''}`;
-  if (ref.startsWith('submission#unknown:')) return `${ref.slice('submission#unknown:'.length) || 'unknown'} (not found)`;
+  if (file) return files.find((f) => f.id === file[1])?.name ?? x.attached;
+  if (ref.startsWith('submission:')) return x.submission;
+  if (ref.startsWith('rubric:')) return x.rubric(ref.split('#')[1] ?? '');
+  if (ref.startsWith('submission#unknown:')) return x.notFound(ref.slice('submission#unknown:'.length) || x.unknown);
   return ref.length > 60 ? `${ref.slice(0, 57)}…` : ref;
 }
 
 /** Days since an ISO instant, as words. */
-export function ageText(days: number): string {
-  if (days <= 0) return 'today';
-  if (days === 1) return 'yesterday';
-  if (days < 60) return `${days} days ago`;
-  return `${Math.round(days / 30)} months ago`;
+export function ageText(days: number, t: Dict): string {
+  if (days <= 0) return t.learn.age.today;
+  if (days === 1) return t.learn.age.yesterday;
+  if (days < 60) return t.learn.age.days(days);
+  return t.learn.age.months(Math.round(days / 30));
 }

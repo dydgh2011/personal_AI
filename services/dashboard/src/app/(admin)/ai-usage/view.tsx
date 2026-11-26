@@ -1,8 +1,9 @@
 import { Unavailable } from '@/components/ui';
+import type { Dict } from '@/i18n';
 import type { LlmUsage } from '@/lib/llm';
 import {
   bucketLabels, bucketTick, colorStacks, compact, full, groupStacks, groupTable, pct, periodHref, slotColor, tokenKindStacks, usd,
-  type Grouping, type Period, type UsageSeries,
+  type Period, type UsageSeries,
 } from '@/lib/usage-series';
 import { ColumnChart, LineChart, type ChartSeries } from './charts';
 import s from './usage.module.css';
@@ -12,8 +13,6 @@ export const KELLY_FIXED_FROM = 11_000;
 export const KELLY_FIXED_TO = 14_000;
 export const KELLY_COMPRESS_AT = 40_000;
 
-const RANGE_NAMES = { today: '오늘', '7d': '7일', '30d': '30일' } as const;
-const BY_NAMES: Record<Grouping, string> = { client: '호출자', model: '모델', alias: '용도' };
 
 function Seg<T extends string>({ items, current, href, disabled }: {
   items: Array<[T, string]>; current: T; href: (v: T) => string; disabled?: (v: T) => boolean;
@@ -33,22 +32,23 @@ function Seg<T extends string>({ items, current, href, disabled }: {
   );
 }
 
-function Filters({ period }: { period: Period }) {
+function Filters({ t, period }: { t: Dict; period: Period }) {
+  const u = t.aiUsage;
   return (
-    <nav className={s.filters} aria-label="기간과 묶음">
+    <nav className={s.filters} aria-label={u.filtersAria}>
       <span className={s.filterGroup}>
-        <span className={s.filterName}>기간</span>
-        <Seg items={[['today', RANGE_NAMES.today], ['7d', RANGE_NAMES['7d']], ['30d', RANGE_NAMES['30d']]]} current={period.range}
+        <span className={s.filterName}>{u.period}</span>
+        <Seg items={[['today', u.ranges.today], ['7d', u.ranges['7d']], ['30d', u.ranges['30d']]]} current={period.range}
           href={(range) => periodHref(period, { range, bucket: range === 'today' ? 'hour' : 'day' })} />
       </span>
       <span className={s.filterGroup}>
-        <span className={s.filterName}>단위</span>
-        <Seg items={[['hour', '시간'], ['day', '일']]} current={period.bucket} href={(bucket) => periodHref(period, { bucket })}
+        <span className={s.filterName}>{u.bucket}</span>
+        <Seg items={[['hour', u.hour], ['day', u.day]]} current={period.bucket} href={(bucket) => periodHref(period, { bucket })}
           disabled={(b) => (period.range === 'today' && b === 'day') || (period.range === '30d' && b === 'hour')} />
       </span>
       <span className={s.filterGroup}>
-        <span className={s.filterName}>묶음</span>
-        <Seg items={[['client', BY_NAMES.client], ['model', BY_NAMES.model], ['alias', BY_NAMES.alias]]} current={period.by}
+        <span className={s.filterName}>{u.by}</span>
+        <Seg items={[['client', u.groupings.client], ['model', u.groupings.model], ['alias', u.groupings.alias]]} current={period.by}
           href={(by) => periodHref(period, { by })} />
       </span>
     </nav>
@@ -75,42 +75,45 @@ function Card({ title, note, children }: { title: string; note?: string; childre
   );
 }
 
-function Tiles({ data }: { data: UsageSeries }) {
+function Tiles({ tr, data }: { tr: Dict; data: UsageSeries }) {
+  const u = tr.aiUsage.tiles;
+  const n = (v: number) => full(v, tr.locale);
   const t = data.totals;
   const failRate = t.calls ? t.errors / t.calls : 0;
   return (
     <div className={s.tiles}>
-      <Tile label="토큰 합계" value={compact(t.promptTokens + t.completionTokens)}
-        note={`입력 ${compact(t.promptTokens - t.cachedTokens)} · 캐시 ${compact(t.cachedTokens)} · 출력 ${compact(t.completionTokens)}`} />
-      <Tile label="호출" value={full(t.calls)} note={`실패 ${full(t.errors)} (429: ${full(t.rateLimited)}) · ${pct(failRate)}`} />
-      <Tile label="유료 지출" value={usd(t.costUsd)} note={`무료 호출까지 정가로 치면 ${usd(t.listCostUsd)}`} />
-      <Tile label="Kelly 입력 크기 (중앙값)" value={data.kelly.p50 === null ? '–' : compact(data.kelly.p50)}
-        note={data.kelly.calls ? `p90 ${compact(data.kelly.p90 ?? 0)} · 메시지당 호출 ≈ ${data.kelly.messages.avgCallsPerMessage ?? '–'} (추정)` : 'Kelly 호출 없음'} />
+      <Tile label={u.tokens} value={compact(t.promptTokens + t.completionTokens)}
+        note={u.tokensNote(compact(t.promptTokens - t.cachedTokens), compact(t.cachedTokens), compact(t.completionTokens))} />
+      <Tile label={u.calls} value={n(t.calls)} note={u.callsNote(n(t.errors), n(t.rateLimited), pct(failRate))} />
+      <Tile label={u.paid} value={usd(t.costUsd)} note={u.paidNote(usd(t.listCostUsd))} />
+      <Tile label={u.kelly} value={data.kelly.p50 === null ? '–' : compact(data.kelly.p50)}
+        note={data.kelly.calls ? u.kellyNote(compact(data.kelly.p90 ?? 0), String(data.kelly.messages.avgCallsPerMessage ?? '–')) : u.noKelly} />
     </div>
   );
 }
 
-function TokenSection({ data }: { data: UsageSeries }) {
+function TokenSection({ t, data }: { t: Dict; data: UsageSeries }) {
+  const u = t.aiUsage.tokens;
+  const n = (v: number) => full(v, t.locale);
+  const byName = t.aiUsage.groupings[data.by] ?? data.by;
   const labels = bucketLabels(data);
   const ticks = data.buckets.map((b) => bucketTick(b.label, data.bucket, data.from !== data.to));
   const kindColors: Record<string, string> = { input: 'var(--viz-k-input)', cached: 'var(--viz-k-cached)', output: 'var(--viz-k-output)' };
-  const kinds: ChartSeries[] = tokenKindStacks(data).map((k) => ({ ...k, color: kindColors[k.key] }));
-  const groups = colorStacks(data.by, groupStacks(data));
+  const kinds: ChartSeries[] = tokenKindStacks(data, t).map((k) => ({ ...k, color: kindColors[k.key] }));
+  const groups = colorStacks(data.by, groupStacks(data, t));
   const groupSeries: ChartSeries[] = groups.map((g) => ({ key: g.key, label: g.label, color: slotColor(g.slot), values: g.values }));
   const slotOf = new Map(groups.map((g) => [g.key, g.slot]));
-  const rows = groupTable(data);
-  const unit = data.bucket === 'hour' ? '시간' : '일';
+  const rows = groupTable(data, t);
+  const unit = data.bucket === 'hour' ? t.aiUsage.hour : t.aiUsage.day;
   return (
     <section className={s.section}>
-      <h2>토큰</h2>
-      <p className={s.sectionNote}>
-        {unit} 단위 합계. 입력에는 캐시된 입력이 포함돼 있어서 그래프에서는 캐시 제외 입력과 캐시된 입력으로 나눠 쌓았어요. 실패한 호출은 토큰이 0으로 남아요.
-      </p>
+      <h2>{u.title}</h2>
+      <p className={s.sectionNote}>{u.note(unit)}</p>
       <div className={s.cards2}>
-        <Card title="입력 · 캐시 · 출력">
+        <Card title={u.kindsCard}>
           <ColumnChart series={kinds} labels={labels} ticks={ticks} format="tokens" legendTotals tableCaption={unit} />
         </Card>
-        <Card title={`${BY_NAMES[data.by]}별 토큰`} note="입력 + 출력">
+        <Card title={u.byCard(byName)} note={u.byCardNote}>
           <ColumnChart series={groupSeries} labels={labels} ticks={ticks} format="tokens" legendTotals tableCaption={unit} />
         </Card>
       </div>
@@ -118,8 +121,8 @@ function TokenSection({ data }: { data: UsageSeries }) {
         <table>
           <thead>
             <tr>
-              <th>{BY_NAMES[data.by]}</th><th className={s.num}>호출</th><th className={s.num}>실패</th><th className={s.num}>입력 (캐시 제외)</th>
-              <th className={s.num}>캐시된 입력</th><th className={s.num}>출력</th><th className={s.num}>유료</th><th className={s.num}>정가 환산</th>
+              <th>{byName}</th><th className={s.num}>{u.calls}</th><th className={s.num}>{u.errors}</th><th className={s.num}>{u.input}</th>
+              <th className={s.num}>{u.cached}</th><th className={s.num}>{u.output}</th><th className={s.num}>{u.paid}</th><th className={s.num}>{u.list}</th>
             </tr>
           </thead>
           <tbody>
@@ -128,13 +131,13 @@ function TokenSection({ data }: { data: UsageSeries }) {
               return (
                 <tr key={r.key}>
                   <td><span className={s.keyCell}><span className={s.swatch} style={{ background: slotColor(slot) }} aria-hidden />{r.label}</span></td>
-                  <td className={s.num}>{full(r.calls)}</td><td className={s.num}>{full(r.errors)}</td><td className={s.num}>{full(r.input)}</td>
-                  <td className={s.num}>{full(r.cached)}</td><td className={s.num}>{full(r.output)}</td><td className={s.num}>{usd(r.cost)}</td>
+                  <td className={s.num}>{n(r.calls)}</td><td className={s.num}>{n(r.errors)}</td><td className={s.num}>{n(r.input)}</td>
+                  <td className={s.num}>{n(r.cached)}</td><td className={s.num}>{n(r.output)}</td><td className={s.num}>{usd(r.cost)}</td>
                   <td className={`${s.num} muted`}>{usd(r.list)}</td>
                 </tr>
               );
             })}
-            {rows.length === 0 && <tr><td colSpan={8} className="muted">이 기간에는 호출이 없어요</td></tr>}
+            {rows.length === 0 && <tr><td colSpan={8} className="muted">{u.none}</td></tr>}
           </tbody>
         </table>
       </div>
@@ -142,37 +145,36 @@ function TokenSection({ data }: { data: UsageSeries }) {
   );
 }
 
-function PoolSection({ data, usage }: { data: UsageSeries; usage: LlmUsage | null }) {
+function PoolSection({ t, data, usage }: { t: Dict; data: UsageSeries; usage: LlmUsage | null }) {
+  const u = t.aiUsage.pools;
   return (
     <section className={s.section}>
-      <h2>무료 한도</h2>
-      <p className={s.sectionNote}>
-        묶음별 하루 사용률. 게이트웨이는 선(멈추는 지점)에 닿기 전에 다음 경로로 넘어가요. 날짜는 묶음마다 공급자 기준(UTC 또는 태평양 시간)이라 토론토 날짜와 하루 어긋날 수 있어요.
-      </p>
+      <h2>{u.title}</h2>
+      <p className={s.sectionNote}>{u.note}</p>
       <div className={s.cards3}>
         {data.pools.map((p) => {
           const now = usage?.pools.find((x) => x.id === p.id);
-          const limitText = p.limit === null ? '' : `${compact(p.limit)} ${p.unit === 'tokens' ? '토큰' : '회'}/일`;
+          const limitText = p.limit === null ? '' : u.limit(compact(p.limit), p.unit === 'tokens');
           return (
-            <Card key={p.id} title={p.label} note={`${limitText} · ${pct(p.stopAt)}에서 멈춤 · ${p.resetTimeZone} 날짜`}>
+            <Card key={p.id} title={p.label} note={u.cardNote(limitText, pct(p.stopAt), p.resetTimeZone)}>
               {now && (
                 <>
                   <div className={s.meter} role="meter" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(now.usedShare * 100)}
-                    aria-label={`${p.label} 오늘 사용률`}>
+                    aria-label={u.todayAria(p.label)}>
                     <div className={`${s.meterFill} ${now.usedShare >= p.stopAt ? s.hot : ''}`} style={{ width: `${Math.min(100, now.usedShare * 100)}%` }} />
                     <div className={s.meterStop} style={{ left: `${p.stopAt * 100}%` }} />
                   </div>
                   <div className={s.tileNote}>
-                    오늘({now.day}) <strong>{pct(now.usedShare)}</strong> · {p.unit === 'tokens' ? `${compact(now.tokens)} 토큰` : `${full(now.requests)}회`}
+                    {u.today(now.day)} <strong>{pct(now.usedShare)}</strong> · {p.unit === 'tokens' ? u.tokens(compact(now.tokens)) : u.requests(full(now.requests, t.locale))}
                   </div>
                 </>
               )}
               <ColumnChart
-                series={[{ key: p.id, label: '사용률', color: 'var(--viz-s1)', values: p.days.map((d) => d.usedShare) }]}
+                series={[{ key: p.id, label: u.share, color: 'var(--viz-s1)', values: p.days.map((d) => d.usedShare) }]}
                 labels={p.days.map((d) => `${d.day} (${p.resetTimeZone})`)} ticks={p.days.map((d) => d.day.slice(5))}
                 format="pct" yFixed={1} height={150}
-                refLines={[{ value: p.stopAt, label: `멈춤 ${pct(p.stopAt)}` }]} over={{ at: p.stopAt, label: '멈추는 지점 도달' }}
-                tableCaption="날짜" empty="이 기간에는 쓰지 않았어요"
+                refLines={[{ value: p.stopAt, label: u.stop(pct(p.stopAt)) }]} over={{ at: p.stopAt, label: u.reached }}
+                tableCaption={u.date} empty={u.unused}
               />
             </Card>
           );
@@ -182,22 +184,23 @@ function PoolSection({ data, usage }: { data: UsageSeries; usage: LlmUsage | nul
   );
 }
 
-function PaidSection({ data, usage }: { data: UsageSeries; usage: LlmUsage | null }) {
+function PaidSection({ t, data, usage }: { t: Dict; data: UsageSeries; usage: LlmUsage | null }) {
+  const u = t.aiUsage.paid;
   const cap = data.paid.dailyCapUsd;
   return (
     <section className={s.section}>
-      <h2>유료 (OpenAI Private)</h2>
+      <h2>{u.title}</h2>
       <p className={s.sectionNote}>
-        토론토 날짜 기준 하루 지출과 상한 {usd(cap, 2)}. 무료가 모두 막힌 날 Discord <code>/ai-paid on</code>으로 승인해야 유료로 넘어가요(<code>private</code> 용도는 승인 없이 상한 안에서).
+        {u.noteBefore(usd(cap, 2))}<code>/ai-paid on</code>{u.noteMiddle}<code>private</code>{u.noteAfter}
       </p>
       <div className={s.cards2}>
-        <Card title="하루 지출" note={usage ? `오늘 ${usd(usage.paid.spentTodayUsd)} · ${usage.paid.approvedToday ? '오늘 승인됨' : '오늘 승인 안 함'} · 지금까지 ${usd(usage.totalSpentUsd)}` : undefined}>
+        <Card title={u.daily} note={usage ? u.dailyNote(usd(usage.paid.spentTodayUsd), usage.paid.approvedToday, usd(usage.totalSpentUsd)) : undefined}>
           <ColumnChart
-            series={[{ key: 'paid', label: '지출', color: 'var(--viz-s1)', values: data.paid.days.map((d) => d.spentUsd) }]}
+            series={[{ key: 'paid', label: u.spent, color: 'var(--viz-s1)', values: data.paid.days.map((d) => d.spentUsd) }]}
             labels={data.paid.days.map((d) => d.day)} ticks={data.paid.days.map((d) => d.day.slice(5))}
-            format="usd" yMin={cap * 1.1} height={170} refLines={[{ value: cap, label: `하루 상한 ${usd(cap, 2)}` }]}
-            marks={{ on: data.paid.days.map((d) => d.approved), label: '승인한 날' }}
-            tableCaption="날짜" empty="이 기간에는 유료 호출이 없어요"
+            format="usd" yMin={cap * 1.1} height={170} refLines={[{ value: cap, label: u.cap(usd(cap, 2)) }]}
+            marks={{ on: data.paid.days.map((d) => d.approved), label: u.approvedDays }}
+            tableCaption={u.date} empty={u.none}
           />
         </Card>
       </div>
@@ -205,33 +208,33 @@ function PaidSection({ data, usage }: { data: UsageSeries; usage: LlmUsage | nul
   );
 }
 
-function KellySection({ data }: { data: UsageSeries }) {
+function KellySection({ t, data }: { t: Dict; data: UsageSeries }) {
+  const u = t.aiUsage.kelly;
+  const n = (v: number) => full(v, t.locale);
   const k = data.kelly;
   const bin = k.bins[0]?.to ?? 2000;
-  const labels = k.bins.map((b) => (b.to === null ? `${compact(b.from)} 이상` : `${compact(b.from)}–${compact(b.to)}`));
+  const labels = k.bins.map((b) => (b.to === null ? u.over(compact(b.from)) : `${compact(b.from)}–${compact(b.to)}`));
   const ticks = k.bins.map((b) => (b.from % (bin * 5) === 0 ? compact(b.from) : ''));
   return (
     <section className={s.section}>
-      <h2>Kelly 대화 크기</h2>
-      <p className={s.sectionNote}>
-        Kelly(<code>kelly</code> 용도) 성공 호출 하나에 들어간 입력 토큰. 지시문·도구 설명 같은 고정 비용이 약 1만 1천~1만 4천이고, 대화가 4만을 넘으면 압축해요.
-      </p>
+      <h2>{u.title}</h2>
+      <p className={s.sectionNote}>{u.noteBefore}<code>kelly</code>{u.noteAfter}</p>
       <div className={s.cards2}>
-        <Card title="호출당 입력 토큰" note={k.calls ? `${full(k.calls)}회 · 중앙값 ${compact(k.p50 ?? 0)} · p90 ${compact(k.p90 ?? 0)} · 최대 ${compact(k.max ?? 0)}` : undefined}>
+        <Card title={u.perCall} note={k.calls ? u.perCallNote(n(k.calls), compact(k.p50 ?? 0), compact(k.p90 ?? 0), compact(k.max ?? 0)) : undefined}>
           <ColumnChart
-            series={[{ key: 'calls', label: '호출 수', color: 'var(--viz-s1)', values: k.bins.map((b) => b.calls) }]}
+            series={[{ key: 'calls', label: u.callCount, color: 'var(--viz-s1)', values: k.bins.map((b) => b.calls) }]}
             labels={labels} ticks={ticks} format="count" height={190} tickAt="edge"
-            bands={[{ from: KELLY_FIXED_FROM / bin, to: KELLY_FIXED_TO / bin, label: '고정 비용' }]}
-            vLines={[{ at: KELLY_COMPRESS_AT / bin, label: `압축 ${compact(KELLY_COMPRESS_AT)}` }]}
-            tableCaption="입력 토큰" empty="이 기간에는 Kelly 호출이 없어요"
+            bands={[{ from: KELLY_FIXED_FROM / bin, to: KELLY_FIXED_TO / bin, label: u.fixedCost }]}
+            vLines={[{ at: KELLY_COMPRESS_AT / bin, label: u.compress(compact(KELLY_COMPRESS_AT)) }]}
+            tableCaption={u.inputTokens} empty={u.none}
           />
         </Card>
-        <Card title="메시지 하나당 호출 수 (추정)"
-          note={`메시지 ID가 기록되지 않아서, 호출 사이가 ${k.messages.gapSeconds}초 넘게 비면 새 메시지로 셌어요.${k.messages.count ? ` 메시지 ${full(k.messages.count)}개 · 평균 ${k.messages.avgCallsPerMessage}회` : ''}`}>
+        <Card title={u.perMessage}
+          note={u.perMessageNote(k.messages.gapSeconds, k.messages.count ? u.perMessageExtra(n(k.messages.count), String(k.messages.avgCallsPerMessage)) : '')}>
           <ColumnChart
-            series={[{ key: 'messages', label: '메시지 수', color: 'var(--viz-s1)', values: k.messages.distribution.map((d) => d.messages) }]}
-            labels={k.messages.distribution.map((d) => `호출 ${d.calls}회`)} ticks={k.messages.distribution.map((d) => d.calls)}
-            format="count" height={190} tableCaption="메시지당 호출" empty="이 기간에는 Kelly 호출이 없어요"
+            series={[{ key: 'messages', label: u.messageCount, color: 'var(--viz-s1)', values: k.messages.distribution.map((d) => d.messages) }]}
+            labels={k.messages.distribution.map((d) => u.callsN(d.calls))} ticks={k.messages.distribution.map((d) => d.calls)}
+            format="count" height={190} tableCaption={u.callsPerMessage} empty={u.none}
           />
         </Card>
       </div>
@@ -239,29 +242,30 @@ function KellySection({ data }: { data: UsageSeries }) {
   );
 }
 
-function HealthSection({ data }: { data: UsageSeries }) {
+function HealthSection({ t, data }: { t: Dict; data: UsageSeries }) {
+  const u = t.aiUsage.health;
   const labels = bucketLabels(data);
   const ticks = data.buckets.map((b) => bucketTick(b.label, data.bucket, data.from !== data.to));
-  const unit = data.bucket === 'hour' ? '시간' : '일';
+  const unit = data.bucket === 'hour' ? t.aiUsage.hour : t.aiUsage.day;
   return (
     <section className={s.section}>
-      <h2>오류 · 지연 시간</h2>
-      <p className={s.sectionNote}>실패한 시도(다음 경로로 넘어간 것 포함)와 성공한 호출의 응답 시간. 스트림은 끝까지 받은 시간이에요.</p>
+      <h2>{u.title}</h2>
+      <p className={s.sectionNote}>{u.note}</p>
       <div className={s.cards2}>
-        <Card title="실패한 호출">
+        <Card title={u.failed}>
           <ColumnChart
             series={[
-              { key: '429', label: '429 (한도)', color: 'var(--viz-warn)', values: data.health.map((h) => h.rateLimited) },
-              { key: 'other', label: '그 밖의 오류', color: 'var(--viz-bad)', values: data.health.map((h) => h.otherErrors) },
+              { key: '429', label: u.rateLimited, color: 'var(--viz-warn)', values: data.health.map((h) => h.rateLimited) },
+              { key: 'other', label: u.otherErrors, color: 'var(--viz-bad)', values: data.health.map((h) => h.otherErrors) },
             ]}
-            labels={labels} ticks={ticks} format="count" legendTotals tableCaption={unit} empty="이 기간에는 실패가 없어요"
+            labels={labels} ticks={ticks} format="count" legendTotals tableCaption={unit} empty={u.noFailures}
           />
         </Card>
-        <Card title="응답 시간 (성공한 호출)">
+        <Card title={u.latency}>
           <LineChart
             series={[
-              { key: 'p50', label: '중앙값 (p50)', color: 'var(--viz-s1)', values: data.health.map((h) => h.p50Ms) },
-              { key: 'p95', label: '느린 쪽 (p95)', color: 'var(--viz-s2)', values: data.health.map((h) => h.p95Ms) },
+              { key: 'p50', label: u.p50, color: 'var(--viz-s1)', values: data.health.map((h) => h.p50Ms) },
+              { key: 'p95', label: u.p95, color: 'var(--viz-s2)', values: data.health.map((h) => h.p95Ms) },
             ]}
             labels={labels} ticks={ticks} format="ms" tableCaption={unit}
           />
@@ -271,14 +275,15 @@ function HealthSection({ data }: { data: UsageSeries }) {
   );
 }
 
-function GatewayTables({ usage }: { usage: LlmUsage }) {
+function GatewayTables({ t, usage }: { t: Dict; usage: LlmUsage }) {
+  const u = t.aiUsage.gateway;
   return (
     <>
       <section className={s.section}>
-        <h2>경로</h2>
+        <h2>{u.routes}</h2>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>용도</th><th>쓰는 곳</th><th>순서</th></tr></thead>
+            <thead><tr><th>{u.alias}</th><th>{u.usedBy}</th><th>{u.order}</th></tr></thead>
             <tbody>
               {Object.entries(usage.aliases).map(([alias, a]) => (
                 <tr key={alias}><td>{alias}</td><td>{a.description}</td><td>{a.routes.join(' → ')}</td></tr>
@@ -288,13 +293,13 @@ function GatewayTables({ usage }: { usage: LlmUsage }) {
         </div>
       </section>
       <section className={s.section}>
-        <h2>일별 합계 (/usage)</h2>
+        <h2>{u.daily}</h2>
         <details>
-          <summary className="muted">용도·모델별 일별 표 펼치기</summary>
+          <summary className="muted">{u.expand}</summary>
           <div className="table-wrap" style={{ marginTop: 6 }}>
             <table>
               <thead>
-                <tr><th>날짜</th><th>용도</th><th>공급자 / 모델</th><th className={s.num}>호출 (성공)</th><th className={s.num}>입력 (캐시)</th><th className={s.num}>출력</th><th className={s.num}>유료</th><th className={s.num}>정가 환산</th></tr>
+                <tr><th>{u.date}</th><th>{u.alias}</th><th>{u.providerModel}</th><th className={s.num}>{u.callsOk}</th><th className={s.num}>{u.inputCached}</th><th className={s.num}>{u.output}</th><th className={s.num}>{u.paid}</th><th className={s.num}>{u.list}</th></tr>
               </thead>
               <tbody>
                 {usage.daily.map((d) => (
@@ -304,7 +309,7 @@ function GatewayTables({ usage }: { usage: LlmUsage }) {
                     <td className={s.num}>{usd(d.cost_usd)}</td><td className={`${s.num} muted`}>{usd(d.list_cost_usd)}</td>
                   </tr>
                 ))}
-                {usage.daily.length === 0 && <tr><td colSpan={8} className="muted">아직 호출이 없어요</td></tr>}
+                {usage.daily.length === 0 && <tr><td colSpan={8} className="muted">{u.noCalls}</td></tr>}
               </tbody>
             </table>
           </div>
@@ -312,10 +317,10 @@ function GatewayTables({ usage }: { usage: LlmUsage }) {
       </section>
       {usage.recentErrors.length > 0 && (
         <section className={s.section}>
-          <h2>최근 오류 (다음 경로로 넘어간 것 포함)</h2>
+          <h2>{u.recentErrors}</h2>
           <div className="table-wrap">
             <table>
-              <thead><tr><th>시각 (UTC)</th><th>용도</th><th>경로</th><th>상태</th><th>오류</th></tr></thead>
+              <thead><tr><th>{u.timeUtc}</th><th>{u.alias}</th><th>{u.route}</th><th>{u.status}</th><th>{u.error}</th></tr></thead>
               <tbody>
                 {usage.recentErrors.map((e, i) => (
                   <tr key={`${e.at}-${e.provider}-${i}`}>
@@ -333,28 +338,28 @@ function GatewayTables({ usage }: { usage: LlmUsage }) {
 }
 
 /** The whole page body; the page fetches, this only renders (so it can be tested without a gateway). */
-export function UsageView({ period, series, usage, seriesError, usageError }: {
-  period: Period; series: UsageSeries | null; usage: LlmUsage | null; seriesError: string | null; usageError: string | null;
+export function UsageView({ t, period, series, usage, seriesError, usageError }: {
+  t: Dict; period: Period; series: UsageSeries | null; usage: LlmUsage | null; seriesError: string | null; usageError: string | null;
 }) {
   return (
     <div className={s.page}>
       <p className={s.sub}>
-        {period.from === period.to ? period.from : `${period.from} ~ ${period.to}`} · 토론토 시간 · LLM 게이트웨이 기록 기준 (토큰 수만 기록, 대화 내용은 없음)
+        {t.aiUsage.sub(period.from === period.to ? period.from : `${period.from} ~ ${period.to}`)}
       </p>
-      <Filters period={period} />
-      {seriesError && <Unavailable what="LLM gateway (graphs)" reason={seriesError} />}
-      {usageError && usageError !== seriesError && <Unavailable what="LLM gateway (today)" reason={usageError} />}
+      <Filters t={t} period={period} />
+      {seriesError && <Unavailable t={t} what={t.aiUsage.graphsWhat} reason={seriesError} />}
+      {usageError && usageError !== seriesError && <Unavailable t={t} what={t.aiUsage.todayWhat} reason={usageError} />}
       {series && (
         <>
-          <Tiles data={series} />
-          <TokenSection data={series} />
-          <PoolSection data={series} usage={usage} />
-          <PaidSection data={series} usage={usage} />
-          <KellySection data={series} />
-          <HealthSection data={series} />
+          <Tiles tr={t} data={series} />
+          <TokenSection t={t} data={series} />
+          <PoolSection t={t} data={series} usage={usage} />
+          <PaidSection t={t} data={series} usage={usage} />
+          <KellySection t={t} data={series} />
+          <HealthSection t={t} data={series} />
         </>
       )}
-      {usage && <GatewayTables usage={usage} />}
+      {usage && <GatewayTables t={t} usage={usage} />}
     </div>
   );
 }

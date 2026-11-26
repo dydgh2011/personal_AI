@@ -1,5 +1,7 @@
 import { AutoRefresh } from '@/components/client';
 import { Badge, Card, errorText, Unavailable } from '@/components/ui';
+import type { Dict } from '@/i18n';
+import { getT } from '@/i18n/server';
 import { controller } from '@/lib/controller';
 import { short, since } from '@/lib/diff';
 import { workerState } from '@/lib/report';
@@ -9,56 +11,58 @@ import { requireSession } from '@/lib/server';
 
 export const dynamic = 'force-dynamic';
 
-async function settle<T>(p: Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+async function settle<T>(p: Promise<T>, t: Dict): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
   try {
     return { ok: true, value: await p };
   } catch (error) {
-    return { ok: false, error: errorText(error) };
+    return { ok: false, error: errorText(error, t) };
   }
 }
 
 export default async function Overview() {
   await requireSession();
+  const t = await getT();
+  const o = t.overview;
   const [status, recent, awaiting, resources] = await Promise.all([
-    settle(controller.systemStatus()),
-    settle<TaskList>(controller.tasks({ limit: '10' })),
-    settle<Review[]>(controller.reviews('awaiting_approval')),
-    resourceProvider ? settle(resourceProvider.sample()) : Promise.resolve(null),
+    settle(controller.systemStatus(), t),
+    settle<TaskList>(controller.tasks({ limit: '10' }), t),
+    settle<Review[]>(controller.reviews('awaiting_approval'), t),
+    resourceProvider ? settle(resourceProvider.sample(), t) : Promise.resolve(null),
   ]);
   const s: SystemStatus | null = status.ok ? status.value.data : null;
   const hermes = s?.services.find((x) => x.name === 'hermes');
   const by = s?.tasks.byStatus;
-  const count = (k: string) => (by ? String(by[k] ?? 0) : 'unknown');
+  const count = (k: string) => (by ? String(by[k] ?? 0) : t.common.unknown);
 
   return (
     <>
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <h1>Overview</h1>
+        <h1>{o.title}</h1>
         <AutoRefresh seconds={10} />
       </div>
-      {!status.ok && <Unavailable what="Controller" reason={status.error} />}
+      {!status.ok && <Unavailable t={t} what={o.controller} reason={status.error} />}
 
       <div className="grid">
-        <Card title="Controller">
+        <Card title={o.controller}>
           <Badge value={s ? s.controller.status : 'unreachable'} />{' '}
-          <span className="muted">db</span> <Badge value={s?.database.status} />
+          <span className="muted">{o.db}</span> <Badge value={s?.database.status} />
           <div className="muted">
-            {status.ok ? `${status.value.ms} ms · v${s!.controller.version} · up ${Math.round(s!.controller.uptimeSeconds / 60)} min` : 'response time unknown'}
+            {status.ok ? o.controllerLine(status.value.ms, s!.controller.version, Math.round(s!.controller.uptimeSeconds / 60)) : o.responseUnknown}
           </div>
         </Card>
         <Card title="Hermes">
           <Badge value={hermes?.status ?? 'unknown'} />
           <div className="muted">
-            {hermes?.latencyMs !== undefined ? `${hermes.latencyMs} ms (probed by controller)` : hermes?.error ?? 'not probed'}
+            {hermes?.latencyMs !== undefined ? o.hermesProbed(hermes.latencyMs) : hermes?.error ?? o.notProbed}
           </div>
         </Card>
         {(s?.workers ?? [{ agent: 'claude' }, { agent: 'codex' }]).map((w) => {
           const worker = 'workerId' in w ? w : null;
           return (
-            <Card key={w.agent} title={`${w.agent} worker`}>
+            <Card key={w.agent} title={o.worker(w.agent)}>
               <Badge value={worker ? workerState(worker.lastSeenAt) : 'unknown'} />
               <div className="muted">
-                {worker ? `last poll ${since(worker.lastSeenAt)} · queued ${worker.queuedTasks} · active ${worker.activeTasks}` : 'status unknown'}
+                {worker ? o.workerLine(since(worker.lastSeenAt, t), worker.queuedTasks, worker.activeTasks) : o.statusUnknown}
               </div>
             </Card>
           );
@@ -66,52 +70,52 @@ export default async function Overview() {
       </div>
 
       <div className="grid section">
-        <Card title="Running"><div className="big">{count('running')}</div></Card>
-        <Card title="Queued"><div className="big">{count('queued')}</div></Card>
-        <Card title="Completed"><div className="big">{count('completed')}</div></Card>
-        <Card title="Failed"><div className="big">{count('failed')}</div></Card>
-        <Card title="Awaiting approval">
-          <div className="big">{awaiting.ok ? <a href="/reviews">{awaiting.value.length}</a> : 'unknown'}</div>
+        <Card title={o.running}><div className="big">{count('running')}</div></Card>
+        <Card title={o.queued}><div className="big">{count('queued')}</div></Card>
+        <Card title={o.completed}><div className="big">{count('completed')}</div></Card>
+        <Card title={o.failed}><div className="big">{count('failed')}</div></Card>
+        <Card title={o.awaitingApproval}>
+          <div className="big">{awaiting.ok ? <a href="/reviews">{awaiting.value.length}</a> : t.common.unknown}</div>
           {!awaiting.ok && <div className="muted">{awaiting.error}</div>}
         </Card>
       </div>
 
       <div className="section">
-        <h2>Recent tasks</h2>
+        <h2>{o.recentTasks}</h2>
         {recent.ok ? (
           <div className="table-wrap">
             <table>
               <thead>
-                <tr><th>Task</th><th>Agent</th><th>Project</th><th>Status</th><th>Created</th><th>Instruction</th></tr>
+                <tr><th>{t.common.task}</th><th>{t.common.agent}</th><th>{t.common.project}</th><th>{t.common.status}</th><th>{t.common.created}</th><th>{t.common.instruction}</th></tr>
               </thead>
               <tbody>
-                {recent.value.items.map((t) => (
-                  <tr key={t.id}>
-                    <td className="mono"><a href={`/tasks/${t.id}`}>{short(t.id, 8)}</a></td>
-                    <td>{t.agent}</td>
-                    <td>{t.projectId ?? '-'}</td>
-                    <td><Badge value={t.status} /></td>
-                    <td>{since(t.createdAt)}</td>
-                    <td className="trunc">{t.instruction}</td>
+                {recent.value.items.map((task) => (
+                  <tr key={task.id}>
+                    <td className="mono"><a href={`/tasks/${task.id}`}>{short(task.id, 8)}</a></td>
+                    <td>{task.agent}</td>
+                    <td>{task.projectId ?? '-'}</td>
+                    <td><Badge value={task.status} /></td>
+                    <td>{since(task.createdAt, t)}</td>
+                    <td className="trunc">{task.instruction}</td>
                   </tr>
                 ))}
-                {recent.value.items.length === 0 && <tr><td colSpan={6} className="muted">No tasks</td></tr>}
+                {recent.value.items.length === 0 && <tr><td colSpan={6} className="muted">{o.noTasks}</td></tr>}
               </tbody>
             </table>
           </div>
         ) : (
-          <Unavailable what="Task list" reason={recent.error} />
+          <Unavailable t={t} what={o.taskList} reason={recent.error} />
         )}
       </div>
 
       <div className="section">
-        <h2>Host resources</h2>
+        <h2>{o.hostResources}</h2>
         <div className="card muted">
           {resources === null
-            ? 'CPU / RAM / GPU / disk: not collected (reserved for the Server Monitoring module).'
+            ? o.notCollected
             : resources.ok
               ? resources.value.map((r) => `${r.label}: ${r.value}`).join(' · ')
-              : `unavailable: ${resources.error}`}
+              : o.resourcesUnavailable(resources.error)}
         </div>
       </div>
     </>

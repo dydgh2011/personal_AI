@@ -1,24 +1,30 @@
 'use client';
 
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useT } from '@/i18n/client';
 import { compact, full, ms, niceTicks, pct, usd } from '@/lib/usage-series';
 import s from './usage.module.css';
 
 /**
  * Small hand-drawn SVG charts for the AI usage page (no chart library). Props are plain data so
  * the server page can pass them; the browser only adds hover / keyboard read-outs and measures
- * its width. Every chart has a "표로 보기" table with the same numbers.
+ * its width. Every chart has a "show as table" table with the same numbers.
  */
 
 export type Format = 'tokens' | 'usd' | 'count' | 'pct' | 'ms';
 
-const FORMAT: Record<Format, { axis: (n: number) => string; value: (n: number) => string }> = {
-  tokens: { axis: compact, value: full },
+/** Axis and read-out formats; whole numbers use the selected language's locale. */
+const formats = (locale: string): Record<Format, { axis: (n: number) => string; value: (n: number) => string }> => ({
+  tokens: { axis: compact, value: (n) => full(n, locale) },
   usd: { axis: (n) => (n === 0 ? '$0' : usd(n, n >= 0.1 ? 2 : 3)), value: (n) => usd(n) },
-  count: { axis: compact, value: full },
+  count: { axis: compact, value: (n) => full(n, locale) },
   pct: { axis: pct, value: pct },
   ms: { axis: (n) => (n === 0 ? '0' : ms(n)), value: (n) => ms(n) },
-};
+});
+
+function useFormats() {
+  return formats(useT().locale);
+}
 
 export interface ChartSeries {
   key: string;
@@ -66,6 +72,8 @@ function useWidth(initial = 640) {
 }
 
 function Legend({ series, totals, format }: { series: ChartSeries[]; totals?: boolean; format: Format }) {
+  const FORMAT = useFormats();
+  const u = useT().aiUsage.chart;
   if (series.length < 2) return null;
   return (
     <ul className={s.legend}>
@@ -83,16 +91,18 @@ function Legend({ series, totals, format }: { series: ChartSeries[]; totals?: bo
 function TableView({ caption, labels, series, format, extra }: {
   caption: string; labels: string[]; series: ChartSeries[]; format: Format; extra?: { title: string; values: string[] };
 }) {
+  const FORMAT = useFormats();
+  const u = useT().aiUsage.chart;
   return (
     <details className={s.tableView}>
-      <summary>표로 보기</summary>
+      <summary>{u.table}</summary>
       <div className="table-wrap">
         <table>
           <thead>
             <tr>
               <th>{caption}</th>
               {series.map((x) => <th key={x.key} className={s.num}>{x.label}</th>)}
-              {series.length > 1 && <th className={s.num}>합계</th>}
+              {series.length > 1 && <th className={s.num}>{u.total}</th>}
               {extra && <th>{extra.title}</th>}
             </tr>
           </thead>
@@ -138,6 +148,8 @@ function Axes({ width, height, bottom, yMax, ticks, format, labels, band, tickAt
   width: number; height: number; bottom: number; yMax: number; ticks: number[]; format: Format; labels: string[]; band: number;
   tickAt: Frame['tickAt']; refLines: Frame['refLines']; bands: Frame['bands']; vLines: Frame['vLines'];
 }) {
+  const FORMAT = useFormats();
+  const u = useT().aiUsage.chart;
   const plotH = height - M.top - bottom;
   const y = (v: number) => M.top + plotH - (v / yMax) * plotH;
   const x = (u: number) => M.left + u * band;
@@ -194,6 +206,8 @@ export function ColumnChart(props: Frame & {
   over?: { at: number; label: string };
   marks?: { on: boolean[]; label: string };
 }) {
+  const FORMAT = useFormats();
+  const u = useT().aiUsage.chart;
   const { ref, width } = useWidth();
   const [active, setActive] = useState<number | null>(null);
   const n = props.labels.length;
@@ -218,7 +232,7 @@ export function ColumnChart(props: Frame & {
       <div ref={ref} className={s.plot} onPointerLeave={() => setActive(null)}>
         <svg
           width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" tabIndex={0}
-          aria-label={`${props.tableCaption}별 막대 그래프. 좌우 화살표로 값을 읽을 수 있어요.`}
+          aria-label={u.columnAria(props.tableCaption)}
           onKeyDown={keyNav(n, active, setActive)} onBlur={() => setActive(null)}
         >
           <Axes width={width} height={height} bottom={bottom} yMax={yMax} ticks={ticks} format={props.format} labels={props.ticks} band={band}
@@ -247,12 +261,12 @@ export function ColumnChart(props: Frame & {
             );
           })}
         </svg>
-        {isEmpty && <div className={s.empty}>{props.empty ?? '이 기간에는 기록이 없어요'}</div>}
+        {isEmpty && <div className={s.empty}>{props.empty ?? u.empty}</div>}
         {active !== null && !isEmpty && (
           <Tooltip x={M.left + (active + 0.5) * band} width={width}>
             <div className={s.ttTitle}>{props.labels[active]}</div>
             {props.series.length > 1 && (
-              <div className={s.ttRow}><strong>{fmt.value(totals[active])}</strong><span>합계</span></div>
+              <div className={s.ttRow}><strong>{fmt.value(totals[active])}</strong><span>{u.total}</span></div>
             )}
             {props.series.map((x) => (
               <div key={x.key} className={s.ttRow}>
@@ -280,6 +294,8 @@ export function ColumnChart(props: Frame & {
 
 /** Lines over the same categories (gaps where a value is null), with a crosshair read-out. */
 export function LineChart(props: Frame & { series: ChartSeries[] }) {
+  const FORMAT = useFormats();
+  const u = useT().aiUsage.chart;
   const { ref, width } = useWidth();
   const [active, setActive] = useState<number | null>(null);
   const n = props.labels.length;
@@ -321,7 +337,7 @@ export function LineChart(props: Frame & { series: ChartSeries[] }) {
           setActive(i >= 0 && i < n ? i : null);
         }}>
         <svg width={width} height={height} viewBox={`0 0 ${width} ${height}`} role="img" tabIndex={0}
-          aria-label={`${props.tableCaption}별 선 그래프. 좌우 화살표로 값을 읽을 수 있어요.`}
+          aria-label={u.lineAria(props.tableCaption)}
           onKeyDown={keyNav(n, active, setActive)} onBlur={() => setActive(null)}>
           <Axes width={width} height={height} bottom={M.bottom} yMax={yMax} ticks={ticks} format={props.format} labels={props.ticks} band={band}
             tickAt={props.tickAt} refLines={props.refLines} bands={props.bands} vLines={props.vLines} />
@@ -336,7 +352,7 @@ export function LineChart(props: Frame & { series: ChartSeries[] }) {
             </g>
           ))}
         </svg>
-        {isEmpty && <div className={s.empty}>{props.empty ?? '이 기간에는 기록이 없어요'}</div>}
+        {isEmpty && <div className={s.empty}>{props.empty ?? u.empty}</div>}
         {active !== null && !isEmpty && (
           <Tooltip x={x(active)} width={width}>
             <div className={s.ttTitle}>{props.labels[active]}</div>

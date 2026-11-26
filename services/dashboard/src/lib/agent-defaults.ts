@@ -3,6 +3,8 @@
  * controller's tasks/run-settings.ts, checked here only to give a readable message early; the
  * controller validates again and is the authority.
  */
+import type { Dict } from '@/i18n';
+
 export const AGENTS = ['claude', 'codex'] as const;
 export type Agent = (typeof AGENTS)[number];
 export const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
@@ -22,18 +24,18 @@ export interface DefaultsChange {
 }
 
 /** Form → controller body. An empty field means "the CLI's own default". */
-export function parseDefaultsForm(form: FormData): DefaultsChange | { error: string } {
+export function parseDefaultsForm(form: FormData, t: Dict): DefaultsChange | { error: string } {
   const agent = form.get('agent');
-  if (typeof agent !== 'string' || !(AGENTS as readonly string[]).includes(agent)) return { error: 'Unknown worker' };
+  if (typeof agent !== 'string' || !(AGENTS as readonly string[]).includes(agent)) return { error: t.tasks.unknownWorker };
   const rawModel = form.get('model');
   const rawEffort = form.get('effort');
   const model = typeof rawModel === 'string' ? rawModel.trim() : '';
   const effort = typeof rawEffort === 'string' ? rawEffort.trim() : '';
   if (model && !MODEL_PATTERN.test(model)) {
-    return { error: 'Model must be a model name or alias: letters, digits, . _ : - [ ], at most 80, not starting with "-".' };
+    return { error: t.tasks.badModel };
   }
-  if (effort && !(EFFORT_LEVELS as readonly string[]).includes(effort)) return { error: 'Unknown effort level' };
+  if (effort && !(EFFORT_LEVELS as readonly string[]).includes(effort)) return { error: t.tasks.unknownEffort };
   return { agent: agent as Agent, model: model || null, effort: effort || null };
 }
 
-export const runLabel = (value: string | null | undefined) => value || 'CLI default';
+export const runLabel = (value: string | null | undefined, t: Dict) => value || t.tasks.cliDefault;

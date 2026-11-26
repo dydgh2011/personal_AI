@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { UsageView } from '@/app/(admin)/ai-usage/view';
+import { en, ko } from '@/i18n';
 import type { LlmUsage } from '@/lib/llm';
 import {
   bucketLabels, colorStacks, compact, dailySums, groupStacks, niceTicks, OTHER, periodHref, resolvePeriod, tokenKindStacks,
@@ -96,12 +97,12 @@ describe('period picker', () => {
 describe('series transforms', () => {
   it('splits input into uncached and cached and keeps totals', () => {
     const data = fullSeries();
-    const kinds = tokenKindStacks(data);
+    const kinds = tokenKindStacks(data, ko);
     const sum = (k: string) => kinds.find((x) => x.key === k)!.values.reduce((a, b) => a + b, 0);
     expect(sum('input') + sum('cached')).toBe(data.totals.promptTokens);
     expect(sum('cached')).toBe(data.totals.cachedTokens);
     expect(sum('output')).toBe(data.totals.completionTokens);
-    const groups = groupStacks(data);
+    const groups = groupStacks(data, ko);
     expect(groups.flatMap((g) => g.values).reduce((a, b) => a + b, 0)).toBe(data.totals.promptTokens + data.totals.completionTokens);
   });
 
@@ -115,9 +116,9 @@ describe('series transforms', () => {
     const data = emptySeries({
       series: ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'].map((key, i) => ({ key, values: [T({ promptTokens: 100 - i }), T(), T()] })),
     });
-    const stacks = groupStacks(data);
+    const stacks = groupStacks(data, ko);
     expect(stacks).toHaveLength(6);
-    expect(stacks[5]).toMatchObject({ key: OTHER, label: `${OTHER} (3)`, values: [95 + 94 + 93, 0, 0] });
+    expect(stacks[5]).toMatchObject({ key: OTHER, label: ko.aiUsage.otherCount(3), values: [95 + 94 + 93, 0, 0] });
 
     const a = colorStacks('client', [{ key: 'school', label: 's', values: [] }, { key: 'hermes', label: 'h', values: [] }]);
     const b = colorStacks('client', [{ key: 'hermes', label: 'h', values: [] }, { key: 'notifier', label: 'n', values: [] }, { key: 'school', label: 's', values: [] }]);
@@ -151,36 +152,40 @@ describe('AI usage page', () => {
   const period = resolvePeriod({}, new Date('2026-11-24T17:00:00Z'));
 
   it('renders an empty period without breaking', () => {
-    const html = renderToStaticMarkup(<UsageView period={period} series={emptySeries()} usage={null} seriesError={null} usageError={null} />);
-    expect(html).toContain('이 기간에는 호출이 없어요');
-    expect(html).toContain('이 기간에는 유료 호출이 없어요');
-    expect(html).toContain('이 기간에는 Kelly 호출이 없어요');
+    const html = renderToStaticMarkup(<UsageView t={ko} period={period} series={emptySeries()} usage={null} seriesError={null} usageError={null} />);
+    expect(html).toContain(ko.aiUsage.tokens.none);
+    expect(html).toContain(ko.aiUsage.paid.none);
+    expect(html).toContain(ko.aiUsage.kelly.none);
     expect(html).not.toContain('NaN');
     expect(html).not.toContain('Infinity');
   });
 
   it('keeps the filters and says so when the gateway is down', () => {
     const html = renderToStaticMarkup(
-      <UsageView period={period} series={null} usage={null} seriesError="LLM gateway unreachable" usageError="LLM gateway unreachable" />,
+      <UsageView t={ko} period={period} series={null} usage={null} seriesError="LLM gateway unreachable" usageError="LLM gateway unreachable" />,
     );
-    expect(html).toContain('LLM gateway (graphs) unavailable: LLM gateway unreachable');
-    expect(html.match(/unavailable/g)).toHaveLength(1);
+    expect(html).toContain(ko.common.unavailable(ko.aiUsage.graphsWhat, 'LLM gateway unreachable'));
+    expect(html.split('warning bad').length - 1).toBe(1);
     expect(html).toContain('href="/ai-usage?range=30d&amp;by=client"');
     expect(html).not.toContain('<svg');
   });
 
   it('draws every section, marks the landmarks and escapes names from the gateway', () => {
-    const html = renderToStaticMarkup(<UsageView period={period} series={fullSeries()} usage={usage} seriesError={null} usageError={null} />);
-    for (const t of ['입력 · 캐시 · 출력', '호출자별 토큰', '무료 한도', '하루 상한 $0.30', '승인한 날', '고정 비용', '압축 40K', '메시지 하나당 호출 수', '429 (한도)', '중앙값 (p50)', '표로 보기']) {
+    const html = renderToStaticMarkup(<UsageView t={ko} period={period} series={fullSeries()} usage={usage} seriesError={null} usageError={null} />);
+    const u = ko.aiUsage;
+    for (const t of [u.tokens.kindsCard, u.tokens.byCard(u.groupings.client), u.pools.title, u.paid.cap('$0.30'), u.paid.approvedDays, u.kelly.fixedCost, u.kelly.compress('40K'), u.kelly.perMessage, u.health.rateLimited, u.health.p50, u.chart.table]) {
       expect(html).toContain(t);
     }
-    expect(html).toContain('멈춤 80%');
-    expect(html).toContain('오늘(2026-11-24) <strong>84%</strong>');
+    expect(html).toContain(u.pools.stop('80%'));
+    expect(html).toContain(`${u.pools.today('2026-11-24')} <strong>84%</strong>`);
     expect(html).toContain('&lt;script&gt;x&lt;/script&gt;');
     expect(html).not.toContain('<script>x');
     expect(html).toContain('&lt;b&gt;rate&lt;/b&gt;');
     expect(html).not.toContain('NaN');
     expect((html.match(/<svg/g) ?? []).length).toBe(8);
+    const english = renderToStaticMarkup(<UsageView t={en} period={period} series={fullSeries()} usage={usage} seriesError={null} usageError={null} />);
+    expect(english).toContain(en.aiUsage.tokens.kindsCard);
+    expect(english).toContain(en.aiUsage.pools.stop('80%'));
   });
 });
 

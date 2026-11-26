@@ -6,11 +6,13 @@ import { learning } from '@/lib/learning';
 import { GAP_STATUSES } from '@/lib/learning-types';
 import { ageText, statusView, type LearningSearchParams } from '@/lib/learning-view';
 import { requireSession } from '@/lib/server';
+import { getT } from '@/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
 export default async function SkillsPage({ searchParams }: { searchParams: LearningSearchParams }) {
-  const [sp, session] = await Promise.all([searchParams, requireSession()]);
+  const [sp, session, t] = await Promise.all([searchParams, requireSession(), getT()]);
+  const k = t.learnSkills;
   const status = GAP_STATUSES.find((state) => state === sp.status);
   const here = status ? `/learning/skills?status=${status}` : '/learning/skills';
 
@@ -19,60 +21,60 @@ export default async function SkillsPage({ searchParams }: { searchParams: Learn
 
     return (
       <>
-        <PageHeader title="Skills & gaps" actions={<a className={s.linkBtn} href="#skill-gaps">View gaps</a>} />
+        <PageHeader title={k.title} actions={<a className={s.linkBtn} href="#skill-gaps">{k.viewGaps}</a>} />
         <Flash ok={sp.ok} error={sp.error} />
         <div className={s.split}>
-          <Panel title="Skill profile">
+          <Panel title={k.profile}>
             {skills.length ? (
               <div className={s.rows}>
                 {skills.map((skill) => (
                   <div className={s.row} key={skill.id}>
                     <div className={s.rowMain}>
                       <a className={s.rowTitle} href={`/learning/skills/${skill.id}`}>{skill.displayName}</a>
-                      <LevelScale mastery={skill.mastery} />
+                      <LevelScale t={t} mastery={skill.mastery} />
                       {skill.mastery.verified && (
                         <a className={s.hint} href={`/learning/evaluations/${skill.mastery.verified.evaluationId}`}>
-                          Verified {ageText(skill.mastery.verified.ageDays)} · View evidence
+                          {k.verifiedAgo(ageText(skill.mastery.verified.ageDays, t))}
                         </a>
                       )}
                     </div>
-                    {skill.openGaps > 0 && <Chip tone="warn">{skill.openGaps} open gap(s)</Chip>}
+                    {skill.openGaps > 0 && <Chip tone="warn">{k.openGaps(skill.openGaps)}</Chip>}
                   </div>
                 ))}
               </div>
-            ) : <Empty title="No skills yet">Add a skill to start tracking mastery.</Empty>}
+            ) : <Empty title={k.none}>{k.noneBody}</Empty>}
 
             <form method="post" action="/api/learning/skills/create" className={`${s.form} ${s.sectionSpace}`}>
               <LearningPostFields csrf={session.csrf} returnTo={here} />
-              <label className={s.field}>New skill<input name="name" maxLength={100} required /></label>
-              <div className={s.formActions}><button type="submit" className="primary">Add skill</button></div>
+              <label className={s.field}>{k.newSkill}<input name="name" maxLength={100} required /></label>
+              <div className={s.formActions}><button type="submit" className="primary">{k.addSkill}</button></div>
             </form>
           </Panel>
 
           <div className={s.stack}>
-            <Panel title="Gaps" id="skill-gaps">
+            <Panel title={k.gaps} id="skill-gaps">
               <form method="get" action="/learning/skills#skill-gaps" className={s.inlineForm}>
-                <label className={s.field}>Status
+                <label className={s.field}>{t.lf.status}
                   <select name="status" defaultValue={status ?? ''}>
-                    <option value="">Open and suggested</option>
-                    {GAP_STATUSES.map((state) => <option key={state} value={state}>{statusView(state).label}</option>)}
+                    <option value="">{k.openAndSuggested}</option>
+                    {GAP_STATUSES.map((state) => <option key={state} value={state}>{statusView(state, t).label}</option>)}
                   </select>
                 </label>
-                <button type="submit">Filter</button>
+                <button type="submit">{t.common.filter}</button>
               </form>
               <div className={s.sectionSpace}>
-                <GapList gaps={gaps} csrf={session.csrf} returnTo={here} skills={skills} />
+                <GapList t={t} gaps={gaps} csrf={session.csrf} returnTo={here} skills={skills} />
               </div>
             </Panel>
 
-            <Panel title="Record a gap">
-              <GapForm csrf={session.csrf} returnTo={here} skills={skills} />
+            <Panel title={k.recordGap}>
+              <GapForm t={t} csrf={session.csrf} returnTo={here} skills={skills} />
             </Panel>
           </div>
         </div>
       </>
     );
   } catch (error) {
-    return <Unavailable what="Learning service" reason={errorText(error)} />;
+    return <Unavailable t={t} what={t.learn.serviceWhat} reason={errorText(error, t)} />;
   }
 }

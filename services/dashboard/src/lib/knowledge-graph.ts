@@ -199,31 +199,7 @@ export function searchNodes(elements: ElementDef[], query: string): Set<string> 
   return hits;
 }
 
-/** Names shown for page types and fact kinds (the store's vocabulary). */
-export const PAGE_TYPE_NAMES: Record<string, string> = {
-  me: '나',
-  course: '과목',
-  topic: '주제',
-  goal: '목표',
-  project: '프로젝트',
-  person: '사람',
-  habit: '습관',
-  place: '장소',
-  org: '조직',
-  other: '기타',
-};
-
-export const FACT_KIND_NAMES: Record<string, string> = {
-  score: '점수',
-  mistake: '실수',
-  exam: '시험',
-  deadline: '마감',
-  grading: '배점',
-  resource: '자료',
-  habit: '습관',
-  preference: '선호',
-  other: '기타',
-};
+/** Names shown for page types and fact kinds: t.kg.pageTypes / t.kg.factKinds (dictionaries). */
 
 export function aliasesFromInput(value: string): string[] {
   return [...new Set(value.split(/[,\n]/).map((a) => a.trim()).filter(Boolean))];

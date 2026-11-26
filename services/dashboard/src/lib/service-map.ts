@@ -4,6 +4,8 @@
  * No I/O here; reading the file is service-map-server.ts.
  */
 
+import type { Dict } from '@/i18n';
+
 export type FindingLevel = 'danger' | 'warn' | 'info';
 
 export interface MapService {
@@ -220,15 +222,25 @@ export function ageSeconds(snapshot: Pick<ServiceMapSnapshot, 'generatedAt'>, no
 
 export type Health = 'ok' | 'warn' | 'bad';
 
-/** One word for a service's state, and how it should look. */
-export function healthOf(s: MapService): { tone: Health; text: string } {
+/** How a service's state should look (no text, so the graph code needs no dictionary). */
+export function healthTone(s: MapService): Health {
   const st = s.status;
-  if (!st) return { tone: 'bad', text: '컨테이너 없음' };
-  if (st.state !== 'running') return { tone: 'bad', text: st.state === 'exited' ? `멈춤 (종료 코드 ${st.exitCode ?? '?'})` : st.state };
-  if (st.health === 'unhealthy') return { tone: 'bad', text: '헬스체크 실패' };
-  if (st.health === 'starting') return { tone: 'warn', text: '시작 중' };
-  if (st.health === 'healthy') return { tone: st.restartCount > 0 ? 'warn' : 'ok', text: st.restartCount > 0 ? `정상 · 재시작 ${st.restartCount}회` : '정상' };
-  return { tone: st.restartCount > 0 ? 'warn' : 'ok', text: st.restartCount > 0 ? `실행 중 · 재시작 ${st.restartCount}회` : '실행 중 (헬스체크 없음)' };
+  if (!st || st.state !== 'running' || st.health === 'unhealthy') return 'bad';
+  if (st.health === 'starting' || st.restartCount > 0) return 'warn';
+  return 'ok';
+}
+
+/** One word for a service's state, and how it should look. */
+export function healthOf(s: MapService, t: Dict): { tone: Health; text: string } {
+  const h = t.svc.health;
+  const tone = healthTone(s);
+  const st = s.status;
+  if (!st) return { tone, text: h.noContainer };
+  if (st.state !== 'running') return { tone, text: st.state === 'exited' ? h.exited(String(st.exitCode ?? '?')) : st.state };
+  if (st.health === 'unhealthy') return { tone, text: h.unhealthy };
+  if (st.health === 'starting') return { tone, text: h.starting };
+  if (st.health === 'healthy') return { tone, text: st.restartCount > 0 ? h.healthyRestarts(st.restartCount) : h.healthy };
+  return { tone, text: st.restartCount > 0 ? h.runningRestarts(st.restartCount) : h.running };
 }
 
 // ---------------------------------------------------------------- layout
@@ -317,38 +329,28 @@ export function layoutMap(snapshot: Pick<ServiceMapSnapshot, 'layers' | 'service
 // ---------------------------------------------------------------- graph view (Cytoscape)
 
 /**
- * What a service's dot size shows. Add an entry to add a view (later: work done, AI calls); the
+ * What a service's dot size shows (label and note: t.svc.metrics[id]). Add an entry to add a view (later: work done, AI calls); the
  * page lists them in this order and the first is the default. `value` null = no data (smallest dot).
  */
-export const SIZE_METRICS: Array<{ id: string; label: string; note: string; value: (s: MapService, snap: ServiceMapSnapshot) => number | null }> = [
+export const SIZE_METRICS: Array<{ id: string; value: (s: MapService, snap: ServiceMapSnapshot) => number | null }> = [
   {
     id: 'links',
-    label: '연결 수',
-    note: '부르거나 불리는 연결이 많을수록 큼',
     value: (s, snap) => snap.links.filter((l) => l.from === s.id || l.to === s.id).length,
   },
   {
     id: 'memory',
-    label: '메모리 한도',
-    note: 'Compose mem_limit이 클수록 큼',
     value: (s) => s.hardening.memLimitMb,
   },
   {
     id: 'calls-in',
-    label: '최근 24시간 받은 호출',
-    note: '다른 서비스가 부른 횟수가 많을수록 큼 (로그·게이트웨이 기록, 측정 안 된 곳은 가장 작게)',
     value: (s, snap) => callsOf(snap, s.id, 'in'),
   },
   {
     id: 'calls-out',
-    label: '최근 24시간 보낸 호출',
-    note: '다른 서비스를 부른 횟수가 많을수록 큼 (측정 안 된 곳은 가장 작게)',
     value: (s, snap) => callsOf(snap, s.id, 'out'),
   },
   {
     id: 'allowed-ops',
-    label: '허용된 명령 수',
-    note: '다른 서비스가 쓸 수 있는 명령이 많을수록 큼 (코드에서 읽음)',
     value: (s, snap) => allowedOpsOf(snap, s.id),
   },
 ];
@@ -398,19 +400,19 @@ export function serviceGraph(snap: ServiceMapSnapshot, o: ServiceGraphOptions): 
   const out: ServiceGraphElement[] = [];
 
   for (const s of snap.services) {
-    const h = healthOf(s);
+    const tone = healthTone(s);
     const li = layerIndex.get(s.layer);
     const value = values.get(s.id) ?? null;
     out.push({
       group: 'nodes',
       data: {
         id: `s:${s.id}`,
-        label: h.tone === 'ok' ? s.title : `${s.title} !`,
+        label: tone === 'ok' ? s.title : `${s.title} !`,
         size: dotSize(value, max),
         metric: value,
         search: [s.id, s.title, s.description ?? '', ...s.networks, ...s.external.map((e) => e.name)].join(' ').toLowerCase(),
       },
-      classes: ['svc', li === undefined || li > 3 ? 'layer-other' : `layer-${li}`, `st-${h.tone}`, s.status?.state === 'running' ? '' : 'down', dimSvc(s.id) ? 'dim' : '']
+      classes: ['svc', li === undefined || li > 3 ? 'layer-other' : `layer-${li}`, `st-${tone}`, s.status?.state === 'running' ? '' : 'down', dimSvc(s.id) ? 'dim' : '']
         .filter(Boolean)
         .join(' '),
       ...(pos.has(s.id) ? { position: pos.get(s.id) } : {}),
@@ -534,19 +536,4 @@ export function countFindings(snapshot: Pick<ServiceMapSnapshot, 'findings'>): R
   return out;
 }
 
-export const FINDING_TITLES: Record<string, string> = {
-  'port-exposed': '127.0.0.1 밖에 열린 포트',
-  'not-running': '멈춘 서비스',
-  unhealthy: '헬스체크 실패',
-  'link-unreachable': '부르는데 닿지 않는 연결',
-  'internal-has-internet': '인터넷이 열린 내부망',
-  'reachable-unused': '닿지만 쓰지 않는 길',
-  'writable-root': '쓰기 가능한 루트 파일 시스템',
-  'caps-kept': '남겨 둔 capabilities',
-  uncatalogued: '설명 없는 서비스',
-  'catalog-extra': 'Compose에 없는 설명',
-  'rules-extract-failed': '코드에서 허용 명령을 읽지 못함',
-  'link-no-rules': '허용 명령을 모르는 연결',
-  'call-outside-rules': '허용 목록 밖의 성공한 호출',
-  'calls-unavailable': '호출 수를 못 읽은 곳',
-};
+/** Finding titles by code: t.svc.findingTitles (dictionaries). */

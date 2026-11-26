@@ -1,5 +1,6 @@
 'use client';
 
+import { useT } from '@/i18n/client';
 import { useRouter } from 'next/navigation';
 import { useMemo } from 'react';
 import type { StylesheetJson } from 'cytoscape';
@@ -61,14 +62,15 @@ export function KnowledgeGraph({
   archived: boolean;
 }) {
   const router = useRouter();
+  const t = useT();
   const placed = useMemo(() => withStartPositions(elements), [elements]);
   return (
     <CytoGraph
       elements={placed}
       rules={rules}
       selectedId={selectedId}
-      searchPlaceholder="제목, 다른 이름, 사실 내용 검색"
-      label="지식 그래프: 점은 문서와 사실, 선은 연결입니다. 아래 목록에서도 같은 내용을 볼 수 있습니다."
+      searchPlaceholder={t.kg.searchPlaceholder}
+      label={t.kg.graphLabel}
       onSelect={(id, group) => {
         // Tapping empty space clears the focus (the graph then goes back to the earlier view).
         if (!id) {

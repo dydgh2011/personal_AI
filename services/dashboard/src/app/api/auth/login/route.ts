@@ -1,6 +1,6 @@
 import { cookies } from 'next/headers';
 import { deviceKey, loginBuckets, safeEqual, signDevice, verifyDevice, verifyPassword } from '@/lib/security';
-import { back } from '@/lib/routes';
+import { back, routeT } from '@/lib/routes';
 import { audit, clientIp, DEVICE_COOKIE, DEVICE_TTL_MS, limiter, readSecret, SESSION_COOKIE, sessions, settings } from '@/lib/server';
 
 export async function POST(req: Request) {
@@ -8,17 +8,18 @@ export async function POST(req: Request) {
   const user = String(form.get('username') ?? '').trim().toLowerCase().slice(0, 64);
   const password = String(form.get('password') ?? '');
   const ip = await clientIp();
+  const t = await routeT();
 
   // Same-origin form posts only (no CSRF token exists before login).
   const site = req.headers.get('sec-fetch-site');
-  if (site && site !== 'same-origin') return back('/login', { kind: 'error', text: 'Cross-site login refused' });
+  if (site && site !== 'same-origin') return back('/login', { kind: 'error', text: t.flash.crossSiteLogin });
 
   let hash: string;
   try {
     hash = readSecret(settings.adminHashFile);
   } catch {
     await audit({ event: 'login.misconfigured', ip });
-    return back('/login', { kind: 'error', text: 'Login is not configured (admin password hash missing).' });
+    return back('/login', { kind: 'error', text: t.flash.loginNotConfigured });
   }
   // The device key derives from the password hash: changing the password retires every device cookie.
   const key = deviceKey(hash);
@@ -29,14 +30,14 @@ export async function POST(req: Request) {
   const retry = limiter.blocked(keys);
   if (retry > 0) {
     await audit({ event: 'login.blocked', user, ip, knownDevice: !!device, retryAfterSeconds: retry });
-    return back('/login', { kind: 'error', text: `Too many attempts. Try again in ${retry}s.` });
+    return back('/login', { kind: 'error', text: t.flash.tooManyAttempts(retry) });
   }
 
   const ok = safeEqual(user, settings.adminUser) && verifyPassword(password, hash);
   if (!ok) {
     limiter.fail(keys);
     await audit({ event: 'login.failed', user, ip, knownDevice: !!device });
-    return back('/login', { kind: 'error', text: 'Invalid user name or password.' });
+    return back('/login', { kind: 'error', text: t.flash.invalidLogin });
   }
 
   limiter.reset(keys);

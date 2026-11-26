@@ -1,4 +1,5 @@
 import 'server-only';
+import type { LocalErrorCode } from '@/components/ui';
 import { readSecret } from './server';
 import type {
   Assignment, AssignmentDetail, CodeExecution, Domain, Evaluation, EvaluationDetail, Gap, Goal, Idea, LearningStatus, Milestone, MilestoneProgress, Proposal,
@@ -6,10 +7,15 @@ import type {
 } from './learning-types';
 
 export class LearningError extends Error {
+  /** Set when the dashboard itself produced the error (translated on screen by this code). */
+  local: LocalErrorCode | null = null;
   constructor(message: string, readonly status: number | null, readonly code: string | null = null, readonly details: unknown = null) {
     super(message);
   }
 }
+
+const localError = (message: string, status: number | null, code: string | null, local: LocalErrorCode) =>
+  Object.assign(new LearningError(message, status, code), { local });
 
 const settings = {
   url: (process.env.LEARNING_URL?.trim() || 'http://learning:3000').replace(/\/+$/, ''),
@@ -22,7 +28,7 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: un
   try {
     token = readSecret(settings.tokenFile);
   } catch {
-    throw new LearningError('Learning service token is not configured', null, 'NOT_CONFIGURED');
+    throw localError('Learning service token is not configured', null, 'NOT_CONFIGURED', 'learning_token');
   }
   let res: Response;
   try {
@@ -39,7 +45,7 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: un
       signal: AbortSignal.timeout(timeoutMs),
     });
   } catch {
-    throw new LearningError('Learning service unreachable', null, 'UNREACHABLE');
+    throw localError('Learning service unreachable', null, 'UNREACHABLE', 'learning_unreachable');
   }
   const text = await res.text();
   let data: unknown = null;
@@ -50,8 +56,9 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: un
   }
   if (!res.ok) {
     const d = (data ?? {}) as { message?: unknown; code?: unknown; details?: unknown };
-    const message = Array.isArray(d.message) ? d.message.join('; ') : typeof d.message === 'string' ? d.message : `Learning service error ${res.status}`;
-    throw new LearningError(message, res.status, typeof d.code === 'string' ? d.code : null, d.details ?? null);
+    const code = typeof d.code === 'string' ? d.code : null;
+    if (!Array.isArray(d.message) && typeof d.message !== 'string') throw localError(`Learning service error ${res.status}`, res.status, code, 'learning_http');
+    throw new LearningError(Array.isArray(d.message) ? d.message.join('; ') : d.message, res.status, code, d.details ?? null);
   }
   return data as T;
 }

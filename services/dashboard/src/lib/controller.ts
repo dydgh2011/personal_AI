@@ -1,12 +1,17 @@
 import 'server-only';
+import type { LocalErrorCode } from '@/components/ui';
 import { readSecret, settings } from './server';
 import type { AgentDefaults, AgentInstructions, CommitAuthor, CommitStyle, DiffResponse, Project, Publication, PublicationStatus, PublishAuthorization, Review, ReviewResponse, SystemStatus, Task, TaskList, TestValidation } from './types';
 
 export class ControllerError extends Error {
+  /** Set when the dashboard itself produced the error (translated on screen by this code). */
+  local: LocalErrorCode | null = null;
   constructor(message: string, readonly status: number | null, readonly code: string | null = null) {
     super(message);
   }
 }
+
+const localError = (message: string, status: number | null, local: LocalErrorCode) => Object.assign(new ControllerError(message, status), { local });
 
 /**
  * The dashboard's only way to reach the controller. Runs on the server; the token (a dedicated
@@ -17,7 +22,7 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: un
   try {
     token = readSecret(settings.controllerTokenFile);
   } catch {
-    throw new ControllerError('Dashboard controller token is not configured', null);
+    throw localError('Dashboard controller token is not configured', null, 'controller_token');
   }
   const started = Date.now();
   let res: Response;
@@ -30,7 +35,7 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: un
       signal: AbortSignal.timeout(8000),
     });
   } catch {
-    throw new ControllerError('Controller unreachable', null);
+    throw localError('Controller unreachable', null, 'controller_unreachable');
   }
   const text = await res.text();
   let data: unknown = null;
@@ -42,7 +47,8 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH', path: string, body?: un
   if (!res.ok) {
     const msg = (data as { message?: unknown })?.message;
     const code = (data as { code?: unknown })?.code;
-    throw new ControllerError(Array.isArray(msg) ? msg.join('; ') : typeof msg === 'string' ? msg : `Controller error ${res.status}`, res.status, typeof code === 'string' ? code : null);
+    if (!Array.isArray(msg) && typeof msg !== 'string') throw localError(`Controller error ${res.status}`, res.status, 'controller_http');
+    throw new ControllerError(Array.isArray(msg) ? msg.join('; ') : msg, res.status, typeof code === 'string' ? code : null);
   }
   return { data: data as T, ms: Date.now() - started };
 }

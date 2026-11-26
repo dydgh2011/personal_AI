@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { ProposalDiffView, RoadmapTree } from '@/components/RoadmapTree';
+import { en, ko } from '@/i18n';
 import type { ProposalDiff, RoadmapContent } from '@/lib/learning-types';
 import { MODULES } from '@/modules/registry';
 
@@ -23,13 +24,14 @@ describe('learning UI', () => {
   });
 
   it('renders the roadmap hierarchy with prerequisites, escaping all text', () => {
-    const html = renderToStaticMarkup(<RoadmapTree content={content} />);
-    expect(html).toContain('requires: JSX');
-    expect(html).toContain('3 node(s) · 1 prerequisite link(s)');
+    const html = renderToStaticMarkup(<RoadmapTree t={en} content={content} />);
+    expect(html).toContain(en.learn.tree.requires('JSX'));
+    expect(html).toContain(en.learn.tree.summary(3, 1, 0).split(' · estimated')[0]);
     expect(html).toContain('&lt;script&gt;');
     expect(html).not.toContain('<script>');
     expect(html).not.toContain('<img');
-    expect(html).toContain('AI 제안 · 미검증');
+    expect(html).toContain(en.learn.tree.aiSuggested);
+    expect(renderToStaticMarkup(<RoadmapTree t={ko} content={content} />)).toContain(ko.learn.tree.aiSuggested);
     expect(html).toContain('href="https://react.dev"');
     expect(html).not.toContain('javascript:');
   });
@@ -42,9 +44,9 @@ describe('learning UI', () => {
         edges: { added: [{ from: 'jsx', to: 'x' }], removed: [] }, nodeCount: { from: 3, to: 4 }, estimateMinutes: { from: 120, to: 180 }, unchanged: false,
       },
     };
-    const html = renderToStaticMarkup(<ProposalDiffView data={data} />);
-    expect(html).toContain('+ topic &lt;b&gt;new&lt;/b&gt;');
+    const html = renderToStaticMarkup(<ProposalDiffView t={en} data={data} />);
+    expect(html).toContain(`+ ${en.learn.tree.nodeType.topic} &lt;b&gt;new&lt;/b&gt;`);
     expect(html).toContain('title: JSX → JSX deep dive');
-    expect(html).toContain('+ prerequisite jsx → x');
+    expect(html).toContain(`+ ${en.learn.tree.prerequisite} jsx → x`);
   });
 });

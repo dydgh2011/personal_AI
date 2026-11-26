@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { ko } from '@/i18n';
 import nextConfig from '../next.config.mjs';
 import AssignmentPage from '@/app/(admin)/learning/assignments/[id]/page';
 import SubmissionPage from '@/app/(admin)/learning/assignments/[id]/submissions/[submissionId]/page';
@@ -160,21 +161,21 @@ describe('learning L2 screens', () => {
   it('lists immutable revisions and posts new submissions as multipart', async () => {
     const html = renderToStaticMarkup(await AssignmentPage(pageParams(ASSIGNMENT)));
     expect(html).toContain('Calculate the slope');
-    expect(html).toContain('Revision 1');
-    expect(html).toContain('Revision 2');
+    expect(html).toContain(ko.learnAssignments.revision(1));
+    expect(html).toContain(ko.learnAssignments.revision(2));
     expect(html).toContain(`href="${REVISION_PAGE}"`);
     expect(html).toContain(`action="/api/learning/assignments/${ASSIGNMENT}/submit"`);
     expect(html).toContain('multipart/form-data');
     expect(html).toContain('type="file"');
     expect(html).toContain('.html,.md,.png');
-    expect(html).toContain('Code is not run');
+    expect(html).toContain(ko.learn.parts.codeNotRun);
   });
 
   it('keeps submission history accessible when the assignment is closed', async () => {
     reply(`GET /assignments/${ASSIGNMENT}`, { ...assignmentDetail, assignment: { ...assignment, status: 'archived' } });
     const html = renderToStaticMarkup(await AssignmentPage(pageParams(ASSIGNMENT)));
     expect(html).toContain(`href="${REVISION_PAGE}"`);
-    expect(html).not.toContain('Save submission');
+    expect(html).not.toContain(ko.learnAssignments.saveSubmission);
   });
 
   it('uses the revision’s pinned rubric and preserves the attachment and manual evaluation when AI is off', async () => {
@@ -183,7 +184,7 @@ describe('learning L2 screens', () => {
     expect(html).toContain('&lt;script&gt;answer kept as text&lt;/script&gt;');
     expect(html).toContain(`href="${DOWNLOAD}"`);
     expect(html).toContain(' download=""');
-    expect(html).toContain('AI is not configured');
+    expect(html).toContain(ko.learnSubmission.aiNotConfigured);
     expect(html).not.toContain('/evaluate-ai');
     expect(html).toContain('name="score:reasoning"');
     expect(html).not.toContain('name="score:notation"');
@@ -194,7 +195,7 @@ describe('learning L2 screens', () => {
     reply(`GET /submissions/${LATEST}/evaluations`, { items: [{ ...evaluation, status: 'failed', error: { code: 'AI_PROVIDER_TIMEOUT', message: 'Provider timed out' } }] });
     const html = renderToStaticMarkup(await SubmissionPage(revisionParams()));
     expect(html).toContain(`action="/api/learning/submissions/${LATEST}/evaluate-ai"`);
-    expect(html).toContain('Request AI evaluation');
+    expect(html).toContain(ko.learnSubmission.requestAi);
     expect(html).toContain('AI_PROVIDER_TIMEOUT');
     expect(html).toContain('href="' + DOWNLOAD + '"');
   });
@@ -209,17 +210,17 @@ describe('learning L2 screens', () => {
     const html = renderToStaticMarkup(await EvaluationsPage({ searchParams: Promise.resolve({ status: 'failed' }) }));
     expect(html).toContain(`href="${REVISION_PAGE}"`);
     expect(html).toContain(`href="${EVALUATION_PAGE}"`);
-    expect(html).toContain('awaiting your decision');
+    expect(html).toContain(ko.learn.status.evaluated);
     expect(html).toContain('value="failed" selected=""');
   });
 
   it('shows evidence provenance, confidence, limitations and owner controls', async () => {
     const html = renderToStaticMarkup(await EvaluationPage(pageParams(EVALUATION)));
-    expect(html).toContain('confidence 75%');
+    expect(html).toContain(ko.learn.parts.confidence('75%'));
     expect(html).toContain('The reasoning was reviewed from the text.');
     expect(html).toContain('답안.html');
-    expect(html).toContain('found in submission');
-    expect(html).toContain('not found · unverified');
+    expect(html).toContain(ko.learn.parts.foundInSubmission);
+    expect(html).toContain(ko.learn.parts.notFoundUnverified);
     expect(html).toContain('Could not find this excerpt.');
     expect(html).toContain(`action="/api/learning/assignments/${ASSIGNMENT}/decide"`);
     expect(html).toContain(`action="/api/learning/skills/${SKILL}/verify"`);
@@ -229,27 +230,27 @@ describe('learning L2 screens', () => {
   it('does not offer a decision based on an older revision', async () => {
     reply(`GET /evaluations/${EVALUATION}`, { ...evaluation, submissionId: PREVIOUS, revision: 1 });
     const html = renderToStaticMarkup(await EvaluationPage(pageParams(EVALUATION)));
-    expect(html).toContain('Evaluation of revision 1');
+    expect(html).toContain(ko.learnEvaluations.sub(1));
     expect(html).not.toContain('/decide');
   });
 
   it('distinguishes self level zero from unverified and offers actions on AI gaps', async () => {
     const html = renderToStaticMarkup(await SkillsPage({ searchParams: Promise.resolve({ status: 'suggested' }) }));
-    expect(html).toContain('0 · None');
-    expect(html).toContain('unverified');
+    expect(html).toContain(ko.learn.levelWord(0, ko.learn.levels[0].label));
+    expect(html).toContain(ko.learn.unverified);
     expect(html).toContain(`href="${SKILL_PAGE}"`);
     expect(html).toContain('Check algebra');
     expect(html).toContain(`href="${EVALUATION_PAGE}"`);
-expect(html).toMatch(/<button[^>]+value="open"[^>]*>Accept<\/button>/);
-    expect(html).toMatch(/<button[^>]+value="dismissed"[^>]*>Dismiss<\/button>/);
+expect(html).toMatch(new RegExp(`<button[^>]+value="open"[^>]*>${ko.learn.gaps.accept}</button>`));
+    expect(html).toMatch(new RegExp(`<button[^>]+value="dismissed"[^>]*>${ko.learn.gaps.dismiss}</button>`));
   });
 
   it('shows a separately verified level, the supporting evaluation and a self-assessment form', async () => {
     const html = renderToStaticMarkup(await SkillPage(pageParams(SKILL)));
-    expect(html).toContain('0 · None');
-    expect(html).toContain('3 · Independent');
-    expect(html).toContain('Review due');
-    expect(html).toContain('View supporting evidence');
+    expect(html).toContain(ko.learn.levelWord(0, ko.learn.levels[0].label));
+    expect(html).toContain(ko.learn.levelWord(3, ko.learn.levels[3].label));
+    expect(html).toContain(ko.learn.parts.reviewDue);
+    expect(html).toContain(ko.learnSkills.supportingEvidence);
     expect(html).toContain(`action="/api/learning/skills/${SKILL}/self"`);
     expect(html).toContain(`name="skillId" value="${SKILL}"`);
   });
@@ -296,7 +297,7 @@ describe('learning L2 form routes', () => {
 
   it('rejects extra path segments even when their first and last segments name a valid action', async () => {
     const response = await postForm(['skills', 'invalid-id', 'create'], { name: 'Algebra' });
-    expect(decodeURIComponent(response.headers.get('location') ?? '')).toContain('Unknown action');
+    expect(decodeURIComponent(response.headers.get('location') ?? '')).toContain(ko.learnFlash.unknownAction);
     expect(upstream).not.toHaveBeenCalled();
   });
 

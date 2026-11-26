@@ -6,6 +6,7 @@ import { learning } from '@/lib/learning';
 import { IDEA_PRIORITIES, type LearningStatus } from '@/lib/learning-types';
 import { deadlineState, todayIso } from '@/lib/learning-view';
 import { requireSession } from '@/lib/server';
+import { getT } from '@/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,16 +18,17 @@ const value = <T,>(r: PromiseSettledResult<T>, fallback: T): T => (r.status === 
  * (roadmap progress, verified mastery, study time, freshness) - never one combined score.
  */
 export default async function LearningOverview({ searchParams }: { searchParams: SP }) {
-  const [sp, session] = await Promise.all([searchParams, requireSession()]);
+  const [sp, session, t] = await Promise.all([searchParams, requireSession(), getT()]);
+  const o = t.learnOverview;
   let status: LearningStatus;
   try {
     status = await learning.status();
   } catch (e) {
     return (
       <>
-        <PageHeader title="Learning" />
+        <PageHeader title={t.learn.title} />
         <Flash ok={sp.ok} error={sp.error} />
-        <Unavailable what="Learning service" reason={errorText(e)} />
+        <Unavailable t={t} what={t.learn.serviceWhat} reason={errorText(e, t)} />
       </>
     );
   }
@@ -53,7 +55,7 @@ export default async function LearningOverview({ searchParams }: { searchParams:
   const weightDone = live.filter((m) => m.status === 'completed').reduce((t, m) => t + m.weight, 0);
   const verified = skills.filter((k) => k.mastery.verified);
   const stale = verified.filter((k) => k.mastery.verified!.stale);
-  const overdue = live.filter((m) => m.status !== 'completed' && (deadlineState(m.deadline.fixed, today)?.days ?? 1) < 0);
+  const overdue = live.filter((m) => m.status !== 'completed' && (deadlineState(m.deadline.fixed, today, t)?.days ?? 1) < 0);
   const upcoming = live
     .filter((m) => m.status !== 'completed' && (m.deadline.fixed || m.deadline.suggested))
     .sort((a, b) => (a.deadline.fixed ?? a.deadline.suggested ?? '').localeCompare(b.deadline.fixed ?? b.deadline.suggested ?? ''))
@@ -63,36 +65,36 @@ export default async function LearningOverview({ searchParams }: { searchParams:
   const roadmapTitle = new Map(roadmaps.map((r) => [r.id, r.title]));
 
   const attention = [
-    { n: c.awaitingDecision ?? 0, text: 'evaluated assignment(s) wait for your pass / revise decision', hint: 'AI never passes anything on its own', href: '/learning/evaluations', tone: 'warn' as const },
-    { n: c.pendingProposals, text: 'roadmap proposal(s) wait for approval', hint: 'nothing changes until you approve', href: '/learning/domains#roadmaps', tone: 'warn' as const },
-    { n: c.awaitingEvaluation ?? 0, text: 'submission(s) not evaluated yet', hint: 'evaluate yourself or ask the AI for an opinion', href: '/learning/evaluations', tone: 'info' as const },
-    { n: c.gapsSuggested ?? 0, text: 'weakness(es) suggested by AI evaluations', hint: 'open or dismiss them', href: '/learning/skills', tone: 'info' as const },
-    { n: overdue.length, text: 'milestone(s) past your fixed deadline', hint: 'deadlines are never moved for you', href: '/learning/milestones', tone: 'bad' as const },
-    { n: c.evaluationsFailed ?? 0, text: 'failed evaluation(s) on record', hint: 'submissions are kept; retry any time', href: '/learning/evaluations?status=failed', tone: 'muted' as const },
+    { n: c.awaitingDecision ?? 0, text: o.att.awaitingDecision, hint: o.att.awaitingDecisionHint, href: '/learning/evaluations', tone: 'warn' as const },
+    { n: c.pendingProposals, text: o.att.proposals, hint: o.att.proposalsHint, href: '/learning/domains#roadmaps', tone: 'warn' as const },
+    { n: c.awaitingEvaluation ?? 0, text: o.att.awaitingEvaluation, hint: o.att.awaitingEvaluationHint, href: '/learning/evaluations', tone: 'info' as const },
+    { n: c.gapsSuggested ?? 0, text: o.att.gaps, hint: o.att.gapsHint, href: '/learning/skills', tone: 'info' as const },
+    { n: overdue.length, text: o.att.overdue, hint: o.att.overdueHint, href: '/learning/milestones', tone: 'bad' as const },
+    { n: c.evaluationsFailed ?? 0, text: o.att.failed, hint: o.att.failedHint, href: '/learning/evaluations?status=failed', tone: 'muted' as const },
   ].filter((a) => a.n > 0);
 
   return (
     <>
       <PageHeader
-        title="Learning"
-        sub="Roadmap progress, verified mastery, study time and freshness are separate measures. Nothing here is combined into one score."
-        actions={<><a className={s.linkBtn} href="/api/learning-export">Export JSON</a><a className={`${s.linkBtn} ${s.linkPrimary}`} href="/learning/milestones">Milestones</a></>}
+        title={t.learn.title}
+        sub={o.sub}
+        actions={<><a className={s.linkBtn} href="/api/learning-export">{o.exportJson}</a><a className={`${s.linkBtn} ${s.linkPrimary}`} href="/learning/milestones">{o.milestones}</a></>}
       />
       <Flash ok={sp.ok} error={sp.error} />
-      {!l2 && <Notice tone="warn" title="Learning service is on L1.">Milestones, assignments, evaluations and skills appear after the learning service is updated (schema {status.schemaVersion}).</Notice>}
+      {!l2 && <Notice tone="warn" title={o.l1Title}>{o.l1Body(status.schemaVersion)}</Notice>}
 
       <div className={s.tiles}>
-        <Tile label="Roadmap progress" na={weightTotal === 0} value={weightTotal ? `${Math.round((weightDone / weightTotal) * 100)}%` : 'N/A'}
-          note={weightTotal ? `${weightDone} of ${weightTotal} milestone weight completed` : 'no weighted milestones yet'} />
-        <Tile label="Verified skills" value={`${c.skillsVerified ?? 0} / ${c.skills ?? 0}`} note={`${c.skillsSelfOnly ?? 0} self-rated only (unverified)`} />
-        <Tile label="Study time" na value="N/A" note={<a href="/learning/planner">View planned study time</a>} />
-        <Tile label="Freshness" na={verified.length === 0} value={verified.length ? (stale.length ? `${stale.length} to re-check` : 'all fresh') : 'N/A'}
-          note={verified.length ? `verified levels older than 90 days need a re-check` : 'no verified levels yet'} />
+        <Tile label={o.roadmapProgress} na={weightTotal === 0} value={weightTotal ? `${Math.round((weightDone / weightTotal) * 100)}%` : o.na}
+          note={weightTotal ? o.weightDone(weightDone, weightTotal) : o.noWeighted} />
+        <Tile label={o.verifiedSkills} value={`${c.skillsVerified ?? 0} / ${c.skills ?? 0}`} note={o.selfOnly(c.skillsSelfOnly ?? 0)} />
+        <Tile label={o.studyTime} na value={o.na} note={<a href="/learning/planner">{o.viewPlanned}</a>} />
+        <Tile label={o.freshness} na={verified.length === 0} value={verified.length ? (stale.length ? o.toRecheck(stale.length) : o.allFresh) : o.na}
+          note={verified.length ? o.freshnessNote : o.noVerified} />
       </div>
 
       <div className={s.split}>
         <div className={s.stack}>
-          <Panel title="Needs you" note={attention.length ? undefined : 'Nothing is waiting on you right now.'}>
+          <Panel title={o.needsYou} note={attention.length ? undefined : o.nothingWaiting}>
             {attention.length > 0 ? (
               <div className={s.attention}>
                 {attention.map((a) => (
@@ -103,98 +105,98 @@ export default async function LearningOverview({ searchParams }: { searchParams:
                   </a>
                 ))}
               </div>
-            ) : <Empty title="All clear">Capture an idea or open a milestone to keep going.</Empty>}
+            ) : <Empty title={o.allClear}>{o.allClearBody}</Empty>}
           </Panel>
 
-          <Panel title="Deadlines" note="Your fixed deadlines first; AI / planner suggestions are shown apart and never applied for you." actions={<a href="/learning/milestones">All milestones →</a>}>
+          <Panel title={o.deadlines} note={o.deadlinesNote} actions={<a href="/learning/milestones">{o.allMilestones}</a>}>
             {upcoming.length ? (
               <div className={s.rows}>
                 {upcoming.map((m) => {
-                  const fixed = deadlineState(m.deadline.fixed, today);
+                  const fixed = deadlineState(m.deadline.fixed, today, t);
                   return (
                     <div key={m.id} className={s.row}>
                       <div className={s.rowMain}>
                         <a className={s.rowTitle} href={`/learning/milestones/${m.id}`}>{m.title}</a>
-                        <div className={s.rowMeta}><span>{roadmapTitle.get(m.roadmapId) ?? 'roadmap'}</span><span>{m.assignments.passed}/{m.assignments.total} assignments passed</span></div>
+                        <div className={s.rowMeta}><span>{roadmapTitle.get(m.roadmapId) ?? o.roadmap}</span><span>{o.assignmentsPassed(m.assignments.passed, m.assignments.total)}</span></div>
                       </div>
                       <div className={s.rowSide}>
-                        {m.deadline.fixed ? <Chip tone={fixed?.tone ?? 'muted'}>{m.deadline.fixed} · {fixed?.label}</Chip> : <Chip tone="muted">no fixed deadline</Chip>}
-                        {m.deadline.suggested && <Chip tone="warn" title={m.deadline.suggestedReason ?? undefined}>suggested {m.deadline.suggested}</Chip>}
+                        {m.deadline.fixed ? <Chip tone={fixed?.tone ?? 'muted'}>{m.deadline.fixed} · {fixed?.label}</Chip> : <Chip tone="muted">{o.noFixedDeadline}</Chip>}
+                        {m.deadline.suggested && <Chip tone="warn" title={m.deadline.suggestedReason ?? undefined}>{o.suggestedDate(m.deadline.suggested)}</Chip>}
                       </div>
                     </div>
                   );
                 })}
               </div>
-            ) : <Empty title="No deadlines">Set a deadline on a milestone; it stays exactly as you set it.</Empty>}
+            ) : <Empty title={o.noDeadlines}>{o.noDeadlinesBody}</Empty>}
           </Panel>
 
-          <Panel title="Continue" note="Open assignments, oldest first." actions={<a href="/learning/milestones">Milestones →</a>}>
+          <Panel title={o.continue} note={o.continueNote} actions={<a href="/learning/milestones">{o.milestonesLink}</a>}>
             {open.length ? (
               <div className={s.rows}>
                 {open.map((a) => (
                   <div key={a.id} className={s.row}>
                     <div className={s.rowMain}>
                       <a className={s.rowTitle} href={`/learning/assignments/${a.id}`}>{a.title}</a>
-                      <div className={s.rowMeta}><span>{milestoneTitle.get(a.milestoneId)}</span><span>{a.kind}</span><span>{a.submissions} submission(s)</span></div>
+                      <div className={s.rowMeta}><span>{milestoneTitle.get(a.milestoneId)}</span><span>{a.kind}</span><span>{o.submissions(a.submissions)}</span></div>
                     </div>
-                    <div className={s.rowSide}><Chip status={a.status} /></div>
+                    <div className={s.rowSide}><Chip t={t} status={a.status} /></div>
                   </div>
                 ))}
               </div>
-            ) : <Empty title="No open assignments">Add assignments to a milestone to practise and get evaluated.</Empty>}
+            ) : <Empty title={o.noOpen}>{o.noOpenBody}</Empty>}
           </Panel>
         </div>
 
         <div className={s.stack}>
-          <Panel title="Quick idea" note="Ideas never enter a roadmap or schedule on their own." id="capture" actions={<a href="/learning/ideas">Inbox ({c.ideasInbox}) →</a>}>
+          <Panel title={o.quickIdea} note={o.quickIdeaNote} id="capture" actions={<a href="/learning/ideas">{o.inbox(c.ideasInbox)}</a>}>
             <form method="post" action="/api/learning/ideas/create" className={s.form}>
               <CsrfField token={session.csrf} />
               <input type="hidden" name="returnTo" value="/learning" />
-              <label className={s.field}>Idea<input name="text" required maxLength={2000} placeholder="One line is enough" /></label>
+              <label className={s.field}>{o.idea}<input name="text" required maxLength={2000} placeholder={o.ideaPlaceholder} /></label>
               <div className={s.formActions}>
-                <select name="priority" defaultValue="normal" aria-label="Priority">{IDEA_PRIORITIES.map((p) => <option key={p}>{p}</option>)}</select>
-                <button type="submit" className="primary">Capture</button>
+                <select name="priority" defaultValue="normal" aria-label={o.priority}>{IDEA_PRIORITIES.map((p) => <option key={p} value={p}>{o.priorities[p] ?? p}</option>)}</select>
+                <button type="submit" className="primary">{o.capture}</button>
               </div>
             </form>
             {ideas.length > 0 && (
               <div className={s.rows} style={{ marginTop: 10 }}>
                 {ideas.slice(0, 4).map((i) => (
                   <div key={i.id} className={s.row}>
-                    <div className={s.rowMain}><span style={{ overflowWrap: 'anywhere' }}>{i.text}</span><span className={s.rowMeta}>{since(i.createdAt)}</span></div>
-                    {i.priority !== 'normal' && <Chip tone={i.priority === 'high' ? 'warn' : 'muted'}>{i.priority}</Chip>}
+                    <div className={s.rowMain}><span style={{ overflowWrap: 'anywhere' }}>{i.text}</span><span className={s.rowMeta}>{since(i.createdAt, t)}</span></div>
+                    {i.priority !== 'normal' && <Chip tone={i.priority === 'high' ? 'warn' : 'muted'}>{o.priorities[i.priority] ?? i.priority}</Chip>}
                   </div>
                 ))}
               </div>
             )}
           </Panel>
 
-          <Panel title="Recent evaluations" actions={<a href="/learning/evaluations">All →</a>}>
+          <Panel title={o.recentEvaluations} actions={<a href="/learning/evaluations">{o.all}</a>}>
             {evaluations.length ? (
               <div className={s.stack} style={{ gap: 10 }}>
                 {evaluations.map((e) => (
                   <a key={e.id} href={`/learning/evaluations/${e.id}`} className={s.attItem}>
                     <span className={s.attText}>
                       {e.assignmentTitle}
-                      <small>r{e.revision} · {e.evaluatorType === 'ai' ? 'AI opinion' : 'you'} · {since(e.createdAt)}</small>
+                      <small>r{e.revision} · {e.evaluatorType === 'ai' ? t.learn.parts.aiOpinion : o.you} · {since(e.createdAt, t)}</small>
                     </span>
-                    <Chip status={e.status === 'completed' ? e.outcome : e.status} />
+                    <Chip t={t} status={e.status === 'completed' ? e.outcome : e.status} />
                   </a>
                 ))}
               </div>
-            ) : <p className={s.hint}>No evaluations yet.</p>}
+            ) : <p className={s.hint}>{o.noEvaluations}</p>}
           </Panel>
 
-          <Panel title="AI assistance">
+          <Panel title={o.aiAssistance}>
             <div className={s.chips} style={{ marginBottom: 6 }}>
-              {status.ai.configured ? <Chip tone="ok">on · {status.ai.provider}/{status.ai.model}</Chip> : <Chip tone="muted">not configured</Chip>}
+              {status.ai.configured ? <Chip tone="ok">{o.aiOn(String(status.ai.provider), String(status.ai.model))}</Chip> : <Chip tone="muted">{o.notConfigured}</Chip>}
             </div>
             <p className={s.hint} style={{ margin: 0 }}>
-              {status.ai.month}: {status.ai.spentUsd.toFixed(4)} / {status.ai.budgetUsd ?? '—'} USD · {status.ai.calls} call(s).
-              {!status.ai.configured && ` Missing: ${status.ai.missing.join(', ')}. Roadmap drafts and AI evaluation are refused until then; your own evaluations work.`}
+              {o.aiUsage(status.ai.month, status.ai.spentUsd.toFixed(4), String(status.ai.budgetUsd ?? '—'), status.ai.calls)}
+              {!status.ai.configured && o.aiMissing(status.ai.missing.join(', '))}
             </p>
           </Panel>
-          <CodeExecutionNotice codeExecution={status.codeExecution} />
-          <p className={s.hint} style={{ margin: 0 }}>Learning evaluations are never used as approval for GitHub publishing.</p>
+          <CodeExecutionNotice t={t} codeExecution={status.codeExecution} />
+          <p className={s.hint} style={{ margin: 0 }}>{o.notForPublishing}</p>
         </div>
       </div>
     </>

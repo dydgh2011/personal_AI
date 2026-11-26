@@ -6,6 +6,7 @@ import { learning, LearningError } from '@/lib/learning';
 import type { AssignmentDetail, EvaluationDetail, Skill } from '@/lib/learning-types';
 import { LEARNING_UUID, levelLabel, submissionHref, type LearningSearchParams } from '@/lib/learning-view';
 import { requireSession } from '@/lib/server';
+import { getT } from '@/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
@@ -13,7 +14,8 @@ export default async function EvaluationPage({ params, searchParams }: {
   params: Promise<{ id: string }>;
   searchParams: LearningSearchParams;
 }) {
-  const [{ id }, sp, session] = await Promise.all([params, searchParams, requireSession()]);
+  const [{ id }, sp, session, t] = await Promise.all([params, searchParams, requireSession(), getT()]);
+  const k = t.learnEvaluations;
   if (!LEARNING_UUID.test(id)) notFound();
 
   let ev: EvaluationDetail;
@@ -23,7 +25,7 @@ export default async function EvaluationPage({ params, searchParams }: {
     detail = await learning.assignment(ev.assignmentId);
   } catch (error) {
     if (error instanceof LearningError && error.status === 404) notFound();
-    return <Unavailable what="Learning service" reason={errorText(error)} />;
+    return <Unavailable t={t} what={t.learn.serviceWhat} reason={errorText(error, t)} />;
   }
 
   const { assignment, submissions } = detail;
@@ -49,22 +51,23 @@ export default async function EvaluationPage({ params, searchParams }: {
     <>
       <PageHeader
         title={ev.assignmentTitle}
-        sub={`Evaluation of revision ${ev.revision}`}
-        crumbs={[{ href: '/learning/evaluations', label: 'Evaluations' }, { href: revision, label: `Revision ${ev.revision}` }]}
-        actions={<a className={s.linkBtn} href={revision}>View submission</a>}
+        sub={k.sub(ev.revision)}
+        crumbsLabel={t.common.breadcrumb}
+        crumbs={[{ href: '/learning/evaluations', label: k.title }, { href: revision, label: k.revision(ev.revision) }]}
+        actions={<a className={s.linkBtn} href={revision}>{k.viewSubmission}</a>}
       />
       <Flash ok={sp.ok} error={sp.error} />
 
       <div className={s.split}>
         <div className={s.stack}>
-          <Panel title="Result" note={<time dateTime={ev.createdAt}>{ev.createdAt.slice(0, 10)}</time>}>
-            <EvaluationSummary ev={ev} />
+          <Panel title={k.result} note={<time dateTime={ev.createdAt}>{ev.createdAt.slice(0, 10)}</time>}>
+            <EvaluationSummary t={t} ev={ev} />
           </Panel>
           {ev.status === 'completed' && (
-            <Panel title="Evidence"><EvidenceList evidence={ev.evidence} files={submission?.files} /></Panel>
+            <Panel title={k.evidence}><EvidenceList t={t} evidence={ev.evidence} files={submission?.files} /></Panel>
           )}
           {(Boolean(ev.suggestions.gaps?.length) || Boolean(ev.suggestions.levels?.length)) && (
-            <Panel title="Suggested follow-up">
+            <Panel title={k.followUp}>
               <div className={s.rows}>
                 {ev.suggestions.gaps?.map((gap) => (
                   <div className={s.row} key={gap.gapId ?? gap.title}>
@@ -72,16 +75,16 @@ export default async function EvaluationPage({ params, searchParams }: {
                       <span className={s.rowTitle}>{gap.title}</span>
                       {gap.description && <p className={s.prose}>{gap.description}</p>}
                     </div>
-                                        <a href="/learning/skills#skill-gaps">View gaps</a>
+                                        <a href="/learning/skills#skill-gaps">{k.viewGaps}</a>
                   </div>
                 ))}
                 {ev.suggestions.levels?.map((suggestion) => (
                   <div className={s.row} key={suggestion.skill}>
                     <div className={s.rowMain}>
-                      <span className={s.rowTitle}>{suggestion.skill} · {levelLabel(suggestion.level)}</span>
+                      <span className={s.rowTitle}>{suggestion.skill} · {levelLabel(suggestion.level, t)}</span>
                       {suggestion.rationale && <p className={s.prose}>{suggestion.rationale}</p>}
                     </div>
-                    <Chip tone="warn">AI level suggestion</Chip>
+                    <Chip tone="warn">{k.aiLevel}</Chip>
                   </div>
                 ))}
               </div>
@@ -90,33 +93,33 @@ export default async function EvaluationPage({ params, searchParams }: {
         </div>
 
         <div className={s.stack}>
-          <Panel title="Assignment decision" note={canDecide ? 'Record your decision using this evaluation of the latest revision.' : undefined}>
+          <Panel title={k.decision} note={canDecide ? k.decisionNote : undefined}>
             {canDecide ? (
               <form method="post" action={`/api/learning/assignments/${assignment.id}/decide`} className={s.form}>
                 <LearningPostFields csrf={session.csrf} returnTo={here} />
                 <input type="hidden" name="evaluationId" value={id} />
-                <label className={s.field}>Decision
+                <label className={s.field}>{k.decisionField}
                   <select name="decision" defaultValue="" required>
-                    <option value="" disabled>Choose a decision</option>
-                    {hasGrounds && <option value="passed">Mark as passed</option>}
-                    <option value="revision_required">Request a revision</option>
+                    <option value="" disabled>{k.chooseDecision}</option>
+                    {hasGrounds && <option value="passed">{k.markPassed}</option>}
+                    <option value="revision_required">{k.requestRevision}</option>
                   </select>
                 </label>
-                <label className={s.check}><input type="checkbox" name="confirmed" value="yes" required /> I confirm this decision.</label>
-                <div className={s.formActions}><button type="submit" className="primary">Save decision</button></div>
+                <label className={s.check}><input type="checkbox" name="confirmed" value="yes" required /> {k.confirmDecision}</label>
+                <div className={s.formActions}><button type="submit" className="primary">{k.saveDecision}</button></div>
               </form>
             ) : (
               <div className={s.chips}>
-                <Chip status={assignment.status} />
-                {assignment.decisionEvaluationId === id ? <span>This evaluation supports the recorded decision.</span> : (
-                  <a href={`/learning/assignments/${assignment.id}`}>View assignment status</a>
+                <Chip t={t} status={assignment.status} />
+                {assignment.decisionEvaluationId === id ? <span>{k.supportsDecision}</span> : (
+                  <a href={`/learning/assignments/${assignment.id}`}>{k.viewAssignment}</a>
                 )}
               </div>
             )}
           </Panel>
 
-          {skillError ? <Unavailable what="Linked skills" reason={errorText(skillError)} /> : relatedSkills.length > 0 && (
-            <Panel title="Verify a skill level" note="Choose a level based on the evidence you reviewed.">
+          {skillError ? <Unavailable t={t} what={k.linkedSkills} reason={errorText(skillError, t)} /> : relatedSkills.length > 0 && (
+            <Panel title={k.verifyLevel} note={k.verifyNote}>
               <div className={s.stack}>
                 {relatedSkills.map((skill) => (
                   <details className={s.disclosure} key={skill.id}>
@@ -125,12 +128,12 @@ export default async function EvaluationPage({ params, searchParams }: {
                       <form method="post" action={`/api/learning/skills/${skill.id}/verify`} className={s.form}>
                         <LearningPostFields csrf={session.csrf} returnTo={here} />
                         <input type="hidden" name="evaluationId" value={id} />
-                        <LevelField />
-                        <label className={s.field}>Note (optional)<textarea name="note" rows={2} maxLength={1000} /></label>
-                        <label className={s.check}><input type="checkbox" name="confirmed" value="yes" required /> I have reviewed the evidence for this skill.</label>
+                        <LevelField t={t} />
+                        <label className={s.field}>{k.noteOptional}<textarea name="note" rows={2} maxLength={1000} /></label>
+                        <label className={s.check}><input type="checkbox" name="confirmed" value="yes" required /> {k.reviewedEvidence}</label>
                         <div className={s.formActions}>
-                          <button type="submit" className="primary">Record verified level</button>
-                          <a href={`/learning/skills/${skill.id}`}>View skill</a>
+                          <button type="submit" className="primary">{k.recordVerified}</button>
+                          <a href={`/learning/skills/${skill.id}`}>{k.viewSkill}</a>
                         </div>
                       </form>
                     </div>

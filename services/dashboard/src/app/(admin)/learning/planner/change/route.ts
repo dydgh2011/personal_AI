@@ -1,15 +1,17 @@
-import { errorText } from '@/components/ui';
+import { backendMessage } from '@/components/ui';
 import { learning } from '@/lib/learning';
 import { scheduleDate, scheduleHref, schedulePeriod } from '@/lib/learning-schedule-view';
-import { authorizePost, back } from '@/lib/routes';
+import { authorizePost, back, routeT } from '@/lib/routes';
 import { audit } from '@/lib/server';
 
 export async function POST(request: Request) {
+  const t = await routeT();
+  const x = t.learnFlash;
   let form: FormData;
   try {
     form = await request.formData();
   } catch {
-    return back('/learning/planner', { kind: 'error', text: 'The study planner could not read the form.' }, 'body');
+    return back('/learning/planner', { kind: 'error', text: x.plannerUnreadable }, 'body');
   }
   const date = scheduleDate(form.get('date'));
   const period = schedulePeriod(form.get('period'));
@@ -26,24 +28,24 @@ export async function POST(request: Request) {
         const end = form.get(`end-${weekday}`);
         if (start === '' && end === '') continue;
         if (typeof start !== 'string' || typeof end !== 'string' || !start || !end) {
-          return back(here, { kind: 'error', text: 'Enter both times for each study day or leave both blank.' });
+          return back(here, { kind: 'error', text: x.bothTimes });
         }
         windows.push({ weekday, start, end });
       }
       await learning.updateScheduleAvailability(windows, session.user);
       await audit({ event: 'learning.schedule.availability', user: session.user });
-      return back(here, { kind: 'ok', text: 'Weekly availability saved.' });
+      return back(here, { kind: 'ok', text: x.availabilitySaved });
     }
     if (intent === 'propose') {
       const { proposal } = await learning.proposeSchedule({ date, period }, session.user);
       await audit({ event: 'learning.schedule.propose', user: session.user, id: proposal.code });
       const text = proposal.status === 'applied'
-        ? `Planner proposal ${proposal.code} has already been applied.`
-        : `Planner draft ${proposal.code} is ready. Ask Kelly to show this proposal and approve the blocks you want.`;
+        ? x.proposalApplied(proposal.code)
+        : x.proposalReady(proposal.code);
       return back(here, { kind: 'ok', text });
     }
-    return back(here, { kind: 'error', text: 'Unknown study planner action.' });
+    return back(here, { kind: 'error', text: x.unknownPlannerAction });
   } catch (error) {
-    return back(here, { kind: 'error', text: errorText(error) });
+    return back(here, { kind: 'error', text: backendMessage(error, t) });
   }
 }

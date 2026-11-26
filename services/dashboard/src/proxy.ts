@@ -1,4 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
+import { DICTS, LANG_COOKIE, parseLang } from '@/i18n';
 
 /**
  * First gate: no session cookie, no admin page or API. This only checks presence; the session
@@ -11,7 +12,7 @@ export function proxy(req: NextRequest) {
       // A form posted without a session (logged out / expired): back to the login page, nothing done.
       const login = req.nextUrl.clone();
       login.pathname = '/login';
-      login.search = `?error=${encodeURIComponent('Your session has expired or you are logged out. Log in again, then repeat the action.')}`;
+      login.search = `?error=${encodeURIComponent(DICTS[parseLang(req.cookies.get(LANG_COOKIE)?.value)].flash.sessionExpired)}`;
       const res = NextResponse.redirect(login, 303);
       res.headers.set('X-PAI-Rejected', 'session');
       return res;

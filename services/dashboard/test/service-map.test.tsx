@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { describe, expect, it } from 'vitest';
 import { LinkPanel, ServiceMapView } from '@/app/(admin)/services/view';
+import { en, ko } from '@/i18n';
+
+const k = ko.svc;
 import {
   ageSeconds,
   allowedOpsOf,
@@ -107,9 +110,10 @@ describe('service map snapshot', () => {
   it('age, health words and finding counts', () => {
     expect(ageSeconds(snapshot(), new Date('2026-11-24T12:03:30Z'))).toBe(210);
     const byId = new Map(snapshot().services.map((x) => [x.id, x]));
-    expect(healthOf(byId.get('web')!)).toEqual({ tone: 'ok', text: '정상' });
-    expect(healthOf(byId.get('api')!)).toEqual({ tone: 'bad', text: '헬스체크 실패' });
-    expect(healthOf(byId.get('db')!)).toEqual({ tone: 'bad', text: '컨테이너 없음' });
+    expect(healthOf(byId.get('web')!, ko)).toEqual({ tone: 'ok', text: k.health.healthy });
+    expect(healthOf(byId.get('web')!, en)).toEqual({ tone: 'ok', text: en.svc.health.healthy });
+    expect(healthOf(byId.get('api')!, ko)).toEqual({ tone: 'bad', text: k.health.unhealthy });
+    expect(healthOf(byId.get('db')!, ko)).toEqual({ tone: 'bad', text: k.health.noContainer });
     expect(countFindings(snapshot())).toEqual({ danger: 0, warn: 2, info: 1 });
   });
 
@@ -207,12 +211,12 @@ describe('service map snapshot', () => {
 
   it('renders the summary, controls and findings on the server', () => {
     const html = renderToStaticMarkup(<ServiceMapView snapshot={snapshot()} ageSeconds={42} />);
-    expect(html).toContain('서비스 <b>6</b>');
-    expect(html).toContain('닿기만 하는 길 (1)');
-    expect(html).toContain('부르는데 닿지 않는 연결');
-    expect(html).toContain('수집 42초 전');
-    expect(html).toContain('점을 눌러 보세요');
-    expect(html).toContain('점 크기 = 연결 수');
+    expect(html).toContain(`${k.services} <b>6</b>`);
+    expect(html).toContain(k.reachOnly(1));
+    expect(html).toContain(k.findingTitles['link-unreachable']);
+    expect(html).toContain(k.collected(k.ago.s(42)));
+    expect(html).toContain(k.introTitle);
+    expect(html).toContain(k.sizeLegend(k.metrics.links.label, k.metrics.links.note));
   });
 
   it('is in the navigation', () => {
@@ -298,7 +302,8 @@ describe('service map snapshot', () => {
     expect(callsOf(snap, 'api', 'out')).toBeNull();
     expect(allowedOpsOf(snap, 'api')).toBe(9);
     expect(allowedOpsOf(snap, 'zeta')).toBeNull();
-    expect(sizeMetric('calls-in').label).toBe('최근 24시간 받은 호출');
+    expect(sizeMetric('calls-in').id).toBe('calls-in');
+    expect(k.metrics['calls-in'].label).toBe('최근 24시간 받은 호출');
   });
 
   it('operations are grouped by area with their counts; unlisted calls are kept apart', () => {
@@ -321,30 +326,30 @@ describe('service map snapshot', () => {
   it('link panel: allowed commands, counts and honest gaps', () => {
     const snap = staged();
     const render = (link: MapLink, w: ServiceMapSnapshot['callWindow'] | null = snap.callWindow ?? null) =>
-      renderToStaticMarkup(<LinkPanel link={link} window={w ?? undefined} name={(id) => id.toUpperCase()} go={(id) => <span>{id.toUpperCase()}</span>} />);
+      renderToStaticMarkup(<LinkPanel t={ko} link={link} window={w ?? undefined} name={(id) => id.toUpperCase()} go={(id) => <span>{id.toUpperCase()}</span>} />);
     const html = render(snap.links[0]);
-    expect(html).toContain('최근 24시간');
-    expect(html).toContain('<b>40회</b>');
-    expect(html).toContain('실패 3');
-    expect(html).toContain('API의 허용 목록');
+    expect(html).toContain(k.recentHours(24));
+    expect(html).toContain(`<b>${k.times('40')}</b>`);
+    expect(html).toContain(k.failedN('3'));
+    expect(html).toContain(k.calleeList('API'));
     expect(html).toContain('services/api/src/routes.ts');
     expect(html).toContain('/items/:id');
     expect(html).toContain('items.list');
-    expect(html).toContain('목록 밖 기록');
+    expect(html).toContain(k.unlisted);
     expect(html).not.toContain('다음 단계에서');
-    expect(render(snap.links[1])).toContain('코드에서 읽지 못했습니다');
+    expect(render(snap.links[1])).toContain(k.rulesNotRead);
     const old = render(snapshot().links[0], null);
-    expect(old).toContain('이 스냅샷에는 허용 명령이 없습니다');
-    expect(old).not.toContain('최근 24시간');
-    expect(render(snapshot().links[2])).toContain('측정 안 함');
+    expect(old).toContain(k.noRulesInSnapshot);
+    expect(old).not.toContain(k.recentHours(24));
+    expect(render(snapshot().links[2])).toContain(k.notMeasured);
   });
 
   it('summary shows recent calls and says when a source could not be read', () => {
     const html = renderToStaticMarkup(<ServiceMapView snapshot={staged()} ageSeconds={5} />);
-    expect(html).toContain('최근 24시간 호출 <b>40</b>');
-    expect(html).toContain('일부 못 읽음');
-    expect(html).toContain('굵기 = 최근 24시간 호출 수');
-    expect(html).toContain('최근 24시간 받은 호출');
-    expect(renderToStaticMarkup(<ServiceMapView snapshot={snapshot()} ageSeconds={5} />)).not.toContain('최근 24시간 호출');
+    expect(html).toContain(`${k.recentCalls(24)} <b>40</b>`);
+    expect(html).toContain(k.partlyUnread.trim());
+    expect(html).toContain(k.callsWidth(24).trim());
+    expect(html).toContain(k.metrics['calls-in'].label);
+    expect(renderToStaticMarkup(<ServiceMapView snapshot={snapshot()} ageSeconds={5} />)).not.toContain(k.recentCalls(24));
   });
 });

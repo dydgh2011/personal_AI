@@ -3,6 +3,8 @@
  * No server-only imports: unit tests and the chart components use these directly.
  */
 
+import type { Dict } from '@/i18n';
+
 export const OWNER_TIME_ZONE = 'America/Toronto';
 
 export interface SeriesTotals {
@@ -116,7 +118,8 @@ function trim(n: number, digits: number): string {
   return n.toFixed(digits).replace(/\.0+$/, '').replace(/(\.\d*?)0+$/, '$1');
 }
 
-export const full = (n: number) => Math.round(n).toLocaleString('en-US');
+/** Whole number with grouping, in the selected language's locale (ko-KR / en-US). */
+export const full = (n: number, locale = 'en-US') => Math.round(n).toLocaleString(locale);
 
 export function usd(n: number, digits = 4): string {
   return `$${n.toFixed(digits)}`;
@@ -144,6 +147,7 @@ export function bucketTick(label: string, bucket: 'hour' | 'day', multiDay = fal
 
 // ---------- groups and token kinds
 
+/** Key of the folded tail group (an internal key; its label comes from the dictionary). */
 export const OTHER = '기타';
 const MAX_GROUPS = 6;
 
@@ -151,8 +155,8 @@ const CLIENT_NAMES: Record<string, string> = {
   hermes: 'Kelly (hermes)', school: 'school', learning: 'learning', notifier: 'notifier', operator: 'operator', dashboard: 'dashboard',
 };
 
-export function groupLabel(by: Grouping, key: string): string {
-  if (key === OTHER) return OTHER;
+export function groupLabel(by: Grouping, key: string, t: Dict): string {
+  if (key === OTHER) return t.aiUsage.other;
   if (by === 'client') return CLIENT_NAMES[key] ?? key;
   return key;
 }
@@ -170,14 +174,14 @@ const tokensOf = (t: SeriesTotals) => t.promptTokens + t.completionTokens;
  * tail beyond six folded into "기타" so colors never cycle. Colors are assigned by the caller
  * from the group's rank in this fixed order.
  */
-export function groupStacks(data: UsageSeries): Stack[] {
+export function groupStacks(data: UsageSeries, t: Dict): Stack[] {
   const head = data.series.slice(0, MAX_GROUPS - (data.series.length > MAX_GROUPS ? 1 : 0));
   const tail = data.series.slice(head.length);
-  const stacks = head.map((s) => ({ key: s.key, label: groupLabel(data.by, s.key), values: s.values.map(tokensOf) }));
+  const stacks = head.map((s) => ({ key: s.key, label: groupLabel(data.by, s.key, t), values: s.values.map(tokensOf) }));
   if (tail.length) {
     stacks.push({
       key: OTHER,
-      label: `${OTHER} (${tail.length})`,
+      label: t.aiUsage.otherCount(tail.length),
       values: data.buckets.map((_, i) => tail.reduce((a, s) => a + tokensOf(s.values[i]), 0)),
     });
   }
@@ -185,17 +189,17 @@ export function groupStacks(data: UsageSeries): Stack[] {
 }
 
 /** Input split into uncached and cached (prompt_tokens already includes the cached part), plus output. */
-export function tokenKindStacks(data: UsageSeries): Stack[] {
+export function tokenKindStacks(data: UsageSeries, t: Dict): Stack[] {
   const sum = (f: (t: SeriesTotals) => number) => data.buckets.map((_, i) => data.series.reduce((a, s) => a + f(s.values[i]), 0));
   return [
-    { key: 'input', label: '입력 (캐시 제외)', values: sum((t) => t.promptTokens - t.cachedTokens) },
-    { key: 'cached', label: '캐시된 입력', values: sum((t) => t.cachedTokens) },
-    { key: 'output', label: '출력', values: sum((t) => t.completionTokens) },
+    { key: 'input', label: t.aiUsage.kinds.input, values: sum((t) => t.promptTokens - t.cachedTokens) },
+    { key: 'cached', label: t.aiUsage.kinds.cached, values: sum((t) => t.cachedTokens) },
+    { key: 'output', label: t.aiUsage.kinds.output, values: sum((t) => t.completionTokens) },
   ];
 }
 
 /** Per-group totals for the table under the charts. */
-export function groupTable(data: UsageSeries) {
+export function groupTable(data: UsageSeries, tr: Dict) {
   return data.series.map((s) => {
     const t = s.values.reduce(
       (a, v) => ({
@@ -204,7 +208,7 @@ export function groupTable(data: UsageSeries) {
       }),
       { calls: 0, errors: 0, input: 0, cached: 0, output: 0, cost: 0, list: 0 },
     );
-    return { key: s.key, label: groupLabel(data.by, s.key), ...t };
+    return { key: s.key, label: groupLabel(data.by, s.key, tr), ...t };
   });
 }
 

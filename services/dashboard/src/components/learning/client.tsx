@@ -2,6 +2,7 @@
 
 import { usePathname } from 'next/navigation';
 import { useId, useRef, useState } from 'react';
+import { useT } from '@/i18n/client';
 import type { RubricCriterion } from '@/lib/learning-types';
 import { formatBytes, uploadProblem } from '@/lib/learning-view';
 import s from './learning.module.css';
@@ -18,9 +19,10 @@ export interface TabItem {
 /** Learning sub-navigation highlights the current subsection, including nested routes. */
 export function LearningTabs({ items }: { items: TabItem[] }) {
   const path = usePathname();
+  const tr = useT();
   const on = (t: TabItem) => (t.href === '/learning' ? path === '/learning' : [t.href, ...(t.also ?? [])].some((p) => path === p || path.startsWith(`${p}/`)));
   return (
-    <nav className={s.tabs} aria-label="Learning sections">
+    <nav className={s.tabs} aria-label={tr.learn.tabs.aria}>
       {items.map((t) => (
         <a key={t.href} href={t.href} className={`${s.tab} ${on(t) ? s.tabOn : ''}`} aria-current={on(t) ? 'page' : undefined}>
           {t.label}
@@ -36,26 +38,27 @@ export function RubricCriteriaFields({ criteria = [] }: { criteria?: RubricCrite
     criteria.length ? criteria.map((criterion, id) => ({ id, criterion })) : [{ id: 0 }],
   );
   const nextId = useRef(rows.length);
+  const c = useT().learn.criteria;
 
   return (
     <div className={s.criteria}>
       {rows.map(({ id, criterion }, index) => (
         <fieldset className={s.criterionFields} key={id}>
-          <legend>Criterion {index + 1}</legend>
+          <legend>{c.criterion(index + 1)}</legend>
           <input type="hidden" name="c_key" value={criterion?.key ?? ''} />
           <div className={s.criterionRow}>
-            <label className={s.field}>Title<input name="c_title" required maxLength={200} defaultValue={criterion?.title} /></label>
-            <label className={s.field}>Max points
+            <label className={s.field}>{c.title}<input name="c_title" required maxLength={200} defaultValue={criterion?.title} /></label>
+            <label className={s.field}>{c.maxPoints}
               <input name="c_max" type="number" required min={0.5} max={100} step={0.01} defaultValue={criterion?.maxScore} />
             </label>
           </div>
-          <label className={s.field}>Description (optional)
+          <label className={s.field}>{c.description}
             <textarea name="c_desc" rows={2} maxLength={2000} defaultValue={criterion?.description ?? ''} />
           </label>
           {rows.length > 1 && (
             <div className={s.formActions}>
-              <button type="button" aria-label={`Remove criterion ${index + 1}`}
-                onClick={() => setRows((existing) => existing.filter((row) => row.id !== id))}>Remove</button>
+              <button type="button" aria-label={c.removeAria(index + 1)}
+                onClick={() => setRows((existing) => existing.filter((row) => row.id !== id))}>{c.remove}</button>
             </div>
           )}
         </fieldset>
@@ -65,7 +68,7 @@ export function RubricCriteriaFields({ criteria = [] }: { criteria?: RubricCrite
           <button type="button" onClick={() => {
             const id = nextId.current++;
             setRows((existing) => [...existing, { id }]);
-          }}>Add criterion</button>
+          }}>{c.add}</button>
         </div>
       )}
     </div>
@@ -82,13 +85,14 @@ export function FilePicker({ accept, limits, required = false }: {
   required?: boolean;
 }) {
   const inputId = useId();
+  const t = useT();
   const [files, setFiles] = useState<Array<{ name: string; size: number }>>([]);
   const [problem, setProblem] = useState<string | null>(null);
   return (
     <div className={s.field}>
-      <label htmlFor={inputId}>Attachments{required ? ' (required)' : ' (optional)'}</label>
+      <label htmlFor={inputId}>{t.learn.files.attachments}{required ? t.learn.files.required : t.learn.files.optional}</label>
       <span id={inputId + '-limits'} className={s.hint}>
-        Up to {limits.maxFiles} files · {formatBytes(limits.maxFileBytes)} each · {formatBytes(limits.maxTotalBytes)} total
+        {t.learn.files.limits(limits.maxFiles, formatBytes(limits.maxFileBytes), formatBytes(limits.maxTotalBytes))}
       </span>
       <input
         id={inputId}
@@ -100,7 +104,7 @@ export function FilePicker({ accept, limits, required = false }: {
         accept={accept}
         onChange={(e) => {
           const list = Array.from(e.currentTarget.files ?? []).map((f) => ({ name: f.name, size: f.size }));
-          const p = uploadProblem(list, limits);
+          const p = uploadProblem(list, limits, t);
           e.currentTarget.setCustomValidity(p ?? '');
           setFiles(list);
           setProblem(p);

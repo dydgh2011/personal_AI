@@ -130,3 +130,8 @@
   .tileValue { font-size: 22px; }
   .seg a, .seg span { padding: 6px 10px; }
 }
+
+/* Longer English labels (i18n): segment buttons wrap on phones. */
+@media (max-width: 480px) {
+  .seg a, .seg span { white-space: normal; }
+}

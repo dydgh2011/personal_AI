@@ -2,6 +2,7 @@
 
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState, type CSSProperties } from 'react';
+import { useT } from '@/i18n/client';
 import { NAV_ORDER_COOKIE, orderItems, serializeNavOrder } from '@/lib/nav-order';
 
 export { orderItems };
@@ -9,6 +10,7 @@ export { orderItems };
 /** Re-renders the server page every `seconds` while enabled (no data is cached in the browser). */
 export function AutoRefresh({ seconds = 5 }: { seconds?: number }) {
   const router = useRouter();
+  const t = useT();
   const [on, setOn] = useState(true);
   useEffect(() => {
     if (!on) return;
@@ -19,20 +21,21 @@ export function AutoRefresh({ seconds = 5 }: { seconds?: number }) {
   }, [on, seconds, router]);
   return (
     <label className="muted row" style={{ gap: 4 }}>
-      <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} /> auto-refresh {seconds}s
+      <input type="checkbox" checked={on} onChange={(e) => setOn(e.target.checked)} /> {t.common.autoRefresh(seconds)}
     </label>
   );
 }
 
 export function ThemeToggle() {
+  const t = useT();
   const toggle = () => {
     const next = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
     document.documentElement.dataset.theme = next;
     document.cookie = `pai_theme=${next}; path=/; max-age=31536000; samesite=strict`;
   };
   return (
-    <button type="button" onClick={toggle} title="Toggle light/dark">
-      Theme
+    <button type="button" onClick={toggle} title={t.theme.title}>
+      {t.theme.button}
     </button>
   );
 }
@@ -52,6 +55,7 @@ function writeOrderCookie(order: string[]) {
 
 export function NavLinks({ items, initialOrder }: { items: Array<{ href: string; title: string }>; initialOrder: string[] }) {
   const path = usePathname();
+  const t = useT();
   const [order, setOrder] = useState<string[]>(initialOrder);
   const [editing, setEditing] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -89,12 +93,12 @@ export function NavLinks({ items, initialOrder }: { items: Array<{ href: string;
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      window.prompt('순서를 복사하세요', text.replace(/\n/g, ' / '));
+      window.prompt(t.shell.nav.copyPrompt, text.replace(/\n/g, ' / '));
     }
   };
   const small: CSSProperties = { padding: '0 6px', fontSize: 12, lineHeight: '20px', minWidth: 24 };
   return (
-    <nav aria-label="메뉴">
+    <nav aria-label={t.common.menu}>
       {list.map((m, index) => {
         const active = m.href === '/' ? path === '/' : path.startsWith(m.href);
         if (!editing) {
@@ -107,10 +111,10 @@ export function NavLinks({ items, initialOrder }: { items: Array<{ href: string;
         return (
           <div key={m.href} style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '2px 0' }}>
             <span style={{ flex: 1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', padding: '4px 8px' }}>{m.title}</span>
-            <button type="button" style={small} onClick={() => move(index, -1)} disabled={index === 0} aria-label={`${m.title} 위로`}>
+            <button type="button" style={small} onClick={() => move(index, -1)} disabled={index === 0} aria-label={t.shell.nav.up(m.title)}>
               ↑
             </button>
-            <button type="button" style={small} onClick={() => move(index, 1)} disabled={index === list.length - 1} aria-label={`${m.title} 아래로`}>
+            <button type="button" style={small} onClick={() => move(index, 1)} disabled={index === list.length - 1} aria-label={t.shell.nav.down(m.title)}>
               ↓
             </button>
           </div>
@@ -118,15 +122,15 @@ export function NavLinks({ items, initialOrder }: { items: Array<{ href: string;
       })}
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginTop: 8 }}>
         <button type="button" style={small} onClick={() => setEditing(!editing)} aria-pressed={editing}>
-          {editing ? '편집 끝' : '순서 편집'}
+          {editing ? t.shell.nav.done : t.shell.nav.edit}
         </button>
         {editing && (
           <>
             <button type="button" style={small} onClick={reset}>
-              기본 순서
+              {t.shell.nav.reset}
             </button>
             <button type="button" style={small} onClick={copy}>
-              {copied ? '복사됨' : '순서 복사'}
+              {copied ? t.shell.nav.copied : t.shell.nav.copy}
             </button>
           </>
         )}

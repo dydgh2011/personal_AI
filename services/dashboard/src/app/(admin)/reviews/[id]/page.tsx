@@ -9,11 +9,13 @@ import { decidable, reviewWarnings, testsOf } from '@/lib/review';
 import type { DiffResponse, PublicationStatus } from '@/lib/types';
 import { AutoRefresh } from '@/components/client';
 import { PublicationPanel } from '@/components/PublicationPanel';
+import { getT } from '@/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
 export default async function ReviewPage({ params, searchParams }: { params: Promise<{ id: string }>; searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const [{ id }, sp, session] = await Promise.all([params, searchParams, requireSession()]);
+  const [{ id }, sp, session, t] = await Promise.all([params, searchParams, requireSession(), getT()]);
+  const k = t.review;
   if (!UUID.test(id)) notFound();
   let d: DiffResponse | null = null;
   let publication: PublicationStatus | null = null;
@@ -25,43 +27,43 @@ export default async function ReviewPage({ params, searchParams }: { params: Pro
     if (e instanceof ControllerError && e.status === 404) {
       error = e.message;
     } else {
-      error = errorText(e);
+      error = errorText(e, t);
     }
   }
   if (!d) {
     return (
       <>
-        <h1>Review</h1>
+        <h1>{k.title}</h1>
         <Flash ok={sp.ok} error={sp.error} />
-        <Unavailable what="Diff" reason={error ?? 'unknown'} />
-        <a href={`/tasks/${id}`}>Task details →</a>
+        <Unavailable t={t} what={k.diff} reason={error ?? t.common.unknown} />
+        <a href={`/tasks/${id}`}>{k.taskDetails}</a>
       </>
     );
   }
 
-  const warnings = reviewWarnings(d, publication?.testValidation);
-  const tests = testsOf(d, publication?.testValidation);
+  const warnings = reviewWarnings(d, publication?.testValidation, t);
+  const tests = testsOf(d, publication?.testValidation, t);
   const pending = decidable(d);
   const confirm = sp.confirm === 'approve' || sp.confirm === 'reject' ? sp.confirm : null;
   const publishConfirm = sp.confirm === 'authorize' || sp.confirm === 'publish' ? sp.confirm : null;
 
   return (
     <>
-      <h1>Review <span className="mono">{short(d.taskId, 8)}</span> <Badge value={d.review?.status} /></h1>
+      <h1>{k.title} <span className="mono">{short(d.taskId, 8)}</span> <Badge value={d.review?.status} /></h1>
       <Flash ok={sp.ok} error={sp.error} />
       <div className="card">
         <dl className="kv">
-          <dt>Project</dt><dd>{d.projectId}</dd>
-          <dt>Agent</dt><dd>{d.agent} · <a href={`/tasks/${d.taskId}`}>task</a></dd>
-          <dt>Base</dt><dd className="mono">{d.baseSha}</dd>
-          <dt>Head</dt><dd className="mono">{d.headSha}</dd>
-          <dt>Tree</dt><dd className="mono">{d.headTree ?? 'not reported'}</dd>
-          <dt>Changes</dt><dd>{d.files.length} file(s) <span className="plus">+{d.additions ?? '?'}</span> <span className="minus">-{d.deletions ?? '?'}</span></dd>
-          <dt>Tests</dt><dd><span className={`badge ${tests.status === 'passed' ? 'ok' : tests.level === 'bad' ? 'bad' : 'warn'}`}>{tests.status}</span> <span className="muted">{tests.text}</span></dd>
+          <dt>{t.common.project}</dt><dd>{d.projectId}</dd>
+          <dt>{t.common.agent}</dt><dd>{d.agent} · <a href={`/tasks/${d.taskId}`}>{t.common.task}</a></dd>
+          <dt>{k.base}</dt><dd className="mono">{d.baseSha}</dd>
+          <dt>{k.head}</dt><dd className="mono">{d.headSha}</dd>
+          <dt>{k.tree}</dt><dd className="mono">{d.headTree ?? k.notReported}</dd>
+          <dt>{k.changes}</dt><dd>{k.fileCount(d.files.length)} <span className="plus">+{d.additions ?? '?'}</span> <span className="minus">-{d.deletions ?? '?'}</span></dd>
+          <dt>{k.tests}</dt><dd><span className={`badge ${tests.status === 'passed' ? 'ok' : tests.level === 'bad' ? 'bad' : 'warn'}`}>{tests.status}</span> <span className="muted">{tests.text}</span></dd>
         </dl>
         <div className="section">
-          <h2>Commit message</h2>
-          <pre className="block">{d.commitMessage ?? '(not reported)'}</pre>
+          <h2>{k.commitMessage}</h2>
+          <pre className="block">{d.commitMessage ?? t.common.notReported}</pre>
         </div>
       </div>
 
@@ -73,60 +75,60 @@ export default async function ReviewPage({ params, searchParams }: { params: Pro
 
       {pending && !confirm && (
         <div className="row section">
-          <a className="btn approve" href={`/reviews/${d.taskId}?confirm=approve#decide`}>Approve…</a>
-          <a className="btn danger" href={`/reviews/${d.taskId}?confirm=reject#decide`}>Reject…</a>
+          <a className="btn approve" href={`/reviews/${d.taskId}?confirm=approve#decide`}>{k.approve}</a>
+          <a className="btn danger" href={`/reviews/${d.taskId}?confirm=reject#decide`}>{k.reject}</a>
         </div>
       )}
 
       {pending && confirm && (
         <div id="decide" className="card section" style={{ borderColor: confirm === 'approve' ? 'var(--ok)' : 'var(--bad)' }}>
-          <h2>Confirm {confirm}</h2>
+          <h2>{k.confirmTitle(confirm)}</h2>
           <dl className="kv">
-            <dt>Project</dt><dd>{d.projectId}</dd>
-            <dt>Base SHA</dt><dd className="mono">{d.baseSha}</dd>
-            <dt>Head SHA</dt><dd className="mono">{pending.headSha}</dd>
-            <dt>Files</dt><dd><pre className="block">{d.files.map((f) => `${f.status}\t${f.path}`).join('\n') || '(none)'}</pre></dd>
+            <dt>{t.common.project}</dt><dd>{d.projectId}</dd>
+            <dt>{k.baseSha}</dt><dd className="mono">{d.baseSha}</dd>
+            <dt>{k.headSha}</dt><dd className="mono">{pending.headSha}</dd>
+            <dt>{t.common.files}</dt><dd><pre className="block">{d.files.map((f) => `${f.status}\t${f.path}`).join('\n') || t.common.none}</pre></dd>
           </dl>
           <p className="muted">
-            This records a decision for this exact commit only. It does not push, merge or open a PR.
-            {warnings.length > 0 && ` ${warnings.length} warning(s) above apply.`}
+            {k.confirmNote}
+            {warnings.length > 0 && k.warningsApply(warnings.length)}
           </p>
           <form method="post" action={`/api/reviews/${d.taskId}/decision`} className="section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <CsrfField token={session.csrf} />
             <input type="hidden" name="decision" value={confirm} />
             <input type="hidden" name="headSha" value={pending.headSha} />
             <label className="row">
-              <input type="checkbox" name="confirmed" value="yes" required /> I reviewed commit <span className="mono">{short(pending.headSha)}</span> and want to {confirm} it.
+              <input type="checkbox" name="confirmed" value="yes" required /> {k.confirmCheck(confirm)} <span className="mono">{short(pending.headSha)}</span>
             </label>
-            <textarea name="reason" maxLength={2000} rows={2} placeholder="Reason (optional)" />
+            <textarea name="reason" maxLength={2000} rows={2} placeholder={k.reasonPlaceholder} />
             <div className="row">
-              <button type="submit" className={confirm === 'approve' ? 'approve' : 'danger'}>{confirm === 'approve' ? 'Approve commit' : 'Reject commit'}</button>
-              <a href={`/reviews/${d.taskId}`}>Cancel</a>
+              <button type="submit" className={confirm === 'approve' ? 'approve' : 'danger'}>{confirm === 'approve' ? k.approveCommit : k.rejectCommit}</button>
+              <a href={`/reviews/${d.taskId}`}>{t.common.cancel}</a>
             </div>
           </form>
         </div>
       )}
 
-      <PublicationPanel taskId={d.taskId} status={publication} csrf={session.csrf} confirm={publishConfirm} files={d.files} idempotencyKey={randomUUID()} />
+      <PublicationPanel t={t} taskId={d.taskId} status={publication} csrf={session.csrf} confirm={publishConfirm} files={d.files} idempotencyKey={randomUUID()} />
       {(publication?.state === 'validation_pending' || publication?.testValidation?.status === 'pending' || publication?.testValidation?.status === 'running') && <AutoRefresh seconds={3} />}
 
       <div className="section">
-        <h2>Files</h2>
-        <DiffView files={d.files} patch={d.patch} omitted={d.omittedFiles} withheld={d.patchWithheld} />
+        <h2>{t.common.files}</h2>
+        <DiffView t={t} files={d.files} patch={d.patch} omitted={d.omittedFiles} withheld={d.patchWithheld} />
       </div>
 
       <div className="section">
-        <h2>History</h2>
+        <h2>{k.history}</h2>
         <div className="table-wrap">
           <table>
-            <thead><tr><th>Head</th><th>Status</th><th>Decided by</th><th>When</th><th>Reason</th></tr></thead>
+            <thead><tr><th>{k.head}</th><th>{t.common.status}</th><th>{k.decidedBy}</th><th>{k.when}</th><th>{t.common.reason}</th></tr></thead>
             <tbody>
               {d.history.map((h) => (
                 <tr key={h.id}>
                   <td className="mono">{short(h.headSha)}</td>
                   <td><Badge value={h.status} /></td>
                   <td>{h.decidedBy ?? '-'}</td>
-                  <td title={h.decidedAt ?? h.createdAt}>{since(h.decidedAt ?? h.createdAt)}</td>
+                  <td title={h.decidedAt ?? h.createdAt}>{since(h.decidedAt ?? h.createdAt, t)}</td>
                   <td className="trunc">{h.reason ?? h.invalidatedReason ?? '-'}</td>
                 </tr>
               ))}

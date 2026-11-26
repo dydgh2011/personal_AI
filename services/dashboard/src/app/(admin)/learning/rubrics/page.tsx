@@ -5,20 +5,22 @@ import { errorText, Flash, Unavailable } from '@/components/ui';
 import { learning } from '@/lib/learning';
 import type { LearningSearchParams } from '@/lib/learning-view';
 import { requireSession } from '@/lib/server';
+import { getT } from '@/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
 export default async function RubricsPage({ searchParams }: { searchParams: LearningSearchParams }) {
-  const [sp, session] = await Promise.all([searchParams, requireSession()]);
+  const [sp, session, t] = await Promise.all([searchParams, requireSession(), getT()]);
+  const k = t.learnRubrics;
   try {
     const rubrics = await learning.rubrics();
 
     return (
       <>
-        <PageHeader title="Rubrics" crumbs={[{ href: '/learning/milestones', label: 'Milestones' }]} />
+        <PageHeader title={k.title} crumbsLabel={t.common.breadcrumb} crumbs={[{ href: '/learning/milestones', label: t.learnMilestones.title }]} />
         <Flash ok={sp.ok} error={sp.error} />
         <div className={s.cols2}>
-          <Panel title="Rubric library">
+          <Panel title={k.library}>
             {rubrics.length ? (
               <div className={s.rows}>
                 {rubrics.map((rubric) => (
@@ -27,31 +29,31 @@ export default async function RubricsPage({ searchParams }: { searchParams: Lear
                       <a className={s.rowTitle} href={`/learning/rubrics/${rubric.id}`}>{rubric.title}</a>
                       {rubric.latestVersion && (
                         <div className={s.rowMeta}>
-                          <span>Version {rubric.latestVersion.version}</span>
-                          <span>Pass at {rubric.latestVersion.passingScore} / {rubric.latestVersion.maxScore}</span>
+                          <span>{k.version(rubric.latestVersion.version)}</span>
+                          <span>{k.passAt(rubric.latestVersion.passingScore, rubric.latestVersion.maxScore)}</span>
                         </div>
                       )}
                     </div>
-                    <Chip status={rubric.status} />
+                    <Chip t={t} status={rubric.status} />
                   </div>
                 ))}
               </div>
-            ) : <Empty title="No rubrics yet" />}
+            ) : <Empty title={k.none} />}
           </Panel>
 
-          <Panel title="Create a rubric">
+          <Panel title={k.create}>
             <form method="post" action="/api/learning/rubrics/create" className={s.form}>
               <LearningPostFields csrf={session.csrf} returnTo="/learning/rubrics" />
-              <label className={s.field}>Title<input name="title" required maxLength={200} /></label>
+              <label className={s.field}>{t.lf.title}<input name="title" required maxLength={200} /></label>
               <RubricCriteriaFields />
-              <label className={s.field}>Passing score<input type="number" name="passingScore" required min={0} step={0.01} /></label>
-              <div className={s.formActions}><button type="submit" className="primary">Save rubric</button></div>
+              <label className={s.field}>{k.passingScore}<input type="number" name="passingScore" required min={0} step={0.01} /></label>
+              <div className={s.formActions}><button type="submit" className="primary">{k.save}</button></div>
             </form>
           </Panel>
         </div>
       </>
     );
   } catch (error) {
-    return <Unavailable what="Learning service" reason={errorText(error)} />;
+    return <Unavailable t={t} what={t.learn.serviceWhat} reason={errorText(error, t)} />;
   }
 }

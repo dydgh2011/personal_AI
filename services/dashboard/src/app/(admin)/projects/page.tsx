@@ -4,31 +4,34 @@ import { short, since } from '@/lib/diff';
 import { settingsSummary } from '@/lib/project-settings';
 import type { Project } from '@/lib/types';
 import { requireSession } from '@/lib/server';
+import { getT } from '@/i18n/server';
 
 export const dynamic = 'force-dynamic';
 
 /** Registry overview. Agent settings are edited per project (/projects/:id); everything else stays with the controller admin API. */
 export default async function ProjectsPage() {
   await requireSession();
+  const t = await getT();
+  const k = t.projects;
   let projects: Project[] | null = null;
   let error: string | null = null;
   try {
     projects = await controller.projects();
   } catch (e) {
-    error = errorText(e);
+    error = errorText(e, t);
   }
   return (
     <>
-      <h1>Projects</h1>
-      <p className="muted">Select a project to edit its agent settings (coding rules, forbidden paths, commit style). Enabling, agents and sync stay with the controller admin API.</p>
-      {error && <Unavailable what="Project registry" reason={error} />}
+      <h1>{k.title}</h1>
+      <p className="muted">{k.intro}</p>
+      {error && <Unavailable t={t} what={k.registry} reason={error} />}
       {projects && (
         <div className="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Project</th><th>Source</th><th>Visibility</th><th>Branch</th><th>Agents</th>
-                <th>Code changes</th><th>Enabled</th><th>Agent settings</th><th>Sync</th><th>Last sync</th><th>Head</th><th>Sync error</th>
+                <th>{t.common.project}</th><th>{k.source}</th><th>{k.visibility}</th><th>{t.common.branch}</th><th>{k.agents}</th>
+                <th>{k.codeChanges}</th><th>{k.enabled}</th><th>{k.agentSettings}</th><th>{k.sync}</th><th>{k.lastSync}</th><th>{k.head}</th><th>{k.syncError}</th>
               </tr>
             </thead>
             <tbody>
@@ -39,19 +42,19 @@ export default async function ProjectsPage() {
                     {p.fullName && <div className="muted">{p.fullName}</div>}
                   </td>
                   <td>{p.source}</td>
-                  <td><span className={`badge ${p.visibility === 'private' ? 'warn' : 'muted'}`}>{p.visibility ?? 'local'}</span></td>
+                  <td><span className={`badge ${p.visibility === 'private' ? 'warn' : 'muted'}`}>{p.visibility ?? k.local}</span></td>
                   <td className="mono">{p.defaultBranch}</td>
                   <td>{p.allowedAgents.join(', ') || '-'}</td>
-                  <td>{p.allowCodeChanges ? 'allowed' : 'read-only'}</td>
-                  <td><span className={`badge ${p.enabled ? 'ok' : 'muted'}`}>{p.enabled ? 'enabled' : 'disabled'}</span></td>
-                  <td><a href={`/projects/${p.id}`}>{settingsSummary(p)}</a></td>
+                  <td>{p.allowCodeChanges ? k.allowed : k.readOnly}</td>
+                  <td><span className={`badge ${p.enabled ? 'ok' : 'muted'}`}>{p.enabled ? k.enabledYes : k.enabledNo}</span></td>
+                  <td><a href={`/projects/${p.id}`}>{settingsSummary(p, t)}</a></td>
                   <td><Badge value={p.syncStatus} /></td>
-                  <td title={p.lastFetchedAt ?? ''}>{p.source === 'local' ? '-' : since(p.lastFetchedAt)}</td>
+                  <td title={p.lastFetchedAt ?? ''}>{p.source === 'local' ? '-' : since(p.lastFetchedAt, t)}</td>
                   <td className="mono">{p.cachedHeadSha ? short(p.cachedHeadSha) : '-'}</td>
                   <td className="trunc" title={p.lastSyncError ?? ''}>{p.lastSyncError ?? '-'}</td>
                 </tr>
               ))}
-              {projects.length === 0 && <tr><td colSpan={12} className="muted">No projects</td></tr>}
+              {projects.length === 0 && <tr><td colSpan={12} className="muted">{k.noProjects}</td></tr>}
             </tbody>
           </table>
         </div>

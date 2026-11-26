@@ -1,3 +1,5 @@
+import type { Dict } from '@/i18n';
+
 export type LineKind = 'add' | 'del' | 'ctx' | 'hunk' | 'meta';
 
 export interface PatchFile {
@@ -33,18 +35,18 @@ export function parsePatch(patch: string | null): PatchFile[] {
 
 export const short = (sha: string | null | undefined, n = 12) => (sha ? sha.slice(0, n) : 'unknown');
 
-export function since(iso: string | null | undefined): string {
-  if (!iso) return 'unknown';
+export function since(iso: string | null | undefined, t: Dict): string {
+  if (!iso) return t.common.unknown;
   const s = Math.round((Date.now() - Date.parse(iso)) / 1000);
-  if (!Number.isFinite(s)) return 'unknown';
-  if (s < 60) return `${s}s ago`;
-  if (s < 3600) return `${Math.round(s / 60)}m ago`;
-  if (s < 86400) return `${Math.round(s / 3600)}h ago`;
-  return `${Math.round(s / 86400)}d ago`;
+  if (!Number.isFinite(s)) return t.common.unknown;
+  if (s < 60) return t.common.secondsAgo(s);
+  if (s < 3600) return t.common.minutesAgo(Math.round(s / 60));
+  if (s < 86400) return t.common.hoursAgo(Math.round(s / 3600));
+  return t.common.daysAgo(Math.round(s / 86400));
 }
 
-export function duration(start: string | null, end: string | null): string {
-  if (!start || !end) return 'unknown';
+export function duration(start: string | null, end: string | null, t: Dict): string {
+  if (!start || !end) return t.common.unknown;
   const s = (Date.parse(end) - Date.parse(start)) / 1000;
-  return Number.isFinite(s) ? `${s.toFixed(1)}s` : 'unknown';
+  return Number.isFinite(s) ? t.common.seconds(s.toFixed(1)) : t.common.unknown;
 }

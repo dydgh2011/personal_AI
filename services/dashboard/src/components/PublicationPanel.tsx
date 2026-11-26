@@ -1,20 +1,22 @@
 import { CsrfField } from '@/components/ui';
+import type { Dict } from '@/i18n';
 import { short, since } from '@/lib/diff';
 import { nextSteps, reasonText } from '@/lib/publishing';
 import type { PublicationState, PublicationStatus } from '@/lib/types';
 
-const LABEL: Record<PublicationState, { text: string; tone: string }> = {
-  not_approved: { text: 'Not approved', tone: 'muted' },
-  approved: { text: 'Approved', tone: 'info' },
-  validation_pending: { text: 'Validation pending', tone: 'warn' },
-  ready_to_publish: { text: 'Ready to publish', tone: 'ok' },
-  validation_failed: { text: 'Validation failed', tone: 'bad' },
-  published: { text: 'Published', tone: 'ok' },
-  pr_created: { text: 'PR created', tone: 'ok' },
+const TONE: Record<PublicationState, string> = {
+  not_approved: 'muted',
+  approved: 'info',
+  validation_pending: 'warn',
+  ready_to_publish: 'ok',
+  validation_failed: 'bad',
+  published: 'ok',
+  pr_created: 'ok',
 };
 
-export function publicationLabel(state: PublicationState) {
-  return LABEL[state] ?? { text: state, tone: 'muted' };
+export function publicationLabel(state: PublicationState, t: Dict) {
+  const text = (t.publication.states as Record<string, string>)[state];
+  return text ? { text, tone: TONE[state] ?? 'muted' } : { text: state, tone: 'muted' };
 }
 
 const TEST_TONE: Record<string, string> = { passed: 'ok', failed: 'bad', aborted: 'bad', skipped: 'warn', pending: 'warn', running: 'info' };
@@ -24,12 +26,13 @@ const TEST_TONE: Record<string, string> = { passed: 'ok', failed: 'bad', aborted
  * publish request are separate; every button here is also enforced by the controller and the
  * publisher. All report text is rendered as text.
  */
-export function PublicationPanel({ taskId, status, csrf, confirm, files, idempotencyKey }: {
-  taskId: string; status: PublicationStatus | null; csrf: string; confirm?: string | null;
+export function PublicationPanel({ t, taskId, status, csrf, confirm, files, idempotencyKey }: {
+  t: Dict; taskId: string; status: PublicationStatus | null; csrf: string; confirm?: string | null;
   files?: Array<{ status: string; path: string }>; idempotencyKey: string;
 }) {
   if (!status) return null;
-  const label = publicationLabel(status.state);
+  const p = t.publication;
+  const label = publicationLabel(status.state, t);
   const pub = status.current;
   const r = pub?.result ?? null;
   const tests = status.testValidation;
@@ -39,27 +42,27 @@ export function PublicationPanel({ taskId, status, csrf, confirm, files, idempot
 
   return (
     <div id="publication" className="card section">
-      <h2>Publishing</h2>
+      <h2>{p.title}</h2>
       <div className="row">
         <span className={`badge ${label.tone}`}>{label.text}</span>
-        <span className="muted">Policy: tests required (POLICY A) · commits only as the project owner, no AI trace (POLICY B) · real publishing {status.publishEnabled ? 'enabled' : 'disabled'}</span>
+        <span className="muted">{p.policy(status.publishEnabled)}</span>
       </div>
 
       {/* ---- tests */}
       <div className="section">
-        <h2>Test validation</h2>
-        {steps.testsMissing && <div className="warning bad">{reasonText('TEST_REPORT_MISSING')}{tests ? ` (run ${tests.status})` : ''}</div>}
+        <h2>{p.testValidation}</h2>
+        {steps.testsMissing && <div className="warning bad">{reasonText('TEST_REPORT_MISSING', t)}{tests ? p.runStatus(tests.status) : ''}</div>}
         {tests && (
           <>
             <dl className="kv">
-              <dt>Status</dt><dd><span className={`badge ${TEST_TONE[tests.status] ?? 'muted'}`}>{tests.status}</span> <span className="muted">run {short(tests.id, 8)}, requested by {tests.requestedBy} {since(tests.requestedAt)}</span></dd>
-              <dt>Tested commit</dt><dd className="mono">{tests.commitSha}{tests.commitSha !== head && <span className="badge bad"> not the reviewed commit</span>}</dd>
-              <dt>Evidence</dt><dd className="mono">{tests.evidenceHash ? `sha256 ${short(tests.evidenceHash, 16)}… (signed by the test runner)` : '-'}</dd>
-              {tests.error && <><dt>Error</dt><dd>{tests.error}</dd></>}
+              <dt>{t.common.status}</dt><dd><span className={`badge ${TEST_TONE[tests.status] ?? 'muted'}`}>{tests.status}</span> <span className="muted">{p.runLine(short(tests.id, 8), tests.requestedBy, since(tests.requestedAt, t))}</span></dd>
+              <dt>{p.testedCommit}</dt><dd className="mono">{tests.commitSha}{tests.commitSha !== head && <span className="badge bad">{p.notReviewedCommit}</span>}</dd>
+              <dt>{p.evidence}</dt><dd className="mono">{tests.evidenceHash ? p.evidenceSigned(short(tests.evidenceHash, 16)) : '-'}</dd>
+              {tests.error && <><dt>{t.common.error}</dt><dd>{tests.error}</dd></>}
             </dl>
             <div className="table-wrap section">
               <table>
-                <thead><tr><th>Command</th><th>argv</th><th>Exit code</th><th>Result</th><th>Time</th></tr></thead>
+                <thead><tr><th>{p.command}</th><th>argv</th><th>{p.exitCode}</th><th>{t.common.result}</th><th>{p.time}</th></tr></thead>
                 <tbody>
                   {tests.commands.map((c, i) => {
                     const res = tests.results?.[i];
@@ -68,8 +71,8 @@ export function PublicationPanel({ taskId, status, csrf, confirm, files, idempot
                         <td className="mono">{c.name}</td>
                         <td className="mono trunc" title={c.argv.join(' ')}>{c.argv.join(' ')}</td>
                         <td className="mono">{res ? (res.exitCode ?? (res.timedOut ? 'timeout' : '-')) : '-'}</td>
-                        <td>{res ? <span className={`badge ${TEST_TONE[res.status] ?? 'muted'}`}>{res.status}</span> : <span className="muted">not run</span>}</td>
-                        <td>{res ? `${(res.durationMs / 1000).toFixed(1)}s` : '-'}</td>
+                        <td>{res ? <span className={`badge ${TEST_TONE[res.status] ?? 'muted'}`}>{res.status}</span> : <span className="muted">{p.notRun}</span>}</td>
+                        <td>{res ? t.common.seconds((res.durationMs / 1000).toFixed(1)) : '-'}</td>
                       </tr>
                     );
                   })}
@@ -77,7 +80,7 @@ export function PublicationPanel({ taskId, status, csrf, confirm, files, idempot
               </table>
             </div>
             {tests.results?.some((x) => x.status !== 'passed' && x.outputTail) && (
-              <details className="section"><summary>Output of failing commands</summary>
+              <details className="section"><summary>{p.failingOutput}</summary>
                 <pre className="block">{tests.results.filter((x) => x.status !== 'passed').map((x) => `$ ${x.argv.join(' ')}\n${x.outputTail}`).join('\n\n')}</pre>
               </details>
             )}
@@ -87,24 +90,24 @@ export function PublicationPanel({ taskId, status, csrf, confirm, files, idempot
           <form method="post" action={`/api/reviews/${taskId}/tests`} className="section">
             <CsrfField token={csrf} />
             <input type="hidden" name="headSha" value={head} />
-            <button type="submit">Run tests</button> <span className="muted">Runs the project&apos;s admin-approved commands on exactly this commit in the isolated test runner.</span>
+            <button type="submit">{p.runTests}</button> <span className="muted">{p.runTestsHelp}</span>
           </form>
         )}
       </div>
 
       {/* ---- preflight */}
       <div className="section">
-        <h2>Publisher preflight (dry-run)</h2>
+        <h2>{p.preflight}</h2>
         <dl className="kv">
-          <dt>Review approval</dt><dd><span className={`badge ${status.review?.status === 'approved' ? 'ok' : 'muted'}`}>{status.review?.status ?? 'none'}</span>{status.review?.decidedBy && <span className="muted"> by {status.review.decidedBy}</span>}</dd>
-          <dt>Git integrity</dt><dd>{r ? (r.gitVerified ? 'verified against trusted git objects' : 'not verified') : 'not checked yet'}</dd>
-          <dt>Commit author</dt><dd className="mono">{r?.author ? `${r.author.name} <${r.author.email}> · committer ${r.author.committerName} <${r.author.committerEmail}>` : 'not checked yet'}</dd>
-          <dt>Eligibility</dt><dd>{r ? <><span className={`badge ${r.eligible ? 'ok' : 'bad'}`}>{r.eligible ? 'eligible' : 'not eligible'}</span> <span className={`badge ${r.canPublish ? 'ok' : 'muted'}`}>{r.canPublish ? 'can publish' : 'cannot publish'}</span></> : '-'}</dd>
-          {r?.reason && <><dt>Reason</dt><dd><span className="mono">{r.reason}</span> — {reasonText(r.reason)}</dd></>}
-          {r?.target && <><dt>Target</dt><dd className="mono">{r.target.repository ?? '?'} : {r.target.baseBranch} → {r.target.branch}</dd></>}
-          {pub && <><dt>Last run</dt><dd className="muted">{pub.mode} by {pub.requestedBy} {since(pub.requestedAt)}{pub.completedAt ? `, finished ${since(pub.completedAt)}` : ''}</dd></>}
+          <dt>{p.reviewApproval}</dt><dd><span className={`badge ${status.review?.status === 'approved' ? 'ok' : 'muted'}`}>{status.review?.status ?? p.noneStatus}</span>{status.review?.decidedBy && <span className="muted">{p.by(status.review.decidedBy)}</span>}</dd>
+          <dt>{p.gitIntegrity}</dt><dd>{r ? (r.gitVerified ? p.gitVerified : p.gitNotVerified) : p.notChecked}</dd>
+          <dt>{p.commitAuthor}</dt><dd className="mono">{r?.author ? `${r.author.name} <${r.author.email}> · ${p.committer} ${r.author.committerName} <${r.author.committerEmail}>` : p.notChecked}</dd>
+          <dt>{p.eligibility}</dt><dd>{r ? <><span className={`badge ${r.eligible ? 'ok' : 'bad'}`}>{r.eligible ? p.eligible : p.notEligible}</span> <span className={`badge ${r.canPublish ? 'ok' : 'muted'}`}>{r.canPublish ? p.canPublish : p.cannotPublish}</span></> : '-'}</dd>
+          {r?.reason && <><dt>{t.common.reason}</dt><dd><span className="mono">{r.reason}</span> — {reasonText(r.reason, t)}</dd></>}
+          {r?.target && <><dt>{p.target}</dt><dd className="mono">{r.target.repository ?? '?'} : {r.target.baseBranch} → {r.target.branch}</dd></>}
+          {pub && <><dt>{p.lastRun}</dt><dd className="muted">{p.lastRunLine(pub.mode, pub.requestedBy, since(pub.requestedAt, t), pub.completedAt ? since(pub.completedAt, t) : null)}</dd></>}
         </dl>
-        {preflightStale && <div className="warning">The last preflight used another test run; validate again.</div>}
+        {preflightStale && <div className="warning">{p.stale}</div>}
         {r?.error && <div className="warning bad">{r.error}</div>}
         {r?.controllerNote && <div className="warning bad">{r.controllerNote}</div>}
         {(r?.blockers ?? []).map((b, i) => <div key={`b${i}`} className="warning bad">{b}</div>)}
@@ -113,19 +116,19 @@ export function PublicationPanel({ taskId, status, csrf, confirm, files, idempot
           <form method="post" action={`/api/reviews/${taskId}/dry-run`} className="section">
             <CsrfField token={csrf} />
             <input type="hidden" name="headSha" value={head} />
-            <button type="submit">Validate / Dry-run</button>
+            <button type="submit">{p.validate}</button>
           </form>
         )}
         {r?.checks && (
-          <details className="section"><summary>Checks ({r.checks.filter((c) => c.ok).length}/{r.checks.length} passed)</summary>
+          <details className="section"><summary>{p.checks(r.checks.filter((c) => c.ok).length, r.checks.length)}</summary>
             <div className="table-wrap">
               <table>
-                <thead><tr><th>Check</th><th>Result</th><th>Detail</th></tr></thead>
+                <thead><tr><th>{p.check}</th><th>{t.common.result}</th><th>{p.detail}</th></tr></thead>
                 <tbody>
                   {r.checks.map((c) => (
                     <tr key={c.id}>
                       <td className="mono">{c.id}</td>
-                      <td><span className={`badge ${c.ok ? 'ok' : 'bad'}`}>{c.ok ? 'pass' : c.code ?? 'blocked'}</span></td>
+                      <td><span className={`badge ${c.ok ? 'ok' : 'bad'}`}>{c.ok ? p.pass : c.code ?? p.blocked}</span></td>
                       <td>{c.detail}</td>
                     </tr>
                   ))}
@@ -135,8 +138,8 @@ export function PublicationPanel({ taskId, status, csrf, confirm, files, idempot
           </details>
         )}
         {r?.pullRequest && (
-          <details className="section"><summary>Planned pull request (not created): {r.pullRequest.title}</summary>
-            <dl className="kv"><dt>Branches</dt><dd className="mono">{r.pullRequest.head} → {r.pullRequest.base} (draft)</dd></dl>
+          <details className="section"><summary>{p.plannedPr(r.pullRequest.title)}</summary>
+            <dl className="kv"><dt>{p.branches}</dt><dd className="mono">{r.pullRequest.head} → {r.pullRequest.base} {p.draft}</dd></dl>
             <pre className="block">{r.pullRequest.body}</pre>
           </details>
         )}
@@ -144,37 +147,37 @@ export function PublicationPanel({ taskId, status, csrf, confirm, files, idempot
 
       {/* ---- publish authorization (separate from review approval) */}
       <div className="section">
-        <h2>Publish authorization</h2>
+        <h2>{p.authorization}</h2>
         {status.authorization && (
           <div className="muted">
-            {status.authorization.status} — by {status.authorization.authorizedBy} {since(status.authorization.authorizedAt)}, expires {status.authorization.expiresAt}, commit {short(status.authorization.headSha)}, test run {short(status.authorization.testValidationId, 8)}
+            {p.authLine(status.authorization.status, status.authorization.authorizedBy, since(status.authorization.authorizedAt, t), status.authorization.expiresAt, short(status.authorization.headSha), short(status.authorization.testValidationId, 8))}
           </div>
         )}
         {!steps.canAuthorize && !steps.activeAuth && (
           <div className="muted">
-            Available only after: review approved, tests passed on this commit, and a fresh eligible dry-run for that test run.
+            {p.authUnavailable}
           </div>
         )}
-        {steps.canAuthorize && confirm !== 'authorize' && <a className="btn approve" href={`/reviews/${taskId}?confirm=authorize#publication`}>Authorize publishing…</a>}
+        {steps.canAuthorize && confirm !== 'authorize' && <a className="btn approve" href={`/reviews/${taskId}?confirm=authorize#publication`}>{p.authorizeLink}</a>}
         {steps.canAuthorize && confirm === 'authorize' && r && pub && (
           <div className="card section" style={{ borderColor: 'var(--ok)' }}>
-            <h2>Confirm publish authorization</h2>
+            <h2>{p.confirmAuth}</h2>
             <dl className="kv">
-              <dt>Repository</dt><dd>{r.target?.repository}</dd>
-              <dt>Branch</dt><dd className="mono">{r.target?.branch} (new; {r.target?.baseBranch} untouched)</dd>
-              <dt>Base → Head</dt><dd className="mono">{short(r.target?.baseSha)} → {r.target?.headSha}</dd>
-              <dt>Files</dt><dd><pre className="block">{(files ?? r.files ?? []).map((f) => `${f.status}\t${f.path}`).join('\n')}</pre></dd>
-              <dt>Tests</dt><dd className="mono">{tests?.results?.map((x) => `${x.name}: exit ${x.exitCode}`).join(', ')}</dd>
-              <dt>Author</dt><dd className="mono">{r.author ? `${r.author.name} <${r.author.email}>` : '-'} (kept)</dd>
+              <dt>{p.repository}</dt><dd>{r.target?.repository}</dd>
+              <dt>{t.common.branch}</dt><dd className="mono">{p.branchNew(r.target?.branch ?? '?', r.target?.baseBranch ?? '?')}</dd>
+              <dt>{t.reviews.baseHead}</dt><dd className="mono">{short(r.target?.baseSha)} → {r.target?.headSha}</dd>
+              <dt>{t.common.files}</dt><dd><pre className="block">{(files ?? r.files ?? []).map((f) => `${f.status}\t${f.path}`).join('\n')}</pre></dd>
+              <dt>{t.review.tests}</dt><dd className="mono">{tests?.results?.map((x) => `${x.name}: exit ${x.exitCode}`).join(', ')}</dd>
+              <dt>{p.author}</dt><dd className="mono">{r.author ? `${r.author.name} <${r.author.email}>` : '-'} {p.kept}</dd>
             </dl>
-            <p className="muted">This only authorizes publishing for 30 minutes. It does not push. The controller and the publisher check everything again.</p>
+            <p className="muted">{p.authNote}</p>
             <form method="post" action={`/api/reviews/${taskId}/authorize`} style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <CsrfField token={csrf} />
               <input type="hidden" name="headSha" value={head} />
               <input type="hidden" name="dryRunId" value={pub.id} />
               <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-              <label className="row"><input type="checkbox" name="confirmed" value="yes" required /> I authorize publishing commit <span className="mono">{short(head)}</span> to {r.target?.repository}.</label>
-              <div className="row"><button type="submit" className="approve">Authorize publishing</button><a href={`/reviews/${taskId}#publication`}>Cancel</a></div>
+              <label className="row"><input type="checkbox" name="confirmed" value="yes" required /> {p.authCheck(short(head), r.target?.repository ?? '?')}</label>
+              <div className="row"><button type="submit" className="approve">{p.authorize}</button><a href={`/reviews/${taskId}#publication`}>{t.common.cancel}</a></div>
             </form>
           </div>
         )}
@@ -182,16 +185,16 @@ export function PublicationPanel({ taskId, status, csrf, confirm, files, idempot
 
       {/* ---- publish */}
       <div className="section">
-        <h2>Publish</h2>
-        {!status.publishEnabled && <button type="button" disabled title={reasonText('PUBLISH_DISABLED')}>Publish (disabled in Phase E-2B)</button>}
-        {status.publishEnabled && steps.activeAuth && confirm !== 'publish' && <a className="btn approve" href={`/reviews/${taskId}?confirm=publish#publication`}>Publish…</a>}
+        <h2>{p.publish}</h2>
+        {!status.publishEnabled && <button type="button" disabled title={reasonText('PUBLISH_DISABLED', t)}>{p.publishDisabled}</button>}
+        {status.publishEnabled && steps.activeAuth && confirm !== 'publish' && <a className="btn approve" href={`/reviews/${taskId}?confirm=publish#publication`}>{p.publishLink}</a>}
         {status.publishEnabled && steps.activeAuth && confirm === 'publish' && (
           <form method="post" action={`/api/reviews/${taskId}/publish`} className="card section" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
             <CsrfField token={csrf} />
             <input type="hidden" name="authorizationId" value={steps.activeAuth.id} />
             <input type="hidden" name="idempotencyKey" value={idempotencyKey} />
-            <label className="row"><input type="checkbox" name="confirmed" value="yes" required /> Push {short(head)} to {r?.target?.branch} and open a draft pull request.</label>
-            <div className="row"><button type="submit" className="approve">Publish</button><a href={`/reviews/${taskId}#publication`}>Cancel</a></div>
+            <label className="row"><input type="checkbox" name="confirmed" value="yes" required /> {p.publishCheck(short(head), r?.target?.branch ?? '?')}</label>
+            <div className="row"><button type="submit" className="approve">{p.publish}</button><a href={`/reviews/${taskId}#publication`}>{t.common.cancel}</a></div>
           </form>
         )}
       </div>

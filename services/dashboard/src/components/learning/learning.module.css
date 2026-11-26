@@ -205,3 +205,9 @@ a.rowTitle:hover { color: var(--accent); text-decoration: none; }
   .kv dt { margin-top: 6px; }
   .fileName { max-width: 160px; }
 }
+
+/* Longer English labels (i18n): chips and link buttons wrap on phones instead of overflowing. */
+@media (max-width: 480px) {
+  .chip { white-space: normal; max-width: 100%; overflow-wrap: anywhere; line-height: 16px; padding-block: 2px; }
+  .linkBtn { white-space: normal; max-width: 100%; }
+}

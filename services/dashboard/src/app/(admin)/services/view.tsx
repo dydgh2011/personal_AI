@@ -4,10 +4,12 @@ import type { StylesheetJson } from 'cytoscape';
 import { useMemo, useState, type ReactNode } from 'react';
 import { CytoGraph, type StyleRules } from '@/components/graph/CytoGraph';
 import g from '@/components/graph/graph.module.css';
+import type { Dict } from '@/i18n';
+import { useT } from '@/i18n/client';
+import { fmtDateTime } from '@/i18n/format';
 import {
   countsMatch,
   countFindings,
-  FINDING_TITLES,
   findingsFor,
   graphIdOf,
   healthOf,
@@ -29,7 +31,6 @@ import {
 } from '@/lib/service-map';
 import s from './services.module.css';
 
-const LEVEL_NAMES: Record<FindingLevel, string> = { danger: '위험', warn: '경고', info: '정보' };
 const LAYER_SLOTS = ['--viz-s1', '--viz-s2', '--viz-s3', '--viz-s4'];
 const LAYER_DOTS = [g.s1, g.s2, g.s3, g.s4];
 
@@ -63,6 +64,9 @@ const rules: StyleRules = (css) => {
 };
 
 export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapSnapshot; ageSeconds: number }) {
+  const t = useT();
+  const k = t.svc;
+  const count = (n: number) => n.toLocaleString(t.locale);
   const [selection, setSelection] = useState<MapSelection>(null);
   const [network, setNetwork] = useState('');
   const [sizeBy, setSizeBy] = useState(SIZE_METRICS[0].id);
@@ -78,6 +82,7 @@ export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapS
     [snapshot, sizeBy, reach, external, networks, network, layout],
   );
   const metric = sizeMetric(sizeBy);
+  const metricText = k.metrics[metric.id] ?? { label: metric.id, note: '' };
   const unused = snapshot.reachable.filter((r) => !r.used).length;
   const w = snapshot.callWindow;
   const recent = w ? snapshot.links.reduce((n, l) => n + (l.calls?.total ?? 0), 0) : null;
@@ -86,74 +91,74 @@ export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapS
 
   return (
     <div className={`${g.palette} ${s.stack}`}>
-      <section className={s.summary} aria-label="요약">
+      <section className={s.summary} aria-label={k.summaryAria}>
         <span>
-          서비스 <b>{snapshot.services.length}</b> · 실행 중 <b>{snapshot.services.filter((x) => x.status?.state === 'running').length}</b>
+          {k.services} <b>{snapshot.services.length}</b> · {k.running} <b>{snapshot.services.filter((x) => x.status?.state === 'running').length}</b>
         </span>
         <span>
-          연결 <b>{snapshot.links.length}</b> · 네트워크 <b>{snapshot.networks.length}</b>
+          {k.links} <b>{snapshot.links.length}</b> · {k.networks} <b>{snapshot.networks.length}</b>
         </span>
         {w && recent !== null && (
-          <span title={missing.length ? `못 읽은 기록: ${missing.join(', ')}` : undefined}>
-            최근 {w.hours}시간 호출 <b>{recent.toLocaleString('ko-KR')}</b>
-            {missing.length > 0 && <span className="muted"> (일부 못 읽음)</span>}
+          <span title={missing.length ? k.unreadSources(missing.join(', ')) : undefined}>
+            {k.recentCalls(w.hours)} <b>{count(recent)}</b>
+            {missing.length > 0 && <span className="muted">{k.partlyUnread}</span>}
           </span>
         )}
         <span className={s.levels}>
           {(['danger', 'warn', 'info'] as FindingLevel[]).map((lv) => (
             <span key={lv} className={`${s.level} ${s['lv_' + lv]}`}>
-              {LEVEL_NAMES[lv]} {counts[lv]}
+              {k.levels[lv]} {counts[lv]}
             </span>
           ))}
         </span>
-        <span className="muted">수집 {ago(ageSeconds)}</span>
+        <span className="muted">{k.collected(ago(ageSeconds, t))}</span>
       </section>
 
       <div className={s.controls}>
         <label className={s.control}>
-          <span>점 크기</span>
+          <span>{k.dotSize}</span>
           <select value={sizeBy} onChange={(e) => setSizeBy(e.target.value)}>
             {SIZE_METRICS.map((m) => (
               <option key={m.id} value={m.id}>
-                {m.label}
+                {k.metrics[m.id]?.label ?? m.id}
               </option>
             ))}
           </select>
         </label>
         <label className={s.control}>
-          <span>네트워크</span>
+          <span>{k.network}</span>
           <select value={network} onChange={(e) => setNetwork(e.target.value)}>
-            <option value="">전체</option>
+            <option value="">{k.all}</option>
             {snapshot.networks.map((n) => (
               <option key={n.id} value={n.id}>
-                {n.id} ({n.members.length}){n.internal ? ' · 내부 전용' : ' · 인터넷 가능'}
+                {n.id} ({n.members.length}){n.internal ? k.internalOnly : k.internetOk}
               </option>
             ))}
           </select>
         </label>
         <label className={s.control}>
           <input type="checkbox" checked={external} onChange={(e) => setExternal(e.target.checked)} />
-          <span>바깥 연결</span>
+          <span>{k.external}</span>
         </label>
         <label className={s.control}>
           <input type="checkbox" checked={reach} onChange={(e) => setReach(e.target.checked)} />
-          <span>닿기만 하는 길 ({unused})</span>
+          <span>{k.reachOnly(unused)}</span>
         </label>
         <label className={s.control}>
           <input type="checkbox" checked={networks} onChange={(e) => setNetworks(e.target.checked)} />
-          <span>네트워크 점</span>
+          <span>{k.networkDots}</span>
         </label>
-        <span className={s.segment} role="group" aria-label="배치">
+        <span className={s.segment} role="group" aria-label={k.layoutAria}>
           <button type="button" aria-pressed={layout === 'force'} onClick={() => setLayout('force')}>
-            자유 배치
+            {k.free}
           </button>
           <button type="button" aria-pressed={layout === 'preset'} onClick={() => setLayout('preset')}>
-            층별 정렬
+            {k.layered}
           </button>
         </span>
       </div>
 
-      <div className={g.legend} aria-label="범례">
+      <div className={g.legend} aria-label={k.legendAria}>
         {snapshot.layers.slice(0, 4).map((l, i) => (
           <span key={l.id} className={g.legendItem}>
             <i className={`${g.dot} ${LAYER_DOTS[i]}`} />
@@ -163,21 +168,21 @@ export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapS
         {external && (
           <span className={g.legendItem}>
             <i className={g.diamond} />
-            바깥
+            {k.outside}
           </span>
         )}
         {networks && (
           <span className={g.legendItem}>
             <i className={g.square} />
-            네트워크 (↗ 인터넷 가능)
+            {k.networkLegend}
           </span>
         )}
-        <span className={g.legendItem}><i className={g.line} />부름{w ? ` (굵기 = 최근 ${w.hours}시간 호출 수, 흐린 선 = 0회)` : ''}</span>
-        {reach && <span className={g.legendItem}><i className={g.dashed} />닿기만 함</span>}
-        {external && <span className={g.legendItem}><i className={g.dotted} />바깥으로</span>}
-        <span className={g.legendItem}><i className={g.broken} />부르는데 못 닿음</span>
-        <span className={g.legendItem}><i className={g.ring} />주의 (이름 옆 !)</span>
-        <span className={g.legendItem}>점 크기 = {metric.label} ({metric.note})</span>
+        <span className={g.legendItem}><i className={g.line} />{k.calls}{w ? k.callsWidth(w.hours) : ''}</span>
+        {reach && <span className={g.legendItem}><i className={g.dashed} />{k.reachLegend}</span>}
+        {external && <span className={g.legendItem}><i className={g.dotted} />{k.outward}</span>}
+        <span className={g.legendItem}><i className={g.broken} />{k.broken}</span>
+        <span className={g.legendItem}><i className={g.ring} />{k.attention}</span>
+        <span className={g.legendItem}>{k.sizeLegend(metricText.label, metricText.note)}</span>
       </div>
 
       <div className={s.layout}>
@@ -187,26 +192,26 @@ export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapS
           layout={layout}
           selectedId={graphIdOf(selection)}
           onSelect={(id) => pick(selectionOf(id))}
-          searchPlaceholder="서비스, 설명, 네트워크, 바깥 연결 검색"
-          label="서비스 지도: 점은 서비스, 화살표는 부르는 연결입니다. 아래 목록에서도 같은 내용을 볼 수 있습니다."
+          searchPlaceholder={k.searchPlaceholder}
+          label={k.graphLabel}
         />
         <aside className={s.panel} aria-live="polite">
-          <Details snapshot={snapshot} selection={selection} byId={byId} onSelect={pick} onNetwork={setNetwork} metricLabel={metric.label} metricOf={(x) => metric.value(x, snapshot)} />
+          <Details t={t} snapshot={snapshot} selection={selection} byId={byId} onSelect={pick} onNetwork={setNetwork} metricLabel={metricText.label} metricOf={(x) => metric.value(x, snapshot)} />
         </aside>
       </div>
 
-      <Findings snapshot={snapshot} onSelect={(id) => pick({ kind: 'service', id })} />
+      <Findings t={t} snapshot={snapshot} onSelect={(id) => pick({ kind: 'service', id })} />
 
       <details className={s.listView}>
-        <summary>목록으로 보기 ({snapshot.services.length}개 서비스)</summary>
+        <summary>{k.listView(snapshot.services.length)}</summary>
         <table>
           <thead>
             <tr>
-              <th>서비스</th>
-              <th>층</th>
-              <th>상태</th>
-              <th>{metric.label}</th>
-              <th>인터넷</th>
+              <th>{k.service}</th>
+              <th>{k.layer}</th>
+              <th>{k.status}</th>
+              <th>{metricText.label}</th>
+              <th>{k.internet}</th>
             </tr>
           </thead>
           <tbody>
@@ -218,9 +223,9 @@ export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapS
                   </button>
                 </td>
                 <td>{snapshot.layers.find((l) => l.id === x.layer)?.label ?? x.layer}</td>
-                <td>{healthOf(x).text}</td>
+                <td>{healthOf(x, t).text}</td>
                 <td>{metric.value(x, snapshot) ?? '-'}</td>
-                <td>{x.internet ? '가능' : '내부 전용'}</td>
+                <td>{x.internet ? k.yes : k.internalShort}</td>
               </tr>
             ))}
           </tbody>
@@ -230,14 +235,16 @@ export function ServiceMapView({ snapshot, ageSeconds }: { snapshot: ServiceMapS
   );
 }
 
-function ago(seconds: number): string {
-  if (seconds < 90) return `${seconds}초 전`;
-  if (seconds < 5400) return `${Math.round(seconds / 60)}분 전`;
-  if (seconds < 172800) return `${Math.round(seconds / 3600)}시간 전`;
-  return `${Math.round(seconds / 86400)}일 전`;
+function ago(seconds: number, t: Dict): string {
+  const a = t.svc.ago;
+  if (seconds < 90) return a.s(seconds);
+  if (seconds < 5400) return a.m(Math.round(seconds / 60));
+  if (seconds < 172800) return a.h(Math.round(seconds / 3600));
+  return a.d(Math.round(seconds / 86400));
 }
 
 function Details({
+  t,
   snapshot,
   selection,
   byId,
@@ -246,6 +253,7 @@ function Details({
   metricLabel,
   metricOf,
 }: {
+  t: Dict;
   snapshot: ServiceMapSnapshot;
   selection: MapSelection;
   byId: Map<string, MapService>;
@@ -254,6 +262,7 @@ function Details({
   metricLabel: string;
   metricOf: (s: MapService) => number | null;
 }) {
+  const k = t.svc;
   const name = (id: string) => byId.get(id)?.title || id;
   const go = (id: string) => (
     <button type="button" className={s.linkButton} onClick={() => onSelect({ kind: 'service', id })}>
@@ -264,9 +273,9 @@ function Details({
   if (!selection) {
     return (
       <div className={s.empty}>
-        <h2>점을 눌러 보세요</h2>
-        <p className="muted">서비스를 누르면 설명, 상태, 네트워크, 포트, 볼륨, 잠금 설정, 연결이 여기에 나옵니다. 선, 바깥 연결(마름모), 네트워크(사각형)도 누를 수 있습니다.</p>
-        <p className="muted">화살표는 설정에 상대 서비스 주소가 있어 실제로 부르는 연결입니다. 같은 네트워크라 닿기만 하는 길은 위 체크박스로 켭니다.</p>
+        <h2>{k.introTitle}</h2>
+        <p className="muted">{k.intro1}</p>
+        <p className="muted">{k.intro2}</p>
       </div>
     );
   }
@@ -274,7 +283,7 @@ function Details({
   if (selection.kind === 'link') {
     const l = snapshot.links.find((x) => x.from === selection.from && x.to === selection.to);
     if (!l) return null;
-    return <LinkPanel link={l} window={snapshot.callWindow} name={name} go={go} />;
+    return <LinkPanel t={t} link={l} window={snapshot.callWindow} name={name} go={go} />;
   }
 
   if (selection.kind === 'reach') {
@@ -286,10 +295,10 @@ function Details({
           {go(r.a)} ↔ {go(r.b)}
         </h2>
         <dl className={s.dl}>
-          <dt>같이 있는 네트워크</dt>
+          <dt>{k.sharedNetworks}</dt>
           <dd>{r.networks.map((n) => <code key={n}>{n}</code>)}</dd>
         </dl>
-        <p className="muted">서로 닿을 수는 있지만 어느 쪽 설정에도 상대 주소가 없습니다. 쓰지 않는 길이라면 네트워크를 나눠 줄일 수 있는 권한입니다.</p>
+        <p className="muted">{k.reachNote}</p>
       </div>
     );
   }
@@ -299,7 +308,7 @@ function Details({
     return (
       <div>
         <h2>{selection.name}</h2>
-        <p className={s.subtle}>바깥 서비스 (이 스택 밖, 인터넷이나 이 PC)</p>
+        <p className={s.subtle}>{k.externalSub}</p>
         <ul className={s.plainList}>
           {users.map((u) => (
             <li key={u.id}>
@@ -317,14 +326,14 @@ function Details({
     return (
       <div>
         <h2>{n.id}</h2>
-        <p className={s.subtle}>{n.internal ? '내부 전용: 인터넷으로 나갈 수 없음' : '인터넷으로 나갈 수 있음'}</p>
+        <p className={s.subtle}>{n.internal ? k.netInternal : k.netInternet}</p>
         <ul className={s.plainList}>
           {n.members.map((m) => (
             <li key={m}>{go(m)}</li>
           ))}
         </ul>
         <button type="button" onClick={() => onNetwork(n.id)}>
-          이 네트워크만 강조
+          {k.highlight}
         </button>
       </div>
     );
@@ -332,7 +341,7 @@ function Details({
 
   const svc = byId.get(selection.id);
   if (!svc) return null;
-  const health = healthOf(svc);
+  const health = healthOf(svc, t);
   const out = snapshot.links.filter((l) => l.from === svc.id);
   const inn = snapshot.links.filter((l) => l.to === svc.id);
   const found = findingsFor(snapshot, svc.id);
@@ -348,29 +357,29 @@ function Details({
       {svc.description && <p>{svc.description}</p>}
 
       <dl className={s.dl}>
-        <dt>상태</dt>
+        <dt>{k.status}</dt>
         <dd>
           <span className={`${s.dot} ${s[health.tone]}`} aria-hidden="true" /> {health.text}
           {started && !Number.isNaN(started.getTime()) && (
-            <span className="muted"> · {started.toLocaleString('ko-KR', { timeZone: 'America/Toronto', dateStyle: 'short', timeStyle: 'short' })} 시작</span>
+            <span className="muted">{k.started(fmtDateTime(t, started, { timeZone: 'America/Toronto', dateStyle: 'short', timeStyle: 'short' }))}</span>
           )}
         </dd>
         <dt>{metricLabel}</dt>
         <dd>{metricOf(svc) ?? '-'}</dd>
-        <dt>네트워크</dt>
+        <dt>{k.network}</dt>
         <dd>
           {svc.networks.map((n) => {
             const net = snapshot.networks.find((x) => x.id === n);
             return (
-              <button key={n} type="button" className={s.chip} onClick={() => onNetwork(n)} title="이 네트워크만 강조">
+              <button key={n} type="button" className={s.chip} onClick={() => onNetwork(n)} title={k.highlight}>
                 {n}
                 {net && !net.internal ? ' ↗' : ''}
               </button>
             );
           })}
-          <div className="muted">{svc.internet ? '인터넷으로 나갈 수 있음(↗ 네트워크)' : '내부 전용: 인터넷으로 나갈 수 없음'}</div>
+          <div className="muted">{svc.internet ? k.svcInternet : k.netInternal}</div>
         </dd>
-        <dt>포트</dt>
+        <dt>{k.ports}</dt>
         <dd>
           {svc.ports.length
             ? svc.ports.map((p) => (
@@ -378,33 +387,33 @@ function Details({
                   {p.hostIp}:{p.published} → {p.target}
                 </code>
               ))
-            : '없음'}
+            : k.none}
         </dd>
-        <dt>볼륨</dt>
+        <dt>{k.volumes}</dt>
         <dd>
           {svc.volumes.length
             ? svc.volumes.map((v) => (
                 <div key={v.target}>
-                  <code>{v.source ?? v.type}</code> → <code>{v.target}</code> {v.readOnly ? <span className="muted">읽기 전용</span> : null}
+                  <code>{v.source ?? v.type}</code> → <code>{v.target}</code> {v.readOnly ? <span className="muted">{k.readOnly}</span> : null}
                 </div>
               ))
-            : '없음'}
+            : k.none}
         </dd>
-        <dt>비밀(이름만)</dt>
-        <dd>{svc.secrets.length ? svc.secrets.map((x) => <code key={x}>{x}</code>) : '없음'}</dd>
-        <dt>잠금</dt>
+        <dt>{k.secrets}</dt>
+        <dd>{svc.secrets.length ? svc.secrets.map((x) => <code key={x}>{x}</code>) : k.none}</dd>
+        <dt>{k.lockdown}</dt>
         <dd>
           <ul className={s.checks}>
-            <li className={h.readOnly ? s.yes : s.no}>루트 파일 시스템 읽기 전용</li>
-            <li className={h.capDropAll ? s.yes : s.no}>리눅스 권한(capabilities) 모두 버림</li>
-            <li className={h.noNewPrivileges ? s.yes : s.no}>권한 상승 막음(no-new-privileges)</li>
-            <li className={h.healthcheck ? s.yes : s.no}>헬스체크</li>
+            <li className={h.readOnly ? s.yes : s.no}>{k.roRoot}</li>
+            <li className={h.capDropAll ? s.yes : s.no}>{k.capDrop}</li>
+            <li className={h.noNewPrivileges ? s.yes : s.no}>{k.noNewPriv}</li>
+            <li className={h.healthcheck ? s.yes : s.no}>{k.healthcheck}</li>
           </ul>
           <span className="muted">
-            메모리 {h.memLimitMb ?? '-'}MB · CPU {h.cpus ?? '-'} · 프로세스 {h.pidsLimit ?? '-'}
+            {k.limits(String(h.memLimitMb ?? '-'), String(h.cpus ?? '-'), String(h.pidsLimit ?? '-'))}
           </span>
         </dd>
-        <dt>바깥 연결</dt>
+        <dt>{k.external}</dt>
         <dd>
           {svc.external.length
             ? svc.external.map((e) => (
@@ -415,33 +424,33 @@ function Details({
                   <span className="muted">{e.purpose}</span>
                 </div>
               ))
-            : '없음'}
+            : k.none}
         </dd>
-        <dt>부르는 곳</dt>
+        <dt>{k.callsTo}</dt>
         <dd>
           {out.length
             ? out.map((l) => (
                 <div key={l.to}>
-                  {go(l.to)} <span className="muted">({l.via.join(', ')}){callsText(l, snapshot.callWindow)}</span>
+                  {go(l.to)} <span className="muted">({l.via.join(', ')}){callsText(l, snapshot.callWindow, t)}</span>
                 </div>
               ))
-            : '없음'}
+            : k.none}
         </dd>
-        <dt>부르는 쪽</dt>
+        <dt>{k.callsFrom}</dt>
         <dd>
           {inn.length
             ? inn.map((l) => (
                 <div key={l.from}>
-                  {go(l.from)} <span className="muted">{callsText(l, snapshot.callWindow)}</span>
+                  {go(l.from)} <span className="muted">{callsText(l, snapshot.callWindow, t)}</span>
                 </div>
               ))
-            : '없음'}
+            : k.none}
         </dd>
       </dl>
 
       {found.length > 0 && (
         <>
-          <h3>점검 결과</h3>
+          <h3>{k.findings}</h3>
           <ul className={s.findingList}>
             {found.map((f) => (
               <li key={f.code + f.message} className={s['lv_' + f.level]}>
@@ -455,67 +464,70 @@ function Details({
   );
 }
 
-const count = (n: number) => n.toLocaleString('ko-KR');
-
-function callsText(l: MapLink, w: CallWindow | undefined): string {
+function callsText(l: MapLink, w: CallWindow | undefined, t: Dict): string {
   if (!w || !l.calls) return '';
-  return ` · ${w.hours}시간 ${count(l.calls.total)}회${l.calls.failed ? ` (실패 ${count(l.calls.failed)})` : ''}`;
+  const count = (n: number) => n.toLocaleString(t.locale);
+  return t.svc.callsText(w.hours, count(l.calls.total), l.calls.failed ? count(l.calls.failed) : null);
 }
 
 /** One link: its config, recent calls and the operations the code allows on it. Exported for tests. */
 export function LinkPanel({
+  t,
   link: l,
   window: w,
   name,
   go,
 }: {
+  t: Dict;
   link: MapLink;
   window: CallWindow | undefined;
   name: (id: string) => string;
   go: (id: string) => ReactNode;
 }) {
   const unlisted = unlistedCalls(l);
+  const k = t.svc;
+  const count = (n: number) => n.toLocaleString(t.locale);
   return (
     <div>
       <h2>
         {go(l.from)} → {go(l.to)}
       </h2>
       <dl className={s.dl}>
-        <dt>설정</dt>
+        <dt>{k.config}</dt>
         <dd>{l.via.map((v) => <code key={v}>{v}</code>)}</dd>
-        <dt>지나는 네트워크</dt>
-        <dd>{l.networks.length ? l.networks.map((n) => <code key={n}>{n}</code>) : <span className={s.bad}>없음: 부르는데 닿지 않습니다</span>}</dd>
+        <dt>{k.viaNetworks}</dt>
+        <dd>{l.networks.length ? l.networks.map((n) => <code key={n}>{n}</code>) : <span className={s.bad}>{k.noNetwork}</span>}</dd>
         {w && (
           <>
-            <dt>최근 {w.hours}시간</dt>
+            <dt>{k.recentHours(w.hours)}</dt>
             <dd>
               {l.calls ? (
                 <>
-                  <b>{count(l.calls.total)}회</b>
-                  {l.calls.failed > 0 && <span className={s.failed}> · 실패 {count(l.calls.failed)}</span>}
-                  <div className="muted">출처: {l.calls.source}</div>
+                  <b>{k.times(count(l.calls.total))}</b>
+                  {l.calls.failed > 0 && <span className={s.failed}>{k.failedN(count(l.calls.failed))}</span>}
+                  <div className="muted">{k.source(l.calls.source)}</div>
                 </>
               ) : (
-                <span className="muted">측정 안 함: 이 연결을 세는 기록이 없습니다</span>
+                <span className="muted">{k.notMeasured}</span>
               )}
             </dd>
           </>
         )}
       </dl>
 
-      <h3>허용된 명령</h3>
+      <h3>{k.allowed}</h3>
       {l.allowed === undefined ? (
-        <p className="muted">이 스냅샷에는 허용 명령이 없습니다. 수집기를 새 버전으로 실행하면 나옵니다.</p>
+        <p className="muted">{k.noRulesInSnapshot}</p>
       ) : l.allowed.length === 0 ? (
-        <p className="muted">이 연결의 허용 명령은 코드에서 읽지 못했습니다 (수집기 rules.mjs에 이 연결의 파서가 없음). 받는 쪽이 키만 확인할 수 있습니다.</p>
+        <p className="muted">{k.rulesNotRead}</p>
       ) : (
-        l.allowed.map((set) => <RuleSet key={`${set.by}:${set.role}:${set.source}`} set={set} calls={l.calls} name={name} />)
+        l.allowed.map((set) => <RuleSet t={t} key={`${set.by}:${set.role}:${set.source}`} set={set} calls={l.calls} name={name} />)
       )}
 
       {unlisted.length > 0 && (
         <>
-          <h3>목록 밖 기록</h3>
-          <p className={s.subtle}>위 명령 이름에 없는 요청입니다. 키가 틀렸거나(auth) 없는 경로라 길목에서 거절된 것들입니다.</p>
+          <h3>{k.unlisted}</h3>
+          <p className={s.subtle}>{k.unlistedNote}</p>
           <ul className={s.opList}>
             {unlisted.map((o) => (
               <li key={o.name} className={s.opRow}>
@@ -524,7 +536,7 @@ export function LinkPanel({
                 </span>
                 <span className={s.opCount}>
                   {count(o.total)}
-                  {o.failed > 0 && <span className={s.failed}> ({count(o.failed)} 실패)</span>}
+                  {o.failed > 0 && <span className={s.failed}>{k.failedParen(count(o.failed))}</span>}
                 </span>
               </li>
             ))}
@@ -535,29 +547,31 @@ export function LinkPanel({
   );
 }
 
-function RuleSet({ set, calls, name }: { set: LinkRuleSet; calls: LinkCalls | undefined; name: (id: string) => string }) {
+function RuleSet({ t, set, calls, name }: { t: Dict; set: LinkRuleSet; calls: LinkCalls | undefined; name: (id: string) => string }) {
+  const k = t.svc;
+  const count = (n: number) => n.toLocaleString(t.locale);
   const groups = opGroups(set, calls);
   const perOp = countsMatch(set, calls);
   return (
     <section className={s.ruleSet}>
       <div className={s.ruleHead}>
-        <b>{set.role === 'callee' ? `${name(set.by)}의 허용 목록` : `${name(set.by)}의 전달 목록`}</b>
-        <span className="muted"> · {set.ops.length}개</span>
+        <b>{set.role === 'callee' ? k.calleeList(name(set.by)) : k.forwardList(name(set.by))}</b>
+        <span className="muted">{k.opCount(set.ops.length)}</span>
       </div>
       <p className={s.subtle}>
-        {set.role === 'callee' ? '받는 쪽이 이 호출자를 확인하고 이것만 받습니다.' : '보내는 쪽이 이 목록에 있는 요청만 넘깁니다.'} <code>{set.source}</code>
-        {calls && !perOp && <> · 이 연결의 기록에는 명령 이름이 없어 합계만 보입니다</>}
+        {set.role === 'callee' ? k.calleeNote : k.forwardNote} <code>{set.source}</code>
+        {calls && !perOp && <>{k.totalsOnly}</>}
       </p>
       {groups.length === 1 ? (
-        <OpList ops={groups[0].ops} />
+        <OpList t={t} ops={groups[0].ops} />
       ) : (
         groups.map((gr) => (
           <details key={gr.key} className={s.opGroup}>
             <summary>
-              <code>{gr.key}</code> <span className="muted">{gr.ops.length}개</span>
-              {gr.total !== null && <span className={s.opCount}>{count(gr.total)}회</span>}
+              <code>{gr.key}</code> <span className="muted">{k.groupCount(gr.ops.length)}</span>
+              {gr.total !== null && <span className={s.opCount}>{k.times(count(gr.total))}</span>}
             </summary>
-            <OpList ops={gr.ops} />
+            <OpList t={t} ops={gr.ops} />
           </details>
         ))
       )}
@@ -565,7 +579,8 @@ function RuleSet({ set, calls, name }: { set: LinkRuleSet; calls: LinkCalls | un
   );
 }
 
-function OpList({ ops }: { ops: OpRow[] }) {
+function OpList({ t, ops }: { t: Dict; ops: OpRow[] }) {
+  const count = (n: number) => n.toLocaleString(t.locale);
   return (
     <ul className={s.opList}>
       {ops.map((o) => (
@@ -578,9 +593,9 @@ function OpList({ ops }: { ops: OpRow[] }) {
             {o.name !== `${o.method} ${o.path}` && <span className={s.opName}>{o.name}</span>}
           </span>
           {o.total !== null && (
-            <span className={s.opCount} title="최근 호출 수">
+            <span className={s.opCount} title={t.svc.recentCallsTitle}>
               {count(o.total)}
-              {o.failed > 0 && <span className={s.failed}> ({count(o.failed)} 실패)</span>}
+              {o.failed > 0 && <span className={s.failed}>{t.svc.failedParen(count(o.failed))}</span>}
             </span>
           )}
         </li>
@@ -589,20 +604,21 @@ function OpList({ ops }: { ops: OpRow[] }) {
   );
 }
 
-function Findings({ snapshot, onSelect }: { snapshot: ServiceMapSnapshot; onSelect: (id: string) => void }) {
+function Findings({ t, snapshot, onSelect }: { t: Dict; snapshot: ServiceMapSnapshot; onSelect: (id: string) => void }) {
+  const k = t.svc;
   const groups = new Map<string, typeof snapshot.findings>();
   for (const f of snapshot.findings) {
     if (!groups.has(f.code)) groups.set(f.code, []);
     groups.get(f.code)!.push(f);
   }
-  if (groups.size === 0) return <p className="muted">점검 결과: 문제 없음</p>;
+  if (groups.size === 0) return <p className="muted">{k.noFindings}</p>;
   return (
     <section className={s.findings}>
-      <h2>점검 결과</h2>
+      <h2>{k.findings}</h2>
       {[...groups.entries()].map(([code, list]) => (
         <details key={code} className={s.findingGroup} open={list[0].level !== 'info'}>
           <summary>
-            <span className={`${s.level} ${s['lv_' + list[0].level]}`}>{LEVEL_NAMES[list[0].level]}</span> {FINDING_TITLES[code] || code}{' '}
+            <span className={`${s.level} ${s['lv_' + list[0].level]}`}>{k.levels[list[0].level]}</span> {k.findingTitles[code] || code}{' '}
             <span className="muted">({list.length})</span>
           </summary>
           <ul>
@@ -611,7 +627,7 @@ function Findings({ snapshot, onSelect }: { snapshot: ServiceMapSnapshot; onSele
                 {f.message}{' '}
                 {f.services.slice(0, 2).map((id) => (
                   <button key={id} type="button" className={s.linkButton} onClick={() => onSelect(id)}>
-                    {id} 보기
+                    {k.viewService(id)}
                   </button>
                 ))}
               </li>

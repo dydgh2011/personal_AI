@@ -2,6 +2,7 @@ import { AutoRefresh } from '@/components/client';
 import { errorText } from '@/components/ui';
 import { llmUsage, llmUsageSeries, type LlmUsage } from '@/lib/llm';
 import { requireSession } from '@/lib/server';
+import { getT } from '@/i18n/server';
 import { resolvePeriod, type UsageSeries } from '@/lib/usage-series';
 import s from './usage.module.css';
 import { UsageView } from './view';
@@ -14,7 +15,7 @@ export const dynamic = 'force-dynamic';
  * changes state (paid fallback is switched on Discord: /ai-paid).
  */
 export default async function AiUsage({ searchParams }: { searchParams: Promise<Record<string, string | string[] | undefined>> }) {
-  const [sp] = await Promise.all([searchParams, requireSession()]);
+  const [sp, , t] = await Promise.all([searchParams, requireSession(), getT()]);
   const period = resolvePeriod(sp, new Date());
   const days = period.range === 'today' ? 1 : period.range === '7d' ? 7 : 30;
   const [seriesResult, usageResult] = await Promise.allSettled([
@@ -26,15 +27,16 @@ export default async function AiUsage({ searchParams }: { searchParams: Promise<
   return (
     <>
       <div className={s.header}>
-        <h1>AI usage</h1>
+        <h1>{t.aiUsage.title}</h1>
         <AutoRefresh seconds={60} />
       </div>
       <UsageView
+        t={t}
         period={period}
         series={series}
         usage={usage}
-        seriesError={seriesResult.status === 'rejected' ? errorText(seriesResult.reason) : null}
-        usageError={usageResult.status === 'rejected' ? errorText(usageResult.reason) : null}
+        seriesError={seriesResult.status === 'rejected' ? errorText(seriesResult.reason, t) : null}
+        usageError={usageResult.status === 'rejected' ? errorText(usageResult.reason, t) : null}
       />
     </>
   );

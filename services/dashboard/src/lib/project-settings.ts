@@ -1,3 +1,4 @@
+import type { Dict } from '@/i18n';
 import type { AgentInstructions, CommitAuthor, CommitStyle, CommitStyleAnalysis, CommitStyleMode, Project, Task } from './types';
 import { parseReport } from './report';
 
@@ -9,11 +10,8 @@ export const PROJECT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
 export const LIMITS = { authorName: 100, authorEmail: 254, styleGuide: 1000, rules: 4000, forbiddenPaths: 50, forbiddenPath: 200 } as const;
 
-export const STYLE_MODES: Array<{ value: CommitStyleMode; label: string; help: string }> = [
-  { value: 'off', label: 'Off', help: 'Workers use their fixed commit message (no change).' },
-  { value: 'auto', label: 'Auto (from history)', help: 'The worker reads recent commit subjects of the project (read-only) and asks the agent to match them.' },
-  { value: 'manual', label: 'Manual', help: 'The agent follows the guide you write below.' },
-];
+/** Labels and help texts are in the dictionaries (projects.modes). */
+export const STYLE_MODES: CommitStyleMode[] = ['off', 'auto', 'manual'];
 
 const TEXT = /^[^\x00-\x08\x0b-\x1f\x7f]*$/;
 const AUTHOR_NAME = /^(?=.*\S)[^\x00-\x1f\x7f<>]+$/;
@@ -32,33 +30,34 @@ const field = (form: FormData, name: string) => {
 };
 
 /** Form → controller PATCH body, or a message saying what to fix. */
-export function parseSettingsForm(form: FormData): { patch: SettingsPatch } | { error: string } {
+export function parseSettingsForm(form: FormData, t: Dict): { patch: SettingsPatch } | { error: string } {
+  const err = t.projects.err;
   const name = field(form, 'authorName').trim();
   const email = field(form, 'authorEmail').trim();
   let commitAuthor: CommitAuthor | null = null;
   if (name || email) {
-    if (!name || !email) return { error: 'Commit author needs both a name and an e-mail (or leave both empty).' };
-    if (name.length > LIMITS.authorName || !AUTHOR_NAME.test(name)) return { error: `Author name: one line, at most ${LIMITS.authorName} characters, no < or >.` };
-    if (email.length > LIMITS.authorEmail || !AUTHOR_EMAIL.test(email)) return { error: 'Author e-mail is not a valid address.' };
+    if (!name || !email) return { error: err.authorBoth };
+    if (name.length > LIMITS.authorName || !AUTHOR_NAME.test(name)) return { error: err.authorName(LIMITS.authorName) };
+    if (email.length > LIMITS.authorEmail || !AUTHOR_EMAIL.test(email)) return { error: err.authorEmail };
     commitAuthor = { name, email };
   }
 
   const mode = field(form, 'styleMode') as CommitStyleMode;
-  if (!STYLE_MODES.some((m) => m.value === mode)) return { error: 'Choose a commit style mode.' };
+  if (!STYLE_MODES.includes(mode)) return { error: err.chooseMode };
   const guide = field(form, 'styleGuide').trim();
-  if (guide.length > LIMITS.styleGuide || !TEXT.test(guide)) return { error: `Commit style guide: at most ${LIMITS.styleGuide} characters, no control characters.` };
-  if (mode === 'manual' && !guide) return { error: 'Manual commit style needs a guide.' };
+  if (guide.length > LIMITS.styleGuide || !TEXT.test(guide)) return { error: err.guide(LIMITS.styleGuide) };
+  if (mode === 'manual' && !guide) return { error: err.manualNeedsGuide };
 
   const rules = field(form, 'rules').trim();
-  if (rules.length > LIMITS.rules || !TEXT.test(rules)) return { error: `Coding rules: at most ${LIMITS.rules} characters, no control characters.` };
+  if (rules.length > LIMITS.rules || !TEXT.test(rules)) return { error: err.rules(LIMITS.rules) };
 
   const forbiddenPaths = [...new Set(
     field(form, 'forbiddenPaths').split('\n').map((l) => l.trim()).filter((l) => l && !l.startsWith('#')),
   )];
-  if (forbiddenPaths.length > LIMITS.forbiddenPaths) return { error: `At most ${LIMITS.forbiddenPaths} forbidden paths.` };
+  if (forbiddenPaths.length > LIMITS.forbiddenPaths) return { error: err.tooManyPaths(LIMITS.forbiddenPaths) };
   const bad = forbiddenPaths.find((p) => p.length > LIMITS.forbiddenPath || !PATH_PATTERN.test(p));
   if (bad !== undefined) {
-    return { error: `Forbidden path "${bad.slice(0, 60)}" is not a relative path pattern (no leading "/", no "." or ".." parts, no backslashes).` };
+    return { error: err.badPath(bad.slice(0, 60)) };
   }
 
   return { patch: { commitAuthor, commitStyle: { mode, guide: guide || null }, agentInstructions: { rules, forbiddenPaths } } };
@@ -85,11 +84,12 @@ export function latestStyleAnalysis(tasks: Task[]): { taskId: string; at: string
 }
 
 /** One-word summary for the project list. */
-export function settingsSummary(p: Project): string {
+export function settingsSummary(p: Project, t: Dict): string {
+  const x = t.projects.summary;
   const parts: string[] = [];
-  if (p.commitStyle && p.commitStyle.mode !== 'off') parts.push(`style ${p.commitStyle.mode}`);
-  if (p.agentInstructions?.rules) parts.push('rules');
-  if (p.agentInstructions?.forbiddenPaths.length) parts.push(`${p.agentInstructions.forbiddenPaths.length} forbidden`);
-  if (p.commitAuthor) parts.push('author (stored)');
+  if (p.commitStyle && p.commitStyle.mode !== 'off') parts.push(x.style(p.commitStyle.mode));
+  if (p.agentInstructions?.rules) parts.push(x.rules);
+  if (p.agentInstructions?.forbiddenPaths.length) parts.push(x.forbidden(p.agentInstructions.forbiddenPaths.length));
+  if (p.commitAuthor) parts.push(x.author);
   return parts.join(' · ') || '-';
 }

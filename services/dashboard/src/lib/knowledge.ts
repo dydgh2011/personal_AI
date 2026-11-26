@@ -27,7 +27,7 @@ async function call<T>(method: 'GET' | 'POST', path: string, body?: Record<strin
   try {
     key = readSecret(settings.keyFile);
   } catch {
-    throw new KnowledgeError('Knowledge key is not configured (secrets/knowledge-dashboard.key, compose.knowledge.yaml)', 503, 'not_configured');
+    throw Object.assign(new KnowledgeError('Knowledge key is not configured (secrets/knowledge-dashboard.key, compose.knowledge.yaml)', 503, 'not_configured'), { local: 'knowledge_key' as const });
   }
   let res: Response;
   try {
@@ -39,7 +39,7 @@ async function call<T>(method: 'GET' | 'POST', path: string, body?: Record<strin
       signal: AbortSignal.timeout(8000),
     });
   } catch {
-    throw new KnowledgeError('Knowledge store unreachable', 503, 'unreachable');
+    throw Object.assign(new KnowledgeError('Knowledge store unreachable', 503, 'unreachable'), { local: 'knowledge_unreachable' as const });
   }
   const data = (await res.json().catch(() => null)) as (T & { code?: string; message?: string }) | null;
   if (!res.ok) {

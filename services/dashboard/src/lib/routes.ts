@@ -1,6 +1,7 @@
 import 'server-only';
 import { cookies } from 'next/headers';
 import { NextResponse } from 'next/server';
+import { getT } from '@/i18n/server';
 import { csrfFailure, type Session } from './security';
 import { audit, clientIp, SESSION_COOKIE, sessions } from './server';
 
@@ -19,12 +20,11 @@ export function back(path: string, message?: { kind: 'ok' | 'error'; text: strin
   return new NextResponse(null, { status: 303, headers: { Location: location, ...(rejected ? { 'X-PAI-Rejected': rejected } : {}) } });
 }
 
-const CSRF_TEXT: Record<string, string> = {
-  missing_token: 'Security check failed: the form had no CSRF token. Reload the page and try again.',
-  bad_token: 'Security check failed: the form is from an older session. Reload the page and try again.',
-  cross_site: 'Security check failed: the request did not come from this dashboard.',
-  bad_origin: 'Security check failed: the request did not come from this dashboard.',
-};
+/**
+ * Flash text is translated here, on the server, with the request's `pai_lang` cookie (see README
+ * "언어(i18n)"): route handlers call `routeT()` and pass the finished text to back().
+ */
+export const routeT = getT;
 
 /**
  * Session + CSRF check for every state-changing form post. Failures change nothing and send the
@@ -32,13 +32,14 @@ const CSRF_TEXT: Record<string, string> = {
  */
 export async function authorizePost(req: Request, form: FormData, returnTo: string): Promise<Session | NextResponse> {
   const session = sessions.get((await cookies()).get(SESSION_COOKIE)?.value);
+  const t = await routeT();
   if (!session) {
-    return back('/login', { kind: 'error', text: 'Your session has expired or you are logged out. Log in again, then repeat the action.' }, 'session');
+    return back('/login', { kind: 'error', text: t.flash.sessionExpired }, 'session');
   }
   const failure = csrfFailure(session, form.get('csrf'), req.headers);
   if (failure) {
     await audit({ event: 'csrf.rejected', user: session.user, ip: await clientIp(), reason: failure, path: new URL(req.url).pathname });
-    return back(returnTo, { kind: 'error', text: CSRF_TEXT[failure] }, `csrf:${failure}`);
+    return back(returnTo, { kind: 'error', text: t.flash.csrf[failure] }, `csrf:${failure}`);
   }
   return session;
 }

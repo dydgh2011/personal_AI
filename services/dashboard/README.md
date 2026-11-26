@@ -113,3 +113,16 @@ node services/dashboard/scripts/e2e.mjs --confirm-only <taskId>                #
   - CSRF 검사 실패: 원래 화면으로 돌아가며 오류 메시지를 표시한다.
   - 세션 없음 또는 만료: 로그인 화면으로 가며 다시 로그인하라고 안내한다.
 - 실제 브라우저 검사: `npm install --prefix services/dashboard/browser-test` 후 `node services/dashboard/browser-test/approval.mjs <승인할 테스트 task> <거부할 테스트 task>` (Edge 사용, 테스트 전용 리뷰에만 실행, Dashboard를 한 번 재시작함).
+
+## 언어(i18n)
+
+화면 글자는 한국어(기본)와 영어 두 가지다. 새 npm 의존성 없이 직접 만든 사전을 쓴다.
+
+- **사전**: `src/i18n/ko/*.ts`(기준)와 `src/i18n/en/*.ts`. `ko`의 모양이 타입 `Dict`이고 `en`은 `Dict`로 선언되어 있어서, 한쪽에만 있는 키는 **컴파일 오류**가 된다. 글자에 값이 들어가면 함수(`(n) => \`${n}분 전\``)로 쓴다. `test/i18n.test.ts`가 두 사전의 키가 같은지 한 번 더 확인한다.
+- **언어 선택**: `pai_lang` 쿠키(`ko` | `en`, 그 밖의 값은 `ko`). 테마 쿠키(`pai_theme`)와 같은 방식이다. 사이드바(휴대폰에서는 위쪽)의 테마 버튼 옆 **English / 한국어** 버튼이 쿠키를 바꾸고 페이지를 다시 불러온다. 이때 주소의 `?ok=`/`?error=` 알림은 이전 언어로 쓰였으므로 지운다. 로그인 화면에도 같은 버튼이 있다.
+- **서버 컴포넌트**: `getT()`(`src/i18n/server.ts`)가 요청의 쿠키를 읽는다. 서버에서 바로 그 언어로 그리므로 다른 언어가 잠깐 보이는 일이 없다. `<html lang>`도 쿠키를 따른다(`src/app/layout.tsx`).
+- **클라이언트 컴포넌트**: 루트 레이아웃의 `<LangProvider>`가 언어를 내려 주고, `useT()`로 사전을 얻는다. 서버와 같이 쓰는 표시용 컴포넌트(`ui.tsx`의 `Unavailable`, 학습 `parts.tsx`, `DiffView`, `PublicationPanel`, `RoadmapTree`)는 `t` prop을 받는다.
+- **알림(flash)·API 메시지**: route handler가 **요청의 `pai_lang` 쿠키로 번역한 문장**을 `?ok=`/`?error=`에 넣는다(`routeT()` in `src/lib/routes.ts`). CSRF·세션 만료 문구도 같은 방식이고, 미들웨어(`src/proxy.ts`)는 `req.cookies`로 같은 사전을 쓴다. 화면의 `<Flash>`는 받은 글자를 그대로 보여 준다.
+- **날짜·숫자**: 언어마다 locale 하나(`ko-KR` / `en-US`, `src/i18n/format.ts`). 시간대는 화면마다 쓰던 것(America/Toronto, UTC) 그대로다. `YYYY-MM-DD` 계산에 쓰는 `en-CA`는 표시용이 아니라 그대로 둔다.
+- **번역하지 않는 것**: 다른 서비스가 보낸 자유 문장(Controller·Learning·지식 저장소의 `message`, 서비스 지도 수집기의 점검 메시지·설명·층 이름), 주인이 입력한 데이터, AI가 만든 글, 감사 로그, 상태 코드 배지(`running`, `awaiting_approval` 등: 필터 값과 같은 식별자). 코드가 붙어 오는 오류는 코드로 번역한다(게시 사유 `publication.reasons`, 학습 `learnFlash.codes`, 서비스 지도 `svc.findingTitles`). Dashboard가 스스로 만든 연결 오류는 `local` 코드로 번역한다(`errorText` / `backendMessage` in `ui.tsx`).
+- **새 글자를 넣을 때**: `ko`와 `en` 양쪽에 같은 키를 넣는다(빠지면 `npm run typecheck`가 실패). 영어가 길어서 390px 화면에서 버튼·표 머리글·칩이 넘치지 않게 `globals.css`와 학습 CSS에 줄바꿈 규칙이 있다.
