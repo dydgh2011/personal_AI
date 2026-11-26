@@ -237,6 +237,34 @@ class ToolTest(unittest.TestCase):
         self.assertEqual(self.tool(action="submit", agent="claude", instruction="x")["error"]["code"], "invalid_request")
         self.assertEqual([r for r in self.mock.requests if r["method"] == "POST"], [])
 
+    def test_model_and_effort_for_one_task_and_as_default(self):
+        posts = lambda: [json.loads(r["body"]) for r in self.mock.requests if r["method"] == "POST"]  # noqa: E731
+        plain = self.tool(action="submit", agent="claude", project_id="sandbox", instruction="a")
+        self.assertNotIn("model", posts()[-1])
+        self.assertIn("모델: 기본값(CLI) / effort: 기본값(CLI)", plain["userReport"])
+        once = self.tool(action="submit", agent="claude", project_id="sandbox", instruction="a", model="opus", effort="high")
+        self.assertFalse(once["duplicate"], "another model is another request")
+        self.assertEqual(posts()[-1], {"agent": "claude", "projectId": "sandbox", "instruction": "a", "model": "opus", "effort": "high"})
+        self.assertIn("모델: opus / effort: high", once["userReport"])
+        for bad in ({"model": "--dangerously-skip-permissions"}, {"effort": "ultra"}):
+            out = self.tool(action="submit", agent="claude", project_id="sandbox", instruction="b", **bad)
+            self.assertEqual(out["error"]["code"], "usage_error", bad)
+
+        sent = len(posts())
+        self.assertEqual(self.tool(action="set_default", agent="codex", effort="xhigh")["error"]["code"], "invalid_request")
+        self.assertEqual(self.tool(action="set_default", effort="xhigh", confirmed_by_user=True)["error"]["code"], "usage_error")
+        self.assertEqual(self.tool(action="set_default", agent="codex", confirmed_by_user=True)["error"]["code"], "usage_error")
+        self.assertEqual(len(posts()), sent, "nothing sent without the owner's OK, an agent and a value")
+        out = self.tool(action="set_default", agent="codex", model="gpt-6.1-sol", effort="xhigh", confirmed_by_user=True)
+        self.assertTrue(out["ok"], out)
+        self.assertIn("codex 기본값을 바꿨습니다: 모델 gpt-6.1-sol / effort xhigh", out["userReport"])
+        self.tool(action="set_default", agent="codex", model="cli-default", confirmed_by_user=True)
+        self.assertEqual(posts()[-1], {"model": None})
+        shown = self.tool(action="defaults")
+        self.assertIn("codex: 모델 기본값(CLI) / effort xhigh", shown["userReport"])
+        task = self.tool(action="submit", agent="codex", project_id="sandbox", instruction="c")["task"]
+        self.assertEqual((task["model"], task["effort"]), ("cli-default", "xhigh"))
+
     def test_read_actions(self):
         task = self.mock.add("claude", "x", status="running")
         self.assertEqual(self.tool(action="status", task_id=task["id"])["task"]["status"], "running")

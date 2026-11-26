@@ -48,6 +48,7 @@ class MockController:
         self.tasks: dict[str, dict] = {}
         self.order: list[str] = []
         self.keys: dict[str, str] = {}
+        self.defaults: dict[str, dict] = {}
         self.requests: list[dict] = []
         self.fail_next: list[int] = []  # HTTP statuses to return before handling normally
         self.fail_posts: list[int] = []  # same, but only for POST requests
@@ -94,10 +95,18 @@ class MockController:
                     key = self.headers.get("Idempotency-Key")
                     if key and key in mock.keys:
                         return self._send(200, mock.tasks[mock.keys[key]], {"Idempotent-Replayed": "true"})
-                    task = mock.add(body["agent"], body["instruction"])
+                    defaults = mock.defaults.get(body["agent"], {})
+                    task = mock.add(body["agent"], body["instruction"], model=body.get("model", defaults.get("model")),
+                                    effort=body.get("effort", defaults.get("effort")))
                     if key:
                         mock.keys[key] = task["id"]
                     return self._send(201, task)
+                if method == "GET" and parts == ["agent-defaults"]:
+                    return self._send(200, {"items": [{"agent": a, "model": None, "effort": None, **mock.defaults.get(a, {})}
+                                                      for a in ("claude", "codex")]})
+                if method == "POST" and parts[:1] == ["agent-defaults"] and len(parts) == 2:
+                    mock.defaults.setdefault(parts[1], {}).update(json.loads(raw))
+                    return self._send(200, {"agent": parts[1], "model": None, "effort": None, **mock.defaults[parts[1]]})
                 if method == "GET" and parts == ["projects"]:
                     return self._send(200, {"items": mock.projects})
                 if method == "GET" and parts == ["tasks"]:

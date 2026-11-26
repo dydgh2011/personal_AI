@@ -105,10 +105,14 @@ delegator에게는 `/internal/*`(403), 토큰 조회/변경, Docker, DB 직접 �
 |---|---|---|
 | `GET` | `/health` | **인증 없음.** `{ "status": "ok" }`, DB 이상 시 503 |
 | `GET` | `/system/status` | Controller·DB·작업 집계·Worker 최근 접속·서비스 probe |
-| `POST` | `/tasks` | `{ agent: "claude"\|"codex", instruction, projectId? }` → 201. 선택 헤더 `Idempotency-Key` (8–128자) |
+| `POST` | `/tasks` | `{ agent: "claude"\|"codex", instruction, projectId?, model?, effort? }` → 201. 선택 헤더 `Idempotency-Key` (8–128자). `model`·`effort`를 빼면 그 agent의 기본값 |
 | `GET` | `/tasks?status=&agent=&limit=50&offset=0` | `{ items, total, limit, offset }` (최신순, limit ≤ 200) |
 | `GET` | `/tasks/:id` | Task 상세 |
 | `POST` | `/tasks/:id/cancel` | `{ outcome, message, task }` |
+| `GET` | `/agent-defaults` | agent마다 기본 `model`·`effort`(null = CLI 기본값), 바꾼 시각·사람, `effortLevels` |
+| `POST` | `/agent-defaults/:agent` | `{ model?, effort? }` → 200. 뺀 값은 그대로, `null`은 CLI 기본값으로. 새로 만드는 작업부터 적용 |
+
+**모델과 effort (스키마 v8, 2026-11-25)**: 작업은 만들 때 정해진 `model`·`effort`를 저장합니다(요청값, 없으면 그 agent의 기본값, 둘 다 없으면 null = CLI 기본값). 기본값을 바꿔도 이미 만든 작업은 바뀌지 않습니다. effort는 `low`·`medium`·`high`·`xhigh`·`max`(Claude `--effort`, Codex `model_reasoning_effort`). Codex의 `ultra`(스스로 하위 작업 위임)는 무인 Worker라 받지 않습니다. 모델 이름은 글자·숫자·`. _ : - [ ]`, 80자 이하, `-`로 시작할 수 없음(CLI 옵션으로 읽히지 않게). 실제로 있는 모델인지는 CLI가 판단합니다. Kelly는 주인이 말할 때만 넘기고, 기본값 변경은 주인 확인(`confirmed_by_user`) 뒤에만 보냅니다. Dashboard `/tasks` 위쪽에서도 바꿀 수 있습니다.
 
 `Idempotency-Key`: 같은 생성자가 같은 키로 `CONTROLLER_IDEMPOTENCY_WINDOW_SECONDS` 안에 다시 보내면 새 작업을 만들지 않고
 기존 작업을 `200` + `Idempotent-Replayed: true`로 돌려줍니다. 같은 키에 다른 내용이면 `409`. 동시 요청도 트랜잭션으로 하나만 생성됩니다.

@@ -11,6 +11,9 @@ export interface Task {
   claimedBy: string | null;
   leaseExpiresAt: string | null;
   attempt: number;
+  /** Controller v8+: what the task runs with (absent from older controllers = defaults). */
+  model?: string | null;
+  effort?: string | null;
 }
 
 /**

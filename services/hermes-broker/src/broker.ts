@@ -48,6 +48,9 @@ const MAX_KNOWLEDGE_BODY_BYTES = 4 * 1024 * 1024;
 const MAX_LEARNING_BODY_BYTES = 1024;
 const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}';
 const MAX_INSTRUCTION_CHARS = 20_000;
+/** Same rules as the controller (tasks/run-settings.ts): a model name or alias, never starting with "-". */
+const MODEL_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:[\]-]{0,79}$/;
+const EFFORT_LEVELS = ['low', 'medium', 'high', 'xhigh', 'max'];
 
 type Target = 'planner' | 'knowledge' | 'school' | 'learning';
 const TARGETS: Record<Target, { label: string; header: string }> = {
@@ -98,6 +101,9 @@ const ROUTES: Route[] = [
   { method: 'GET', pattern: new RegExp(`^/tasks/${TASK_ID}/review$`), name: 'tasks.review' },
   { method: 'POST', pattern: /^\/tasks$/, name: 'tasks.create' },
   { method: 'POST', pattern: new RegExp(`^/tasks/${TASK_ID}/cancel$`), name: 'tasks.cancel' },
+  // Default model and effort per worker. Kelly sends a change only after the owner confirmed it in chat.
+  { method: 'GET', pattern: /^\/agent-defaults$/, name: 'defaults.get' },
+  { method: 'POST', pattern: /^\/agent-defaults\/(claude|codex)$/, name: 'defaults.set' },
   // Worker CLI logins: see the state, ask for a new login, pass on the code the owner got after signing in.
   { method: 'GET', pattern: /^\/workers\/auth$/, name: 'auth.list' },
   { method: 'POST', pattern: /^\/workers\/(claude|codex)\/auth\/start$/, name: 'auth.start' },
@@ -405,11 +411,22 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
         headers['Idempotency-Key'] =
           typeof key === 'string'
             ? key
-            : `broker-${createHash('sha256').update([task.agent, task.projectId, task.instruction].join('\0')).digest('hex').slice(0, 40)}`;
+            : `broker-${createHash('sha256').update([task.agent, task.projectId, task.instruction, task.model ?? '', task.effort ?? ''].join('\0')).digest('hex').slice(0, 40)}`;
         headers['Content-Type'] = 'application/json';
         body = JSON.stringify(task);
-        Object.assign(audit, { agent: task.agent, projectId: task.projectId, instructionChars: task.instruction.length });
+        Object.assign(audit, {
+          agent: task.agent,
+          projectId: task.projectId,
+          instructionChars: task.instruction.length,
+          model: task.model ?? null,
+          effort: task.effort ?? null,
+        });
         rateLimit();
+      } else if (route.name === 'defaults.set') {
+        const change = validateDefaults(await readJson(req));
+        headers['Content-Type'] = 'application/json';
+        body = JSON.stringify(change);
+        Object.assign(audit, { agent: url.pathname.split('/')[2], ...change });
       } else if (route.name === 'auth.code') {
         // The code is a one-time authorization code; it is forwarded, never logged.
         headers['Content-Type'] = 'application/json';
@@ -471,10 +488,40 @@ function consumeRateLimit(recent: number[], perMinute: number, now: number, labe
   recent.push(now);
 }
 
-function validateTask(value: unknown): { agent: string; projectId: string; instruction: string } {
+type RunChange = { model?: string | null; effort?: string | null };
+
+/** model/effort: absent = not given; null only where allowed (a default going back to the CLI default). */
+function validateRun(body: Record<string, unknown>, allowNull: boolean): RunChange {
+  const out: RunChange = {};
+  if (body.model !== undefined) {
+    if (body.model === null && allowNull) out.model = null;
+    else if (typeof body.model !== 'string' || !MODEL_PATTERN.test(body.model)) {
+      throw new HttpError(400, 'model must be a model name or alias (letters, digits, . _ : - [ ], max 80, not starting with -)');
+    } else out.model = body.model;
+  }
+  if (body.effort !== undefined) {
+    if (body.effort === null && allowNull) out.effort = null;
+    else if (typeof body.effort !== 'string' || !EFFORT_LEVELS.includes(body.effort)) {
+      throw new HttpError(400, `effort must be one of ${EFFORT_LEVELS.join(', ')}`);
+    } else out.effort = body.effort;
+  }
+  return out;
+}
+
+function validateDefaults(value: unknown): RunChange {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HttpError(400, 'Body must be a JSON object');
   const body = value as Record<string, unknown>;
-  const extra = Object.keys(body).filter((k) => !['agent', 'projectId', 'instruction'].includes(k));
+  const extra = Object.keys(body).filter((k) => !['model', 'effort'].includes(k));
+  if (extra.length) throw new HttpError(400, `Unexpected fields: ${extra.join(', ')}`);
+  const change = validateRun(body, true);
+  if (!('model' in change) && !('effort' in change)) throw new HttpError(400, 'Give model and/or effort');
+  return change;
+}
+
+function validateTask(value: unknown): { agent: string; projectId: string; instruction: string; model?: string; effort?: string } {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HttpError(400, 'Body must be a JSON object');
+  const body = value as Record<string, unknown>;
+  const extra = Object.keys(body).filter((k) => !['agent', 'projectId', 'instruction', 'model', 'effort'].includes(k));
   if (extra.length) throw new HttpError(400, `Unexpected fields: ${extra.join(', ')}`);
   if (typeof body.agent !== 'string' || !AGENTS.includes(body.agent)) throw new HttpError(400, 'agent must be claude or codex');
   if (typeof body.projectId !== 'string' || !PROJECT_ID_PATTERN.test(body.projectId)) {
@@ -484,7 +531,8 @@ function validateTask(value: unknown): { agent: string; projectId: string; instr
   if (body.instruction.length > MAX_INSTRUCTION_CHARS) {
     throw new HttpError(400, `instruction is longer than ${MAX_INSTRUCTION_CHARS} characters`);
   }
-  return { agent: body.agent, projectId: body.projectId, instruction: body.instruction };
+  const run = validateRun(body, false) as { model?: string; effort?: string };
+  return { agent: body.agent, projectId: body.projectId, instruction: body.instruction, ...run };
 }
 
 async function readJson(req: IncomingMessage, mustBeEmpty = false, emptyIsObject = false, maxBytes = MAX_BODY_BYTES): Promise<unknown> {

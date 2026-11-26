@@ -190,11 +190,14 @@ docker compose -f compose.yaml -f compose.workers.yaml -f compose.controller.yam
 | `WORKER_HEARTBEAT_SECONDS` | `10` (compose) | heartbeat 주기 = 취소 감지 지연. lease의 1/3보다 짧아야 함 |
 | `WORKER_TASK_TIMEOUT_SECONDS` | `1800` | 작업당 최대 실행 시간 |
 | `WORKER_MAX_OUTPUT_BYTES` | 2 MiB (codex compose: 8 MiB) | 수집할 stdout 최대 크기. 넘으면 앞/뒤 절반씩 보존 (최종 결과는 끝에 있음) |
-| `WORKER_MODEL` | (CLI 기본값) | `--model` |
+| `WORKER_MODEL` | (CLI 기본값) | `--model`. 작업에 `model`이 있으면 그것이 먼저(아래) |
 | `WORKER_AGENT_COMMAND` | `["<agent>"]` | 실행 파일 (JSON 배열, 테스트용) |
 
+**작업별 모델과 effort** (2026-11-25): controller가 작업에 `model`·`effort`를 넣어 줍니다(주인이 정한 기본값 또는 그 작업만의 요청, 없으면 null). Worker는 `src/runners/run-options.ts`로 다시 검사하고(틀리면 CLI를 띄우지 않고 실패 처리), Claude는 `--model`·`--effort`, Codex는 `--model`·`-c model_reasoning_effort="…"`로 넘깁니다. 실제로 쓴 값은 보고서의 `run`에 남습니다. 기본값을 바꿔도 Worker를 다시 만들 필요가 없습니다.
+
 새 프로젝트 추가 (Worker 재시작 불필요):
-- GitHub: `POST /projects` → `servicesepo-syncscriptssync-project.ps1 -ProjectId <id>` → `PATCH /projects/<id>` `{ "enabled": true, "allowCodeChanges": true }`
+- GitHub: `POST /projects` → `services
+epo-syncscriptssync-project.ps1 -ProjectId <id>` → `PATCH /projects/<id>` `{ "enabled": true, "allowCodeChanges": true }`
 - local: Registry에 등록·활성화하고, 각 Worker의 `workspaces/<agent>/<id>`에 git 저장소를 둡니다.
 
 ## 개발

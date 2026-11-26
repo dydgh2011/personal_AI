@@ -1,6 +1,6 @@
 import 'server-only';
 import { readSecret, settings } from './server';
-import type { AgentInstructions, CommitAuthor, CommitStyle, DiffResponse, Project, Publication, PublicationStatus, PublishAuthorization, Review, ReviewResponse, SystemStatus, Task, TaskList, TestValidation } from './types';
+import type { AgentDefaults, AgentInstructions, CommitAuthor, CommitStyle, DiffResponse, Project, Publication, PublicationStatus, PublishAuthorization, Review, ReviewResponse, SystemStatus, Task, TaskList, TestValidation } from './types';
 
 export class ControllerError extends Error {
   constructor(message: string, readonly status: number | null, readonly code: string | null = null) {
@@ -59,6 +59,10 @@ export const controller = {
   task: (id: string) => call<Task>('GET', `/tasks/${encodeURIComponent(id)}`).then((r) => r.data),
   cancel: (id: string) => call<{ outcome: string; message: string }>('POST', `/tasks/${encodeURIComponent(id)}/cancel`).then((r) => r.data),
   projects: () => call<{ items: Project[] }>('GET', '/projects').then((r) => r.data.items),
+  agentDefaults: () => call<{ items: AgentDefaults[] }>('GET', '/agent-defaults').then((r) => r.data.items),
+  /** null = the CLI's own default. Applies to tasks created from now on. */
+  setAgentDefaults: (agent: string, body: { model: string | null; effort: string | null }) =>
+    call<AgentDefaults>('POST', `/agent-defaults/${encodeURIComponent(agent)}`, body).then((r) => r.data),
   project: (id: string) => call<Project>('GET', `/projects/${encodeURIComponent(id)}`).then((r) => r.data),
   /** Admin PATCH of the agent settings only (ROADMAP 11-13); each value replaces the whole setting. */
   updateProjectSettings: (id: string, patch: { commitAuthor: CommitAuthor | null; commitStyle: CommitStyle; agentInstructions: AgentInstructions }) =>

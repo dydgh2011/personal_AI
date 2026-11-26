@@ -1,13 +1,13 @@
 # Personal AI OS — Roadmap
 
 상태 표기: ✅ 완료(검증됨) · 🟡 부분 완료 · ⬜ 미착수. 완료는 실제 Docker 환경에서 검증한 경우에만 표시합니다.
-마지막 갱신: 2026-11-25 저녁 (받아쓰기 실사용 확인, 기말 계획 캘린더 반영, 짧은 일정 5분 알림, 플래너 시안 검사기, main에 합침)
+마지막 갱신: 2026-11-25 밤 (Worker 모델·effort 기본값과 작업별 지정 배포, 실제 작업으로 확인)
 
 **진행 요약** (✅ 1 · 🟡 0.5 · ⬜ 0으로 센 대략값)
 
 | 트랙 | 절 | 진행 | 남은 큰 일 |
 |---|---|---|---|
-| 코딩 자동화 | 1~15 | 약 90% (✅ 17 · 🟡 2 · ⬜ 1) | CI 결과 확인(10), 실제 프로젝트 저장소로 게시 확대(15), Hermes 보안 마무리(5, Codex) |
+| 코딩 자동화 | 1~15 | 약 90% (✅ 18 · 🟡 2 · ⬜ 1) | CI 결과 확인(10), 실제 프로젝트 저장소로 게시 확대(15), Hermes 보안 마무리(5, Codex) |
 | AI Learning OS | 17 | 약 90% (L0~L3 ✅ · L4 🟡) | L4-02 외부 자료, L4-03 프로젝트 연결, L4-04 퀘스트·음성(선택), 실제 AI 호출 확인 |
 | 개인 비서·Kelly | 18~19 | 약 95% (✅ 20 · ⬜ 1) | 할 일을 실제로 했는지 확인(나중), Google Maps 이동 알림(다음 학기 후보) |
 | Service Map | 20 | 완료 | (서비스 15개, 연결 23개, 경고 0) |
@@ -160,6 +160,12 @@
 
 - **목표**: 프로젝트마다 에이전트 지침(예: 코딩 규칙, 금지 경로)을 관리.
 - **확장 지점**: Registry에 `agentInstructions` 필드 추가. Runner의 시스템 프롬프트(`UNATTENDED_PROMPT`)에 병합.
+
+## 12-1. Worker 모델·effort 선택 ✅ (2026-11-25: 배포, 실제 sandbox 작업 2개로 확인)
+
+- **목표**: 평소엔 Worker마다 기본값으로 돌리고, 주인이 말하면 그 작업만 다른 모델·effort로. 기본값 자체도 주인이 바꿈.
+- **구현**: Controller 스키마 v8(`tasks.model`·`effort`, `agent_defaults` 표, 백업 `data/backups/controller/controller.db.20261125-143544`). 작업은 만들 때 값이 정해짐(요청 → 기본값 → CLI 기본값). Worker가 다시 검사 후 Claude `--model`·`--effort`, Codex `--model`·`-c model_reasoning_effort`. Kelly `personal_ai_task`의 submit `model`·`effort`, `defaults`, `set_default`(주인 확인 필요). broker가 값 검사. Dashboard `/tasks` 위쪽에서 기본값 편집, 목록·상세에 모델·effort 표시.
+- **확인**: 테스트 controller 140, worker(Docker 빌드 안, Linux), broker 20, hermes-integration 104, dashboard 139. 실제 스택에서 Kelly 도구 → broker → controller로 기본값 조회 ✅, 확인 없는 기본값 변경·`--bad` 모델 거절 ✅. 실제 작업(주인 승인): Claude `sonnet`·`low` 9a4289e7…(성공, 3.1초), Codex `low` 1f624734…(성공, 7.3초). Worker 로그·보고서 `run`에 같은 값, CLI 종료 코드 0 ✅. **남은 확인**: Dashboard `/tasks` 화면(로그인 필요).
 
 ## 13. Dashboard에서 프로젝트 선택 ✅ (2026-11-24: 프로젝트 상세에서 규칙·금지 경로·스타일·작성자 편집, CSRF·감사 기록)
 

@@ -88,6 +88,12 @@ td.trunc { max-width: 420px; overflow: hidden; text-overflow: ellipsis; white-sp
 .warning.bad { border-color: var(--bad); color: var(--bad); }
 
 form.inline { display: inline; }
+/* Worker defaults (tasks page): one card per worker, side by side on wide screens. */
+.defaults-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; }
+.defaults-card { display: flex; flex-direction: column; gap: 8px; }
+.defaults-card label { display: flex; flex-direction: column; gap: 3px; color: var(--muted); font-size: 12px; }
+.defaults-card input, .defaults-card select { width: 100%; box-sizing: border-box; }
+.defaults-card button { align-self: flex-start; }
 input, select, textarea, button {
   font: inherit; color: var(--text); background: var(--panel-2);
   border: 1px solid var(--border); border-radius: 4px; padding: 5px 8px;

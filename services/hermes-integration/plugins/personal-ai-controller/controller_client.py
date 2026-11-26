@@ -44,6 +44,11 @@ REQUEST_TIMEOUT = 15.0
 MAX_WAIT_SECONDS = 170  # keeps one tool call (and the chat turn) reasonably short
 TASK_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 PROJECT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
+# Model and reasoning effort for a task (same rules as the controller's tasks/run-settings.ts).
+MODEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:\[\]-]{0,79}$")
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+# What the owner says to go back to the CLI's own default (sent to the controller as null).
+CLI_DEFAULT = "cli-default"
 
 EXIT_CODES = {
     "usage_error": 2,
@@ -245,6 +250,8 @@ def task_view(task: dict[str, Any]) -> dict[str, Any]:
         "elapsedSeconds": _seconds_between(task.get("startedAt"), task.get("completedAt")),
         "claimedBy": task.get("claimedBy"),
         "attempt": task.get("attempt"),
+        "model": task.get("model") or CLI_DEFAULT,
+        "effort": task.get("effort") or CLI_DEFAULT,
     }
 
 
@@ -322,6 +329,26 @@ STATUS_KO = {
 }
 
 
+def _run_ko(value: Any) -> str:
+    return "기본값(CLI)" if not value or value == CLI_DEFAULT else str(value)
+
+
+def _run_choice(args: argparse.Namespace) -> dict[str, str]:
+    """model/effort the owner asked for this one task (absent = the worker's default)."""
+    out: dict[str, str] = {}
+    model = (getattr(args, "model", None) or "").strip()
+    effort = (getattr(args, "effort", None) or "").strip()
+    if model and model != CLI_DEFAULT:
+        if not MODEL.match(model):
+            raise CliError("usage_error", f"'{model}' is not a valid model name (letters, digits, . _ : - [ ], max 80)")
+        out["model"] = model
+    if effort and effort != CLI_DEFAULT:
+        if effort not in EFFORTS:
+            raise CliError("usage_error", f"effort must be one of {', '.join(EFFORTS)}")
+        out["effort"] = effort
+    return out
+
+
 def user_report(view: dict[str, Any], report: dict[str, Any] | None = None, headline: str | None = None) -> str:
     """Fixed Korean report built only from controller facts, so the model can show it as is."""
     none = "없음"
@@ -329,6 +356,7 @@ def user_report(view: dict[str, Any], report: dict[str, Any] | None = None, head
     lines += [
         f"작업 ID: {view.get('id')}",
         f"담당: {view.get('agent')} / 프로젝트: {view.get('projectId')}",
+        f"모델: {_run_ko(view.get('model'))} / effort: {_run_ko(view.get('effort'))}",
         f"결과: {STATUS_KO.get(view.get('status'), view.get('status'))}" if view.get("finished")
         else f"상태: {STATUS_KO.get(view.get('status'), view.get('status'))}",
     ]
@@ -397,17 +425,19 @@ def cmd_submit(client: Client, config: Config, args: argparse.Namespace) -> dict
             raise CliError("usage_error", f"Cannot read instruction file {path}: {err}") from None
     if not instruction:
         raise CliError("usage_error", "The instruction is empty")
+    run = _run_choice(args)
     if len(instruction) > MAX_INSTRUCTION_CHARS:
         raise CliError("usage_error", f"Instruction is {len(instruction)} characters; the limit is {MAX_INSTRUCTION_CHARS}")
 
     if args.new:
         key = f"hermes-new-{uuid.uuid4().hex}"
     else:
-        digest = hashlib.sha256("\0".join((args.agent, args.project, instruction)).encode("utf-8")).hexdigest()
+        parts = (args.agent, args.project, instruction, run.get("model", ""), run.get("effort", ""))
+        digest = hashlib.sha256("\0".join(parts).encode("utf-8")).hexdigest()
         key = f"hermes-auto-{digest[:40]}"
     status, headers, task = client.request(
         "POST", "/tasks",
-        {"agent": args.agent, "projectId": args.project, "instruction": instruction},
+        {"agent": args.agent, "projectId": args.project, "instruction": instruction, **run},
         headers={"Idempotency-Key": key},
     )
     duplicate = headers.get("idempotent-replayed") == "true"
@@ -513,6 +543,8 @@ def cmd_list(client: Client, config: Config, args: argparse.Namespace) -> dict[s
                 "status": t.get("status"),
                 "createdAt": t.get("createdAt"),
                 "completedAt": t.get("completedAt"),
+                "model": t.get("model") or CLI_DEFAULT,
+                "effort": t.get("effort") or CLI_DEFAULT,
                 "instruction": _clip((t.get("instruction") or "").replace("\n", " "), 100),
             }
             for t in items
@@ -664,6 +696,47 @@ def cmd_login_code(client: Client, config: Config, args: argparse.Namespace) -> 
             "note": "Code handed to the worker. A Discord message confirms when the login is complete (usually within seconds)."}
 
 
+def _defaults_view(item: dict[str, Any]) -> dict[str, Any]:
+    return {"agent": item.get("agent"), "model": item.get("model") or CLI_DEFAULT, "effort": item.get("effort") or CLI_DEFAULT,
+            "updatedAt": item.get("updatedAt"), "updatedBy": item.get("updatedBy")}
+
+
+def cmd_defaults(client: Client, config: Config, args: argparse.Namespace) -> dict[str, Any]:
+    _, _, page = client.request("GET", "/agent-defaults")
+    items = [_defaults_view(i) for i in (page or {}).get("items", []) if isinstance(i, dict)]
+    return {"ok": True, "defaults": items, "effortLevels": list(EFFORTS),
+            "userReport": "\n".join(f"{i['agent']}: 모델 {_run_ko(i['model'])} / effort {_run_ko(i['effort'])}" for i in items),
+            "note": "cli-default = the worker CLI's own default. One task can still ask for another model/effort (submit)."}
+
+
+def cmd_defaults_set(client: Client, config: Config, args: argparse.Namespace) -> dict[str, Any]:
+    if args.agent not in AGENTS:
+        raise CliError("usage_error", f"agent is required: one of {', '.join(AGENTS)}")
+    if not getattr(args, "confirmed_by_user", False):
+        raise CliError("invalid_request", "Changing a worker default needs the owner's explicit OK in this conversation "
+                       "(say exactly what will change, then set confirmed_by_user=true).")
+    change: dict[str, Any] = {}
+    for name, value in (("model", getattr(args, "model", None)), ("effort", getattr(args, "effort", None))):
+        value = (value or "").strip()
+        if not value:
+            continue
+        if value == CLI_DEFAULT:
+            change[name] = None
+        elif name == "model" and not MODEL.match(value):
+            raise CliError("usage_error", f"'{value}' is not a valid model name (letters, digits, . _ : - [ ], max 80)")
+        elif name == "effort" and value not in EFFORTS:
+            raise CliError("usage_error", f"effort must be one of {', '.join(EFFORTS)} or {CLI_DEFAULT}")
+        else:
+            change[name] = value
+    if not change:
+        raise CliError("usage_error", f"Give model and/or effort ({CLI_DEFAULT} = the CLI's own default)")
+    _, _, item = client.request("POST", f"/agent-defaults/{args.agent}", change)
+    view = _defaults_view(item or {})
+    return {"ok": True, "defaults": view,
+            "userReport": f"{view['agent']} 기본값을 바꿨습니다: 모델 {_run_ko(view['model'])} / effort {_run_ko(view['effort'])}. "
+                          "새로 등록하는 작업부터 적용됩니다."}
+
+
 COMMANDS = {
     "login-status": cmd_login_status,
     "login-start": cmd_login_start,
@@ -677,6 +750,8 @@ COMMANDS = {
     "system-status": cmd_system_status,
     "projects": cmd_projects,
     "review": cmd_review,
+    "defaults": cmd_defaults,
+    "defaults-set": cmd_defaults_set,
 }
 
 
@@ -694,6 +769,14 @@ def build_parser() -> argparse.ArgumentParser:
     submit.add_argument("--instruction-file", required=True, help="UTF-8 file with the task text")
     submit.add_argument("--new", action="store_true", help="submit even if the same request was just submitted")
     submit.add_argument("--keep-file", action="store_true", help="do not delete the instruction file after submitting")
+    submit.add_argument("--model", help="model for this task only (default: the agent's default)")
+    submit.add_argument("--effort", choices=EFFORTS, help="reasoning effort for this task only")
+    sub.add_parser("defaults", help="default model and effort per agent")
+    defaults_set = sub.add_parser("defaults-set", help="change an agent's default model/effort (owner's OK needed)")
+    defaults_set.add_argument("--agent", required=True, choices=AGENTS)
+    defaults_set.add_argument("--model", help=f"model name or {CLI_DEFAULT}")
+    defaults_set.add_argument("--effort", choices=(*EFFORTS, CLI_DEFAULT))
+    defaults_set.add_argument("--confirmed-by-user", action="store_true")
     for name in ("status", "result", "cancel", "review"):
         sub.add_parser(name).add_argument("task_id")
     wait = sub.add_parser("wait", help=f"poll until the task finishes (max {MAX_WAIT_SECONDS}s per call)")

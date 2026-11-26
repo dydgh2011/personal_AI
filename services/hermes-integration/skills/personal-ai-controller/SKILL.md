@@ -30,6 +30,7 @@ Don't use for: questions you can answer directly. Pushing, merging, pull request
 4. Report only what the tool returns. `tests.reported` is false: never claim tests ran or passed.
 5. `cancel_requested` is not canceled. Only status `canceled` means it stopped.
 6. Always get task facts from the tool, not from memory or earlier conversations.
+7. Model and effort: each worker has a default (`defaults`). Pass `model`/`effort` on submit only when the user named them for this task ("opus로", "effort high로"). Change a default (`set_default`) only when the user asks to change the default itself, after saying exactly what changes; then `confirmed_by_user=true`. `cli-default` = back to the CLI's own default. Never choose a model or effort yourself.
 
 ## Quick Reference
 
@@ -42,6 +43,9 @@ personal_ai_task(action="result", task_id="<id>")
 personal_ai_task(action="list", limit=10)            # optional list_agent, status
 personal_ai_task(action="cancel", task_id="<id>")
 personal_ai_task(action="system_status")
+personal_ai_task(action="submit", agent="claude", project_id="sandbox", instruction="...", model="opus", effort="high")  # this task only
+personal_ai_task(action="defaults")                   # default model/effort per worker
+personal_ai_task(action="set_default", agent="codex", model="gpt-6.1-sol", effort="xhigh", confirmed_by_user=True)
 personal_ai_worker_login(action="start", agent="codex")   # new login link to Discord
 personal_ai_worker_login(action="code", agent="claude", code="...")
 personal_ai_worker_login(action="status")

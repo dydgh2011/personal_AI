@@ -3,7 +3,7 @@
 > 모든 에이전트(Claude Code, Codex)가 **시작할 때 읽고, 끝날 때 갱신**하는 파일이다(`AGENTS.md` 0절).
 > 다음 에이전트가 이 파일만 보고 이어서 할 수 있게 쓴다. 오래된 항목은 지우고 최신 상태만 남긴다.
 
-마지막 갱신: 2026-11-24 · Claude Code
+마지막 갱신: 2026-11-25 · Claude Code
 
 ## 스택 잠금
 - **비어 있음** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
@@ -44,6 +44,11 @@
   4. 이동시간은 Claude Code가 장소별로 물어보고 주인이 예상 시간을 알려 줌. 수면 23:00~06:00 고정.
   - 1단계 완료(2026-11-25): 주인 파일 5개(TODO, 건강·식단·운동, 이력서 3종)를 원본 메모 5개 + 문서 13개 + 사실 40개 + 연결 13개로 정리. 원본 파일은 `data/knowledge-inbox/me/2026-11-25/`로 옮김. 백업 `data/backups/knowledge/knowledge.db.20261125-101447`.
   - 지식 저장소에 2026-11-25 추가: 수면 23~06(`me`, habit), 문제 풀이·대화형 학습 선호, 공식 문제 → Claude 예상 문제 순서, Kelly 역할, 이동시간 포함(`취향과 피드백`).
+
+## 최근 변경 (2026-11-25 밤)
+- **Worker 모델·effort 선택 배포** (ROADMAP 12-1): Controller v8(백업 후), controller·claude-worker·codex-worker·hermes-broker·dashboard 다시 만들고 hermes 재시작. 기본값은 둘 다 CLI 기본값(아직 바꾸지 않음). Kelly에게 "opus로, effort high로 …" 하면 그 작업만, "codex 기본 effort를 high로 바꿔줘" 하면 확인 뒤 기본값 변경. 주인 승인으로 sandbox 확인 작업 2개 실행: Claude sonnet·low, Codex low 모두 성공(CLI가 값을 받음, 보고서 `run`에 기록). **확인 못 한 것**: Dashboard `/tasks` 화면(로그인 필요). 커밋 안 함.
+- **학교 소식·대화 기록 점검(읽기만)**: 학교 항목은 모두 지식 저장소 원본으로 들어가고 검색됨(학교 원본 1,065건, 벡터 누락 0). 하지만 문서·사실로 정리되지는 않음(학교 원본에서 나온 사실 1개). Kelly 대화는 메모리 제공자를 켠 11-22 18:29 UTC 뒤로는 모두 원본 저장, 그 전 Discord 대화(11-20~22, 약 25개)는 Hermes `state.db`에만 있음. Kelly가 대화로 만든 사실은 1개, 활동 0개. Hermes 내장 메모리 MEMORY.md에 옛 내용("오디오 받아쓰기 방법 없음") 남아 있음. 주인 결정 대기.
+- **지식 그래프 FAS147 연결**: 11-22 Kelly가 `me`→4과목 `part_of`를 만들었고, 11-23 Claude Code가 FAS147 문서를 만들 때 이 링크를 빠뜨렸음. 2026-11-25 주인 지적으로 `me`→`fas147` `part_of` 추가(운영자 접근 열고 바로 닫음).
 
 ## 최근 변경 (2026-11-25 새벽)
 - 사이드바 순서를 쿠키(`pai_nav`)로 서버에서 그림(기본 순서 깜빡임 수정). 주인이 브라우저에서 확인 완료.

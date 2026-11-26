@@ -48,6 +48,17 @@ describe('ClaudeRunner', () => {
     }
   });
 
+  it('uses the task model and effort over the worker default, and nothing when unset', () => {
+    const plain = new ClaudeRunner(['claude']).buildInvocation(input).args;
+    assert.equal(plain.includes('--model'), false);
+    assert.equal(plain.includes('--effort'), false);
+    const args = new ClaudeRunner(['claude'], 'sonnet').buildInvocation({ ...input, model: 'opus', effort: 'max' }).args;
+    assert.equal(args[args.indexOf('--model') + 1], 'opus');
+    assert.equal(args[args.indexOf('--effort') + 1], 'max');
+    const fallback = new ClaudeRunner(['claude'], 'sonnet').buildInvocation({ ...input, effort: 'low' }).args;
+    assert.equal(fallback[fallback.indexOf('--model') + 1], 'sonnet');
+  });
+
   it('gives read-only projects no editing tools', () => {
     const { args } = runner.buildInvocation({ ...input, mode: 'read' });
     assert.equal(args[args.indexOf('--tools') + 1], 'Read,Glob,Grep');

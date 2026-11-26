@@ -33,6 +33,8 @@ interface TaskRow {
   attempt: number;
   created_by: string;
   idempotency_key: string | null;
+  model: string | null;
+  effort: string | null;
 }
 
 /** Patch field -> column. Only these columns can ever appear in a dynamic UPDATE. */
@@ -66,10 +68,10 @@ export class SqliteTaskRepository extends TaskRepository {
     this.insertStmt = db.prepare(`
       INSERT INTO tasks (id, agent, project_id, instruction, status, result, error,
         created_at, updated_at, started_at, completed_at, cancel_requested_at,
-        claimed_by, lease_expires_at, attempt, created_by, idempotency_key)
+        claimed_by, lease_expires_at, attempt, created_by, idempotency_key, model, effort)
       VALUES (@id, @agent, @project_id, @instruction, @status, @result, @error,
         @created_at, @updated_at, @started_at, @completed_at, @cancel_requested_at,
-        @claimed_by, @lease_expires_at, @attempt, @created_by, @idempotency_key)
+        @claimed_by, @lease_expires_at, @attempt, @created_by, @idempotency_key, @model, @effort)
       RETURNING *`);
     this.findStmt = db.prepare('SELECT * FROM tasks WHERE id = ?');
     this.findIdempotentStmt = db.prepare(`
@@ -244,6 +246,8 @@ function toTask(row: TaskRow): Task {
     attempt: row.attempt,
     createdBy: row.created_by,
     idempotencyKey: row.idempotency_key,
+    model: row.model ?? null,
+    effort: row.effort ?? null,
   };
 }
 
@@ -266,5 +270,7 @@ function toRow(task: Task): TaskRow {
     attempt: task.attempt,
     created_by: task.createdBy,
     idempotency_key: task.idempotencyKey,
+    model: task.model ?? null,
+    effort: task.effort ?? null,
   };
 }

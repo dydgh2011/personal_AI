@@ -20,6 +20,8 @@ export interface FakeTask {
   id: string;
   agent: AgentType;
   projectId: string | null;
+  model?: string | null;
+  effort?: string | null;
   instruction: string;
   status: string;
   result: string | null;
@@ -71,8 +73,9 @@ export class FakeController {
     this.server = null;
   }
 
-  addTask(agent: AgentType, instruction: string, projectId: string | null = 'sandbox'): FakeTask {
+  addTask(agent: AgentType, instruction: string, projectId: string | null = 'sandbox', run: { model?: unknown; effort?: unknown } = {}): FakeTask {
     const task: FakeTask = {
+      ...(run as { model?: string | null; effort?: string | null }),
       id: randomUUID(),
       agent,
       projectId,

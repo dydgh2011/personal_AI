@@ -88,7 +88,10 @@ export class CodexRunner implements AgentRunner {
       ...DISABLED_FEATURES.flatMap((feature) => ['--disable', feature]),
       '-C', input.cwd,
     ];
-    if (this.model) args.push('--model', this.model);
+    const model = input.model ?? this.model;
+    if (model) args.push('--model', model);
+    // A checked keyword (run-options.ts), so it is safe inside the TOML string.
+    if (input.effort) args.push('-c', `model_reasoning_effort="${input.effort}"`);
     // "-" = read the prompt from stdin, which runProcess closes after writing it.
     args.push('-');
 
@@ -124,7 +127,6 @@ export class CodexRunner implements AgentRunner {
       summary,
       details: {
         threadId: events.threadId,
-        model: this.model ?? 'cli-default',
         turnsCompleted: events.turnsCompleted,
         turnFailure: events.turnFailure,
         tokens: events.usage,

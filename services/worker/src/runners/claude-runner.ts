@@ -50,7 +50,9 @@ export class ClaudeRunner implements AgentRunner {
       '--session-id', input.taskId,
       '--append-system-prompt', systemPrompt(UNATTENDED_PROMPT, input.projectPrompt),
     ];
-    if (this.model) args.push('--model', this.model);
+    const model = input.model ?? this.model;
+    if (model) args.push('--model', model);
+    if (input.effort) args.push('--effort', input.effort);
 
     return {
       command: this.command[0],

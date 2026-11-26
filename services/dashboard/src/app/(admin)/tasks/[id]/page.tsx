@@ -5,6 +5,7 @@ import { controller, ControllerError, UUID } from '@/lib/controller';
 import { duration, short, since } from '@/lib/diff';
 import { parseReport } from '@/lib/report';
 import { requireSession } from '@/lib/server';
+import { runLabel } from '@/lib/agent-defaults';
 import type { Task } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -41,6 +42,7 @@ export default async function TaskPage({ params, searchParams }: { params: Promi
           <dt>Id</dt><dd className="mono">{task.id}</dd>
           <dt>Status</dt><dd><Badge value={task.status} /> {report?.outcome && <span className="muted">worker outcome: {report.outcome}</span>}</dd>
           <dt>Agent</dt><dd>{task.agent}{task.claimedBy && <span className="muted"> · {task.claimedBy} · attempt {task.attempt}</span>}</dd>
+          <dt>Model · effort</dt><dd>{runLabel(task.model)} · {runLabel(task.effort)}</dd>
           <dt>Project</dt><dd>{task.projectId ?? '-'}</dd>
           <dt>Created</dt><dd title={task.createdAt}>{since(task.createdAt)} <span className="muted">by {task.createdBy ?? 'unknown'}</span></dd>
           <dt>Duration</dt><dd>{duration(task.startedAt, task.completedAt)}{report?.timedOut && <Badge value="failed" />}{report?.timedOut && ' timed out'}</dd>

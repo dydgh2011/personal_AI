@@ -1,4 +1,5 @@
 import { IsIn, IsOptional, IsString, Matches, MaxLength } from 'class-validator';
+import { EFFORT_LEVELS, MODEL_MAX_LENGTH, MODEL_PATTERN } from '../run-settings.js';
 import { PROJECT_ID_PATTERN } from '../../config/app-config.js';
 import { AGENT_TYPES, type AgentType } from '../task.model.js';
 
@@ -19,4 +20,15 @@ export class CreateTaskDto {
   @Matches(/\S/, { message: 'instruction must not be blank' })
   @MaxLength(MAX_INSTRUCTION_LENGTH)
   instruction: string;
+
+  /** Only for this task; omitted = the agent's default (GET /agent-defaults). */
+  @IsOptional()
+  @IsString()
+  @MaxLength(MODEL_MAX_LENGTH)
+  @Matches(MODEL_PATTERN, { message: 'model must be a model name or alias (letters, digits, . _ : - [ ], not starting with -)' })
+  model?: string | null;
+
+  @IsOptional()
+  @IsIn(EFFORT_LEVELS)
+  effort?: string | null;
 }

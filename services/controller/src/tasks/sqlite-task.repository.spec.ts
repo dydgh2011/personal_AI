@@ -28,6 +28,8 @@ function newTask(agent: AgentType, overrides: Partial<Task> = {}): Task {
     attempt: 0,
     createdBy: 'admin',
     idempotencyKey: null,
+    model: null,
+    effort: null,
     ...overrides,
   };
 }

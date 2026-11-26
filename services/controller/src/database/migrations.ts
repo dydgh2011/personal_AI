@@ -189,6 +189,20 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE projects ADD COLUMN commit_style TEXT NOT NULL DEFAULT '{"mode":"off","guide":null}';
   ALTER TABLE projects ADD COLUMN agent_instructions TEXT NOT NULL DEFAULT '{"rules":"","forbiddenPaths":[]}';
   `,
+  // v8: model and reasoning effort per task (tasks/run-settings.ts). A task keeps the values it was
+  // created with (NULL = the CLI's default); agent_defaults holds the owner's default per agent.
+  `
+  ALTER TABLE tasks ADD COLUMN model TEXT;
+  ALTER TABLE tasks ADD COLUMN effort TEXT;
+
+  CREATE TABLE agent_defaults (
+    agent      TEXT PRIMARY KEY CHECK (agent IN ('claude', 'codex')),
+    model      TEXT,
+    effort     TEXT CHECK (effort IS NULL OR effort IN ('low', 'medium', 'high', 'xhigh', 'max')),
+    updated_at TEXT NOT NULL,
+    updated_by TEXT NOT NULL
+  ) STRICT;
+  `,
 ];
 
 export function migrate(db: Database): number {

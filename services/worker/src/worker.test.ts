@@ -102,6 +102,28 @@ describe('Worker (fake controller + fake Claude CLI)', () => {
     assert.match(report.stderrTail, /fake-claude stderr line/);
   });
 
+  it('starts the CLI with the task model and effort and records them in the report', async () => {
+    const task = controller.addTask('claude', '@write a.txt=a' + String.fromCharCode(10) + '@dump .agent-env.json', 'sandbox', { model: 'opus', effort: 'high' });
+    void start();
+    await waitFor(() => statusOf(task.id) === 'completed', 10_000, 'completion');
+    const dump = JSON.parse(readFileSync(join(config.workspaceRoot, '.worktrees', task.id, '.agent-env.json'), 'utf8')) as { argv: string[] };
+    assert.equal(dump.argv[dump.argv.indexOf('--model') + 1], 'opus');
+    assert.equal(dump.argv[dump.argv.indexOf('--effort') + 1], 'high');
+    assert.deepEqual(reportOf(controller.tasks.get(task.id)!.result).run, { model: 'opus', effort: 'high' });
+  });
+
+  it('fails a task with an invalid model or effort without starting the CLI', async () => {
+    const flag = controller.addTask('claude', '@write a=b', 'sandbox', { model: '--dangerously-skip-permissions' });
+    const effort = controller.addTask('claude', '@write a=b', 'sandbox', { effort: 'ultra' });
+    void start();
+    await waitFor(() => statusOf(flag.id) === 'failed' && statusOf(effort.id) === 'failed', 10_000, 'rejections');
+    const report = reportOf(controller.tasks.get(flag.id)!.error);
+    assert.match(report.message, /invalid model/);
+    assert.equal(report.exitCode, null);
+    assert.deepEqual(report.run, { model: null, effort: null });
+    assert.match(reportOf(controller.tasks.get(effort.id)!.error).message, /invalid effort/);
+  });
+
   it('fails tasks it must not run without starting the CLI', async () => {
     const noProject = controller.addTask('claude', '@write a=b', null);
     const unknown = controller.addTask('claude', '@write a=b', 'other');

@@ -46,9 +46,10 @@ except ImportError:  # loaded as a plain module (tests)
 logger = logging.getLogger("personal_ai_controller")
 
 TOOL_NAME = "personal_ai_task"
-ACTIONS = ("submit", "status", "result", "wait", "list", "cancel", "projects", "system_status", "review")
+ACTIONS = ("submit", "status", "result", "wait", "list", "cancel", "projects", "system_status", "review",
+           "defaults", "set_default")
 # Tool action -> controller_client command
-_COMMAND_FOR = {"system_status": "system-status"}
+_COMMAND_FOR = {"system_status": "system-status", "set_default": "defaults-set"}
 
 # Worker logins get a tool of their own: a distinct name is easy for the model to find when the user says
 # "codex 로그인 다시 해줘" (with logins hidden inside personal_ai_task, a weak model picked a generic
@@ -69,14 +70,29 @@ SCHEMA: dict[str, Any] = {
         "cancel may return cancel_requested, which is NOT stopped yet: check status again before saying it stopped. "
         "Worker logins (Claude/Codex logged out, login link, login code) are handled by the "
         "personal_ai_worker_login tool. Workers cannot see files the user attached in chat: read those with "
-        "personal_ai_document, never by submitting a task."
+        "personal_ai_document, never by submitting a task. "
+        "Model and effort: every worker has a default (defaults: show them). Pass model/effort on submit ONLY when "
+        "the user asked for them for this task (e.g. 'opus로', 'effort high로'); otherwise leave them out and the "
+        "default is used. set_default (needs agent, model and/or effort, confirmed_by_user) changes the default for "
+        "new tasks: only when the user explicitly asks to change the default, after telling them exactly what will "
+        "change; 'cli-default' goes back to the CLI's own default. Never pick a model or effort yourself."
     ),
     "parameters": {
         "type": "object",
         "properties": {
             "action": {"type": "string", "enum": list(ACTIONS)},
             "agent": {"type": "string", "enum": list(client_lib.AGENTS),
-                      "description": "submit: the worker. Use the one the user named; default claude."},
+                      "description": "submit / set_default: the worker. Use the one the user named; default claude."},
+            "model": {"type": "string",
+                      "description": "submit: model for this task only, exactly as the user said it (e.g. opus, sonnet, "
+                                     "claude-opus-5-5, gpt-6.1-sol). set_default: new default model, or cli-default. "
+                                     "Leave out unless the user named one."},
+            "effort": {"type": "string", "enum": [*client_lib.EFFORTS, client_lib.CLI_DEFAULT],
+                       "description": "submit: reasoning effort for this task only. set_default: new default effort "
+                                      "(cli-default = the CLI's own). Leave out unless the user named one."},
+            "confirmed_by_user": {"type": "boolean",
+                                  "description": "set_default: true only after the user explicitly OK'd this exact "
+                                                 "default change in the conversation."},
             "project_id": {"type": "string", "description": "submit: a registered project id (see action=projects)."},
             "instruction": {"type": "string", "description": "submit: self-contained task description for the worker."},
             "new": {"type": "boolean", "description": "submit: true only if the user explicitly wants an identical "
@@ -260,6 +276,9 @@ def _namespace(args: dict[str, Any]) -> types.SimpleNamespace:
         # list uses `agent` for its filter; keep submit's agent separate
         list_agent=args.get("list_agent"),
         code=str(args.get("code") or ""),
+        model=str(args.get("model") or "") or None,
+        effort=str(args.get("effort") or "") or None,
+        confirmed_by_user=args.get("confirmed_by_user") is True,
     )
 
 
@@ -268,6 +287,10 @@ def run_tool(args: dict[str, Any], env: dict[str, str] | None = None, client_fac
     action = (args or {}).get("action")
     if action not in ACTIONS:
         return {"ok": False, "error": {"code": "usage_error", "message": f"action must be one of {', '.join(ACTIONS)}"}}
+    if action == "set_default" and (args or {}).get("agent") not in client_lib.AGENTS:
+        # No silent "claude" here: a default change must name the worker it is for.
+        return {"ok": False, "error": {"code": "usage_error",
+                                       "message": f"agent is required: one of {', '.join(client_lib.AGENTS)}"}}
     return _run(_COMMAND_FOR.get(action, action), args or {}, env, client_factory, f"{TOOL_NAME} {action}")
 
 

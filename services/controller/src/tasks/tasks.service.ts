@@ -11,6 +11,7 @@ import { creatorOf, type AdminPrincipal, type TaskActor, type WorkerPrincipal } 
 import { Clock } from '../common/clock.js';
 import { APP_CONFIG, type AppConfig } from '../config/app-config.js';
 import { ProjectsService } from '../projects/projects.service.js';
+import { AgentDefaultsService } from './agent-defaults.service.js';
 import type { CreateTaskDto } from './dto/create-task.dto.js';
 import type { ListTasksQuery } from './dto/list-tasks.query.js';
 import { TRANSITIONS, type TransitionName } from './task-state.js';
@@ -61,11 +62,12 @@ export class TasksService {
     private readonly projects: ProjectsService,
     private readonly clock: Clock,
     @Inject(APP_CONFIG) private readonly config: AppConfig,
+    private readonly defaults: AgentDefaultsService,
   ) {}
 
   async create(dto: CreateTaskDto, actor: TaskActor = ADMIN): Promise<Task> {
     const task = await this.repository.create(this.newTask(dto, actor, null));
-    this.logger.log(`Task ${task.id} queued for ${task.agent} by ${task.createdBy}`);
+    this.logger.log(`Task ${task.id} queued for ${task.agent} (${runLabel(task)}) by ${task.createdBy}`);
     return task;
   }
 
@@ -79,10 +81,16 @@ export class TasksService {
     const since = new Date(this.clock.now().getTime() - this.config.idempotencyWindowSeconds * 1000).toISOString();
     const { task, created } = await this.repository.createIdempotent({ ...candidate, idempotencyKey }, since);
     if (created) {
-      this.logger.log(`Task ${task.id} queued for ${task.agent} by ${task.createdBy}`);
+      this.logger.log(`Task ${task.id} queued for ${task.agent} (${runLabel(task)}) by ${task.createdBy}`);
       return { task, replayed: false };
     }
-    if (task.agent !== candidate.agent || task.projectId !== candidate.projectId || task.instruction !== candidate.instruction) {
+    if (
+      task.agent !== candidate.agent ||
+      task.projectId !== candidate.projectId ||
+      task.instruction !== candidate.instruction ||
+      (dto.model != null && task.model !== candidate.model) ||
+      (dto.effort != null && task.effort !== candidate.effort)
+    ) {
       throw new ConflictException('This Idempotency-Key was already used for a different task');
     }
     this.logger.log(`Task ${task.id}: duplicate request by ${task.createdBy} returned the existing task`);
@@ -95,6 +103,8 @@ export class TasksService {
       throw new BadRequestException('projectId is required');
     }
     if (projectId !== null) this.projects.assertTaskAllowed(projectId, dto.agent);
+    // Fixed now: a later change of the default does not change this task.
+    const run = this.defaults.resolve(dto.agent, { model: dto.model, effort: dto.effort });
 
     const now = this.now();
     return {
@@ -115,6 +125,8 @@ export class TasksService {
       attempt: 0,
       createdBy: creatorOf(actor),
       idempotencyKey,
+      model: run.model,
+      effort: run.effort,
     };
   }
 
@@ -301,4 +313,8 @@ export class TasksService {
   private now(): string {
     return this.clock.now().toISOString();
   }
+}
+
+function runLabel(task: Task): string {
+  return `model ${task.model ?? 'cli-default'}, effort ${task.effort ?? 'cli-default'}`;
 }

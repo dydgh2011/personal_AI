@@ -88,6 +88,18 @@ describe('CodexRunner', () => {
     assert.equal(args.at(-1), '-');
   });
 
+  it('uses the task model and effort over the worker default, and nothing when unset', () => {
+    const plain = new CodexRunner(['codex']).buildInvocation(input).args;
+    assert.equal(plain.includes('--model'), false);
+    assert.equal(plain.some((a) => a.startsWith('model_reasoning_effort')), false);
+    const args = new CodexRunner(['codex'], 'gpt-env').buildInvocation({ ...input, model: 'gpt-6.1-sol', effort: 'xhigh' }).args;
+    assert.equal(args[args.indexOf('--model') + 1], 'gpt-6.1-sol');
+    assert.equal(args[args.indexOf('model_reasoning_effort="xhigh"') - 1], '-c');
+    assert.equal(args.at(-1), '-');
+    const fallback = new CodexRunner(['codex'], 'gpt-env').buildInvocation({ ...input, model: null }).args;
+    assert.equal(fallback[fallback.indexOf('--model') + 1], 'gpt-env');
+  });
+
   it('reports success with the final message, usage and activity', () => {
     const stdout = jsonl(
       THREAD,
@@ -103,7 +115,6 @@ describe('CodexRunner', () => {
     assert.equal(outcome.ok, true);
     assert.equal(outcome.summary, 'Created index.html');
     assert.equal(outcome.details.threadId, 't-1');
-    assert.equal(outcome.details.model, 'cli-default');
     assert.deepEqual(outcome.details.tokens, { input: 10, cachedInput: 4, output: 3, reasoningOutput: 1 });
     assert.deepEqual(outcome.details.commands, [{ command: 'ls', exitCode: 0, status: 'completed' }]);
     assert.deepEqual(outcome.details.fileChanges, [{ path: '/w/index.html', kind: 'add' }]);

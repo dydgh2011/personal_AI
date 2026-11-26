@@ -5,6 +5,7 @@ import type { Logger } from './logger.js';
 import { runProcess, type RunResult } from './process-runner.js';
 import { buildProjectPrompt, extractCommitSubject, hasAgentTrace } from './project-settings.js';
 import type { AgentOutcome, AgentRunner } from './runners/agent-runner.js';
+import { reportedRun, runOptions, type RunOptions, type RunOptionsError } from './runners/run-options.js';
 import type { WorkerState } from './state.js';
 import { WorkspaceError, type PreparedWorkspace, type Workspace, type WorkspaceSummary } from './workspace.js';
 
@@ -26,6 +27,8 @@ export interface WorkerReport {
   stdoutTruncated: boolean;
   stderrTail: string;
   agentDetails: Record<string, unknown>;
+  /** Model and effort the agent was started with (null = the CLI default). */
+  run?: { model: string | null; effort: string | null };
   workspace: WorkspaceSummary | null;
   workspaceError: string | null;
 }
@@ -90,6 +93,13 @@ export class TaskExecutor {
         return await this.deliver(task, 'failed', this.report(task, 'failed', `Task is for ${task.agent}, this worker runs ${config.agent}`));
       }
 
+      let options: RunOptions;
+      try {
+        options = runOptions(task);
+      } catch (error) {
+        return await this.deliver(task, 'failed', this.report(task, 'failed', (error as RunOptionsError).message));
+      }
+
       let prepared: PreparedWorkspace;
       try {
         const project = task.projectId === null ? null : await this.registryProject(task.projectId);
@@ -113,8 +123,16 @@ export class TaskExecutor {
           projectPrompt: prepared.settings
             ? buildProjectPrompt(prepared.settings, prepared.styleAnalysis ?? null, prepared.mode === 'write')
             : '',
+          model: options.model,
+          effort: options.effort,
         });
-        log('info', 'Agent started', { mode: prepared.mode, cwd: prepared.cwd, branch: prepared.branch });
+        log('info', 'Agent started', {
+          mode: prepared.mode,
+          cwd: prepared.cwd,
+          branch: prepared.branch,
+          model: options.model ?? config.model ?? 'cli-default',
+          effort: options.effort ?? 'cli-default',
+        });
         run = await runProcess(invocation.command, invocation.args, {
           cwd: prepared.cwd,
           env: invocation.env,
@@ -240,6 +258,7 @@ export class TaskExecutor {
       stdoutTruncated: run?.stdoutTruncated ?? false,
       stderrTail: run ? run.stderr.slice(-STDERR_TAIL_CHARS) : '',
       agentDetails: agent?.details ?? {},
+      run: reportedRun(task, this.deps.config.model),
       workspace,
       workspaceError,
     };

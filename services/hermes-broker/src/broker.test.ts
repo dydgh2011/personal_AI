@@ -126,6 +126,29 @@ describe('hermes-broker', () => {
     assert.deepEqual(JSON.parse(seen[0].body), task);
   });
 
+  it('passes a checked model and effort for one task, and changes defaults only with a checked body', async () => {
+    for (const bad of [{ model: '--dangerously-skip-permissions' }, { model: 'a b' }, { model: null }, { effort: 'ultra' }, { effort: 7 }]) {
+      assert.equal((await call('POST', '/tasks', { ...task, ...bad })).status, 400, JSON.stringify(bad));
+    }
+    assert.equal(seen.length, 0);
+    assert.equal((await call('POST', '/tasks', { ...task, model: 'opus', effort: 'high' })).status, 201);
+    assert.deepEqual(JSON.parse(seen[0].body), { ...task, model: 'opus', effort: 'high' });
+    assert.equal((await call('POST', '/tasks', task)).status, 201);
+    assert.notEqual(seen[0].key, seen[1].key, 'a different model is a different request');
+
+    assert.equal((await call('GET', '/agent-defaults')).status, 200);
+    assert.equal((await call('POST', '/agent-defaults/codex', { model: 'gpt-6.1-sol', effort: 'xhigh' })).status, 200);
+    assert.deepEqual(JSON.parse(seen.at(-1)!.body), { model: 'gpt-6.1-sol', effort: 'xhigh' });
+    assert.equal((await call('POST', '/agent-defaults/claude', { model: null })).status, 200);
+    assert.deepEqual(JSON.parse(seen.at(-1)!.body), { model: null });
+    const before = seen.length;
+    for (const bad of [{}, { model: '-x' }, { effort: 'ultra' }, { effort: 'low', agent: 'codex' }]) {
+      assert.equal((await call('POST', '/agent-defaults/claude', bad)).status, 400, JSON.stringify(bad));
+    }
+    assert.equal((await call('POST', '/agent-defaults/gemini', { effort: 'low' })).status, 404);
+    assert.equal(seen.length, before);
+  });
+
   it('passes the controller status and replay header through, and fails cleanly when it is down', async () => {
     reply = () => ({ status: 200, body: { id: TASK_ID }, headers: { 'Idempotent-Replayed': 'true' } });
     const replay = await call('POST', '/tasks', task);

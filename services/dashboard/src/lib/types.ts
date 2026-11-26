@@ -13,6 +13,17 @@ export interface Task {
   claimedBy: string | null;
   attempt: number;
   createdBy?: string;
+  /** Model / reasoning effort the task runs with (controller v8+); null = the CLI default. */
+  model?: string | null;
+  effort?: string | null;
+}
+
+export interface AgentDefaults {
+  agent: 'claude' | 'codex';
+  model: string | null;
+  effort: string | null;
+  updatedAt: string | null;
+  updatedBy: string | null;
 }
 
 export interface TaskList {

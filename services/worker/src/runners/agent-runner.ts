@@ -12,6 +12,10 @@ export interface AgentInput {
    * after the runner's fixed unattended prompt. Empty when the project configures nothing.
    */
   projectPrompt?: string;
+  /** The task's model (run-options.ts, already checked); null/absent = the runner's WORKER_MODEL or CLI default. */
+  model?: string | null;
+  /** The task's reasoning effort (run-options.ts, already checked); null/absent = the CLI default. */
+  effort?: string | null;
 }
 
 /** Fixed worker rules first; the project's part can only add to them. */

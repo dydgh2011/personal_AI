@@ -35,4 +35,8 @@ export interface Task {
   createdBy: string;
   /** Client-supplied Idempotency-Key of the request that created the task, if any. */
   idempotencyKey: string | null;
+  /** Model the worker runs with (requested, else the agent's default when created); null = CLI default. */
+  model: string | null;
+  /** Reasoning effort (run-settings.ts EFFORT_LEVELS), chosen the same way; null = CLI default. */
+  effort: string | null;
 }
