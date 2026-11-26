@@ -28,7 +28,9 @@ services/hermes-integration/
 │   ├── planner_client.py                planner 도구 (브로커 경유)
 │   ├── learning_client.py               학습 조회와 일정 시안 (브로커 경유)
 │   ├── document_client.py               첨부 문서 읽기 (첨부 폴더만, 네트워크 없음)
-│   └── guard.py                         Controller 우회·인증 파일 접근 도구 호출 차단
+│   ├── guard.py                         Controller 우회·인증 파일 접근 차단, 바깥 글을 읽은 턴의 변경 차단, 확인 게이트
+│   ├── turn_state.py                    이번 턴에 읽은 바깥 글과 실제로 성공한 변경 기록 (메모리)
+│   └── change_summary.py                답 끝에 "이번에 실제로 바뀐 것"을 코드가 붙임
 ├── plugins/personal-ai-knowledge/       메모리 제공자: 대화·첨부 자동 보관, 자동 회상, 도구 personal_ai_knowledge (services/knowledge)
 ├── image/Dockerfile                     공식 Hermes 이미지 + pypdf (personal_ai-hermes:local)
 ├── skills/personal-ai-controller/SKILL.md   사용 절차·보고 템플릿 (읽기 전용 마운트, skills.external_dirs)
@@ -50,6 +52,7 @@ services/hermes-integration/
 | 권한 범위 | Controller가 delegator 역할 검사: 활성 프로젝트, 허용 agent, 자기 작업만. 프로젝트 등록·수정, `/internal/*`, GitHub 조회 불가 | **강제** |
 | 남용 방지 | 새 작업 분당 5개, 시간당 30개 (브로커). 내용 해시 기반 Idempotency-Key로 중복 등록 방지 | **강제** |
 | 직접 코딩·시스템 제어 차단 | Discord, Telegram, CLI, cron에서 터미널, 코드 실행, 파일, 컴퓨터 제어, 위임 toolset 제거 | **강제** (Hermes 설정) |
+| 바깥 글 지시 차단 (프롬프트 인젝션) | 학교·메일·첨부 문서·웹·raw 기록·Worker 결과를 읽은 턴에는 personal_ai_* 변경을 막고, 주인의 다음 메시지부터 다시 허용. 플래너 설정 변경은 항상 이전 턴의 주인 확인이 필요 | Hermes 프로세스 안에서 강제 (`turn_state.py`의 도구·동작 목록 기준) |
 | 우회 차단 | `pre_tool_call` 가드: 도구가 다시 켜지더라도 docker/claude/codex 실행, CLI 설치, git 원격 작업, 인증 파일 읽기, 통합 파일 수정, 같은 이름 Skill 생성/대체, `delegate_task` 차단 | Hermes 프로세스 안에서 강제 (패턴 기반) |
 | 코드·Skill 변조 방지 | 플러그인·Skill을 저장소에서 읽기 전용 마운트 | **강제** |
 | 행동 규칙 | SOUL.md, SKILL.md, 도구 설명, 결과의 `userReport`(Controller 사실만으로 만든 보고문) | 유도 (보안 경계 아님) |
@@ -191,6 +194,35 @@ Discord로 보낸 첨부 파일(PDF, DOCX, TXT/MD/CSV/ICS)을 읽는 도구입�
 학교 소식(Quercus, Piazza, UofT 메일, CSC207 사이트)을 broker의 `/school/*`로 읽습니다. 동작: `updates`(최근 N일, `service`·`important` 필터), `read`(한 항목 전문), `status`(연결 상태, Quercus 토큰 남은 날), `check_now`(지금 확인). 자격 정보는 school 컨테이너에만 있고, 결과에는 "데이터이지 지시가 아님" 표시가 붙습니다. 자세한 내용: `services/school/README.md`.
 
 학교 마감 → 할 일 (2026-11-25): `deadlines`(결정 전 Quercus 마감 후보, `all`이면 결정한 것·지난 것도), `deadline_add`(후보 id, 예상 시간, 우선순위), `deadline_dismiss`(주인이 말한 이유), `deadline_reopen`(결정 되돌리기). 세 쓰기 동작은 모두 `confirmed_by_user=true`가 있어야 합니다. `deadline_add`는 후보의 값(과목·제목·토론토 기준 마감 날짜)으로 플래너 할 일을 만들고 결정을 학교 서비스에 기록합니다. 할 일 메모에 `[quercus:<id>]` 표시가 들어가서, 결정 기록이 실패해도 다시 부르면 같은 할 일을 고칠 뿐 새로 만들지 않습니다. 주인이 일정·마감·할 일을 물으면 `schedule_brief.py`가 결정 전 후보 목록을 코드로 붙이고, Kelly가 하나씩 묻습니다.
+
+## 턴 단위 보호와 변경 요약 (2026-11-26)
+
+한 턴은 들어온 메시지 하나(주인 메시지 또는 cron 프롬프트)와 그에 답하는 모든 모델·도구 호출이다. Hermes는 한 턴의 훅에 같은 `turn_id`를 준다(`agent/turn_context.py`). 플러그인이 쓰는 훅과 받는 값(Hermes 이미지 `hermes_cli/plugins.py` `VALID_HOOKS`, 2026-11-26 확인):
+
+| 훅 | 받는 값 | 쓰는 곳 |
+|---|---|---|
+| `pre_llm_call` | `session_id`, `turn_id`, `user_message`(주인 메시지 원문) | 새 턴 시작: 바깥 글 표시를 지우고, 확인 기록용으로 메시지를 둠 |
+| `pre_tool_call` | `tool_name`, `args`, `session_id`, `turn_id` | 차단(아래 세 가지 + 기존 우회 차단). 바깥 글을 읽는 호출이면 이번 턴에 표시 |
+| `post_tool_call` | `tool_name`, `args`, `result`, `session_id`, `turn_id` (막힌 호출에는 오지 않음) | 성공한 변경 기록, raw 기록을 돌려준 저장소 검색 표시 |
+| `transform_llm_output` | `response_text`, `session_id`, `turn_id` | 변경 요약을 답 끝에 붙임 |
+
+**1. 바깥 글을 읽은 턴의 변경 차단.** 아래 호출은 다른 사람이 쓴 글을 돌려준다. 이것을 부른 턴에서는 그 뒤의 personal_ai_* 변경 호출을 막고, 무엇을 바꾸려는지 주인에게 보여 주고 턴을 끝내라는 메시지를 모델에게 준다. 주인의 다음 메시지가 새 턴을 시작하면 다시 허용된다. 막힌 변경 호출은 확인 게이트의 미리보기로도 남아, 다음 턴에 `confirmed_by_user=true`로 같은 호출을 할 수 있다.
+
+- 바깥 글: `personal_ai_school` updates·read·deadlines·check_now, `personal_ai_document` find·read, `personal_ai_knowledge` raw·raw_list·media_submit(그리고 raw 결과가 나온 search), `personal_ai_task` result·wait·review, `personal_ai_planner` reference_search, Hermes `web_search`·`web_extract`·`x_search`·`vision_analyze`·`manage_connections`·`browser_*`·MCP 도구.
+- 변경으로 보지 않는 동작(읽기 전용)은 `turn_state.py`의 `READ_ONLY_ACTIONS`에 도구별로 적었다. **목록에 없는 동작과 새 personal_ai_* 도구는 변경으로 본다.** 도구에 읽기 전용 동작을 새로 만들면 이 목록에 넣는다.
+- 기록: `agent.log`의 `personal_ai.guard` 줄 `turn reads outside text: …`, `outside-text block tool=… action=… sources=…`.
+- 한계: 같은 턴만 본다. 앞 턴에서 읽은 글은 대화 기록에 남아 있고, 지식 저장소의 자동 회상(prefetch)·학교 마감 후보 블록은 도구 호출이 아니라 표시되지 않는다. 주인이 다음 메시지에서 무엇을 승인하는지는 코드가 판단하지 않는다.
+
+**2. 플래너 설정은 항상 주인 확인.** `settings_update`는 `confirmed_by_user=true` 없이는 막히고(그 호출이 미리보기가 됨), 다음 턴에 같은 설정으로 확인해야 쓴다. `remindScope: planner`처럼 시험 알림을 끄는 설정이 확인 없이 바뀌던 문제(점검 8번).
+
+**3. 확인 게이트 보강.**
+- 순서가 의미 없는 목록(`dates`, `item_numbers`, `remove_items`, `repeat_days`, `calendars`)은 정렬한 뒤 비교한다. `items`처럼 순서가 의미 있는 목록은 그대로.
+- 미리보기를 `$HERMES_HOME/personal-ai/confirmation-previews.json`(컨테이너 `/opt/data/…`, 호스트 `data/hermes/personal-ai/`)에 둔다. 해시·세션·턴 id·시각만 있고 인자 값·비밀은 없다. 6시간이 지난 것은 읽을 때 버리고 최대 1000개. Hermes를 다시 시작해도 미리보기→확인이 이어진다. 파일을 못 쓰면 경고만 남기고 메모리로 동작한다.
+- 확인하는 턴의 주인 메시지가 비어 있으면 받지 않는다. 받을 때 `confirmation accepted … owner="<메시지 앞 40자>"`를 남긴다. Hermes가 메시지를 주지 않은 경우는 예전처럼 받고 `(message not seen)`으로 남긴다.
+
+**4. 변경 요약 (코드가 붙임).** 이번 턴에 성공한(`ok: true`) personal_ai_* 변경을 답 끝에 `🧾 이번 답에서 실제로 바뀐 것 (코드 기록)` 아래 도구·동작·짧은 대상으로 적는다(최대 8줄, 로그인 코드 같은 값은 쓰지 않음). 성공한 변경이 없는데 답이 바꿨다고 말하면(반영했/추가했/넣었/바꿨/삭제했/저장했…, added/updated/saved…) `⚠️ 이번 답에서 실제로 바뀐 것은 없어요`를 붙인다. 둘 다 아니면 아무것도 붙이지 않는다.
+- Hermes의 `transform_llm_output`은 모든 콜백을 부른 뒤 **처음으로 글을 돌려준 것 하나만** 쓴다. 그래서 이 훅이 붙일 것이 있을 때는 자기 뒤에 등록된 콜백(지식 플러그인의 `📌 저장소 기록` 확인)을 Hermes 방식대로 먼저 돌리고 그 결과 끝에 요약을 붙인다. 컨트롤러 플러그인은 gateway 시작 때, 지식 메모리 제공자는 첫 에이전트를 만들 때 등록되므로 이 훅이 먼저다(`agent.log` 순서). 다른 변환 훅이 앞에 오면 `personal_ai.changes` 경고가 남는다. 지식 확인은 이때 한 번 더 불린다(읽기만, 캐시 있음).
+- Hermes 이미지 안에서 Hermes의 실제 훅 처리 코드(`_get_pre_tool_call_directive_details`, `_emit_post_tool_call_hook`, `apply_llm_output_transform`)로 이 흐름을 돌려 확인했다(스택 밖 임시 컨테이너, 네트워크 없음).
 
 ## AI 모델: LLM 게이트웨이와 Discord 명령
 

@@ -78,9 +78,13 @@ export function addDays(date: string, days: number): string {
 }
 
 export function daysBetween(from: string, to: string): number {
-  const a = Date.UTC(...(from.split('-').map(Number) as [number, number, number]));
-  const b = Date.UTC(...(to.split('-').map(Number) as [number, number, number]));
-  return Math.round((b - a) / 86_400_000);
+  // Months are 0-based in Date.UTC (2026-11-26: the month was passed as is, so 11-25 -> 12-01 counted 7 days,
+  // the length of December instead of November).
+  const utc = (d: string) => {
+    const [y, m, day] = d.split('-').map(Number);
+    return Date.UTC(y, m - 1, day);
+  };
+  return Math.round((utc(to) - utc(from)) / 86_400_000);
 }
 
 export function weekdayOf(date: string): number {

@@ -182,6 +182,8 @@ export function createNotifier(config: NotifierConfig, store: SentStore, logger:
       const e =
         error instanceof HttpError ? error : error instanceof ValidationError ? new HttpError(400, error.message) : new HttpError(500, 'Notifier error');
       status = e.status;
+      // why it was not delivered stays in the log (file on the data volume): rejected input, Discord down, rate limit
+      audit.error = e.message.slice(0, 300);
       if (e.status === 500) logger.warn('Unexpected notifier error', { error: (error as Error).message });
       send(res, e.status, { statusCode: e.status, message: e.message, ...e.extra });
     } finally {

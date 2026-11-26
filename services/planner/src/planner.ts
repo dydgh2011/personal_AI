@@ -4,7 +4,7 @@ import type { GoogleConnection } from './connection.js';
 import { planChecks, type CheckEvent, type CheckItem } from './checks.js';
 import { transaction } from './db.js';
 import { CATEGORIES, CATEGORY_LABEL, GoogleError, isCategory, type CalendarApi, type CalendarEvent, type Category, type EventInput, type Timing } from './google.js';
-import { DEFAULT_SETTINGS, draftDay, type Interval, type SchedTodo, type Settings } from './schedule.js';
+import { DEFAULT_SETTINGS, draftDay, titleHas, type Interval, type SchedTodo, type Settings } from './schedule.js';
 import {
   addDays,
   daysBetween,
@@ -50,6 +50,16 @@ export interface Todo {
   updatedAt: string;
 }
 
+/** A drafted block taken out because its todo was finished or dropped. */
+export interface DroppedBlock {
+  date: string;
+  start: string;
+  end: string;
+  title: string;
+  /** It was in the calendar: the next confirm of that day deletes the event. */
+  inCalendar: boolean;
+}
+
 export interface Block {
   id: string;
   date: string;
@@ -62,7 +72,21 @@ export interface Block {
   inCalendar: boolean;
   /** Changed since the last confirm (or never confirmed). */
   pending: boolean;
+  /** The owner's latest report on this block (day view only). */
+  reported?: ReportMark;
 }
+
+/** What the owner reported about a planned item: shown in the day view next to it. */
+export interface ReportMark {
+  reportId: number;
+  status: ReportStatus;
+  minutes: number | null;
+  actualStart: string | null;
+  actualEnd: string | null;
+}
+
+export type ReportStatus = 'done' | 'partial' | 'skipped' | 'late';
+const REPORT_STATUSES: ReportStatus[] = ['done', 'partial', 'skipped', 'late'];
 
 export interface EventView {
   /** Google event id (an instance id for recurring events). */
@@ -79,11 +103,15 @@ export interface EventView {
   deadline: boolean;
   /** An all-day "시험(이날)" marker the planner keeps for an exam event (change the exam event). */
   examMarker: boolean;
+  /** The owner's latest report on this event. */
+  reported?: ReportMark;
 }
 
 /** Something already planned in the time of a new or moved event. */
 export interface Overlap {
   kind: 'event' | 'block';
+  /** The day it overlaps on (a repeating event is checked on every occurrence in the horizon). */
+  date: string;
   id: string;
   title: string;
   start: string;
@@ -111,8 +139,15 @@ export interface DayView {
   /** The owner's other calendar events (classes, appointments...). */
   events: EventView[];
   unscheduled: Array<{ todoId: string; title: string; minutes: number }>;
+  /**
+   * Open todos whose deadline is before this day. They are not planned any more (shareFor); the owner
+   * says whether they are done, get a new deadline or are dropped. Only for today and later days.
+   */
+  overdue: Array<{ todoId: string; title: string; deadline: string; minutes: number }>;
   warnings: string[];
   calendarConnected: boolean;
+  /** Set by a scheduled draft that left this day alone: the final exam on it (owner decision 2026-11-26). */
+  noAutoDraft?: string;
 }
 
 interface BlockRow {
@@ -233,11 +268,22 @@ const SETTING_RULES: Record<keyof Settings, (v: unknown) => unknown> = {
       return { from: text(o.from, `travel[${i + 1}].from`, 40)!, to: text(o.to, `travel[${i + 1}].to`, 40)!, minutes: int(o.minutes, `travel[${i + 1}].minutes`, 0, 600) };
     });
   },
-  protectedEvents: (v) => {
-    if (!Array.isArray(v) || v.length > 30) throw bad('protectedEvents must list up to 30 words');
-    return v.map((w, i) => text(w, `protectedEvents[${i + 1}]`, 60)!);
+  protectedEvents: (v) => words(v, 'protectedEvents'),
+  noDraftExamWords: (v) => words(v, 'noDraftExamWords'),
+  quietEvents: (v) => words(v, 'quietEvents'),
+  bundleMinutes: (v) => int(v, 'bundleMinutes', 0, 180),
+  draftAt: (v) => {
+    if (v === null) return null;
+    const t = time(v, 'draftAt');
+    if (toMinutes(t) < 18 * 60 || toMinutes(t) > 23 * 60 + 55) throw bad('draftAt must be between 18:00 and 23:55 (or null: 30 minutes before sleepStart)');
+    return t;
   },
 };
+
+function words(v: unknown, field: string): string[] {
+  if (!Array.isArray(v) || v.length > 30) throw bad(`${field} must list up to 30 words`);
+  return v.map((w, i) => text(w, `${field}[${i + 1}]`, 60)!);
+}
 
 /**
  * The planner: todos, per-day plans (draft -> confirmed) and the sync of confirmed plans to
@@ -370,7 +416,25 @@ export class Planner {
     return rows.map(toTodo);
   }
 
-  addTodo(body: Record<string, unknown>, actor: Actor): Todo {
+  /**
+   * A new todo. An exam-like title (an exam or quiz sitting, not its preparation) comes back with a warning:
+   * the sitting is an event (category class), only the preparation is a todo (2026-11-26: "FAS Technical Test"
+   * as a 120-minute todo was planned again every day).
+   */
+  addTodo(body: Record<string, unknown>, actor: Actor): Todo & { warnings?: string[] } {
+    const todo = this.insertTodo(body, actor);
+    if (!(EXAM_TITLE.test(todo.title) || SITTING_TITLE.test(todo.title)) || STUDY_TITLE.test(todo.title)) return todo;
+    return {
+      ...todo,
+      warnings: [
+        `"${todo.title}" looks like an exam or quiz sitting. A sitting is an event, not a todo: add it with event_add ` +
+          '(category class, its real date and time) and keep only the preparation as a todo (e.g. "… 대비", with a deadline ' +
+          'before the sitting). Tell the owner and ask whether to archive this todo.',
+      ],
+    };
+  }
+
+  private insertTodo(body: Record<string, unknown>, actor: Actor): Todo {
     only(body, ['title', 'notes', 'kind', 'priority', 'estimateMinutes', 'deadline', 'earliest']);
     const kind = body.kind ?? 'task';
     if (kind !== 'task' && kind !== 'study' && kind !== 'habit') throw bad('kind must be task, study or habit');
@@ -397,7 +461,7 @@ export class Planner {
     return toTodo(this.todoRow(todo.id));
   }
 
-  updateTodo(id: string, body: Record<string, unknown>, actor: Actor): Todo {
+  updateTodo(id: string, body: Record<string, unknown>, actor: Actor): Todo & { droppedBlocks?: DroppedBlock[] } {
     only(body, ['title', 'notes', 'kind', 'priority', 'estimateMinutes', 'deadline', 'earliest', 'doneMinutes', 'status']);
     const row = this.todoRow(id);
     const sets: Record<string, unknown> = {};
@@ -426,22 +490,63 @@ export class Planner {
       const after = toTodo(this.todoRow(id));
       this.log(actor, 'update', 'todo', id, { changes: diff(before, after) });
     });
-    return toTodo(this.todoRow(id));
+    return this.withDropped(id, actor);
   }
 
-  /** Records progress (minutes spent); marks the todo done when `done` or the estimate is reached. */
-  progressTodo(id: string, minutes: number | undefined, done: boolean, actor: Actor): Todo {
+  /** The todo after a change; when it is no longer open, its drafted blocks from now on go (dropClosedTodoBlocks). */
+  private withDropped(id: string, actor: Actor): Todo & { droppedBlocks?: DroppedBlock[] } {
+    const dropped = this.dropClosedTodoBlocks(actor, id);
+    const todo = toTodo(this.todoRow(id));
+    return dropped.length ? { ...todo, droppedBlocks: dropped } : todo;
+  }
+
+  /**
+   * Blocks the planner drafted (origin auto) for todos that are done or archived, from now on, leave the
+   * plan (2026-11-26: finished "Final Exam Prep" todos kept their blocks on later days, and confirming
+   * such a day would have written them to the calendar). Never-synced blocks are deleted; synced ones are
+   * marked removed, so the next confirm deletes their calendar events, like block_remove. Blocks the owner
+   * placed or moved (origin manual) stay. Runs on every todo status change and on every jobs tick.
+   */
+  dropClosedTodoBlocks(actor: Actor, todoId?: string): DroppedBlock[] {
+    const clock = localParts(new Date(this.now()), this.timeZone);
+    const rows = this.db
+      .prepare(
+        `SELECT b.*, t.status AS todo_status FROM blocks b JOIN todos t ON t.id = b.todo_id
+         WHERE b.removed = 0 AND b.origin = 'auto' AND t.status != 'open' AND (b.date > ? OR (b.date = ? AND b.start >= ?))
+         ${todoId ? 'AND t.id = ?' : ''} ORDER BY b.date, b.start`,
+      )
+      .all(...[clock.date, clock.date, clock.time, ...(todoId ? [todoId] : [])]) as unknown as Array<BlockRow & { todo_status: string }>;
+    if (!rows.length) return [];
+    transaction(this.db, () => {
+      for (const r of rows) {
+        if (r.google_event_id) this.db.prepare('UPDATE blocks SET removed = 1, updated_at = ? WHERE id = ?').run(this.iso(), r.id);
+        else this.db.prepare('DELETE FROM blocks WHERE id = ?').run(r.id);
+        this.markEdited(r.date);
+        this.log(actor, 'remove', 'block', r.id, {
+          date: r.date, start: r.start, end: r.end, title: r.title, todoId: r.todo_id, category: r.category,
+          inCalendar: r.google_event_id !== null, reason: `todo ${r.todo_status}`,
+        });
+      }
+    });
+    return rows.map((r) => ({ date: r.date, start: r.start, end: r.end, title: r.title, inCalendar: r.google_event_id !== null }));
+  }
+
+  /**
+   * Records progress (minutes spent); marks the todo done only with `done` (2026-11-26: "2시간 했어" is not
+   * "finished" even when it reaches the estimate; the display notes when the estimate is used up).
+   */
+  progressTodo(id: string, minutes: number | undefined, done: boolean, actor: Actor): Todo & { droppedBlocks?: DroppedBlock[] } {
     const row = this.todoRow(id);
     const add = minutes === undefined ? 0 : int(minutes, 'minutes', 0, 24 * 60);
     const total = Math.min(row.done_minutes + add, 100 * 60);
-    const finished = done || total >= row.estimate_minutes;
+    const finished = done;
     transaction(this.db, () => {
       this.db
         .prepare('UPDATE todos SET done_minutes = ?, status = ?, updated_at = ? WHERE id = ?')
         .run(finished ? Math.max(total, row.done_minutes) : total, finished ? 'done' : row.status, this.iso(), id);
       this.log(actor, finished ? 'complete' : 'progress', 'todo', id, { addedMinutes: add, doneMinutes: total, title: row.title });
     });
-    return toTodo(this.todoRow(id));
+    return this.withDropped(id, actor);
   }
 
   // ---- calendar reads -------------------------------------------------------------------
@@ -593,23 +698,39 @@ export class Planner {
    * days (manual blocks stay), working around the owner's calendar events. Confirmed days become
    * drafts again; their calendar events are updated only on the next confirm.
    */
-  async generate(from: string, days: number, actor: Actor, options: { skipConfirmed?: boolean } = {}): Promise<DayView[]> {
+  async generate(from: string, days: number, actor: Actor, options: { skipConfirmed?: boolean; skipExamDays?: boolean } = {}): Promise<DayView[]> {
     date(from, 'date');
     int(days, 'days', 1, 14);
     if (daysBetween(this.today(), from) < 0) throw bad('Cannot plan a day in the past');
     const all = Array.from({ length: days }, (_, i) => addDays(from, i));
     // The scheduled 23:00 drafts never undo a plan the owner already confirmed.
-    const dates = options.skipConfirmed ? all.filter((d) => this.plan(d)?.status !== 'confirmed') : all;
+    const candidates = options.skipConfirmed ? all.filter((d) => this.plan(d)?.status !== 'confirmed') : all;
     const cal = await this.cal();
     const eventsByDay = new Map<string, CalendarEvent[]>();
-    if (cal) for (const d of dates) eventsByDay.set(d, await this.calendarEvents(cal, d));
+    if (cal) for (const d of candidates) eventsByDay.set(d, await this.calendarEvents(cal, d));
     const s = this.settings();
+    // Scheduled drafts leave final-exam days alone (owner decision 2026-11-26): no new auto blocks; drafted auto
+    // blocks that are not in the calendar leave the draft (like any redraft). Kelly's own generate still plans them.
+    const examDays = new Map<string, string>();
+    if (options.skipExamDays) {
+      for (const d of candidates) {
+        const exam = examDayTitle(eventsByDay.get(d) ?? [], s);
+        if (exam) examDays.set(d, exam);
+      }
+      this.leaveExamDays(examDays, actor);
+    }
+    const dates = candidates.filter((d) => !examDays.has(d));
+    // Redrafting today (e.g. "오늘 계획 다시 짜줘" at 15:00) only plans the rest of the day: blocks that
+    // already started stay as they were, and nothing new goes before now (2026-11-26).
+    const clock = localParts(new Date(this.now()), this.timeZone);
+    const fromTime = (d: string) => (d === clock.date ? clock.time : '00:00');
+    const notBefore = (d: string) => (d === clock.date ? clock.minutes : 0);
 
     transaction(this.db, () => {
       // Replace auto blocks: never-synced ones are deleted, synced ones are marked for removal.
       for (const d of dates) {
-        this.db.prepare("DELETE FROM blocks WHERE date = ? AND origin = 'auto' AND google_event_id IS NULL").run(d);
-        this.db.prepare("UPDATE blocks SET removed = 1, updated_at = ? WHERE date = ? AND origin = 'auto'").run(this.iso(), d);
+        this.db.prepare("DELETE FROM blocks WHERE date = ? AND start >= ? AND origin = 'auto' AND google_event_id IS NULL").run(d, fromTime(d));
+        this.db.prepare("UPDATE blocks SET removed = 1, updated_at = ? WHERE date = ? AND start >= ? AND origin = 'auto'").run(this.iso(), d, fromTime(d));
       }
       const targets = new Set(dates);
       const remaining = new Map<string, number>();
@@ -620,17 +741,19 @@ export class Planner {
         const kept = this.blocks(d);
         const busy = [...this.busyFrom(eventsByDay.get(d) ?? [], d), ...kept.map((b) => ({ start: toMinutes(b.start), end: toMinutes(b.end) }))];
         const keptMinutes = kept.reduce((sum, b) => sum + toMinutes(b.end) - toMinutes(b.start), 0);
+        // Time of kept blocks that is already over is not counted as done (only todo_progress does that).
+        const ahead = (b: BlockRow) => Math.max(0, toMinutes(b.end) - Math.max(toMinutes(b.start), notBefore(d)));
         const sched: SchedTodo[] = todos.map((t) => ({
           id: t.id,
           title: t.title,
           priority: t.priority,
-          remaining: (remaining.get(t.id) ?? 0) - kept.filter((b) => b.todo_id === t.id).reduce((x, b) => x + toMinutes(b.end) - toMinutes(b.start), 0),
+          remaining: (remaining.get(t.id) ?? 0) - kept.filter((b) => b.todo_id === t.id).reduce((x, b) => x + ahead(b), 0),
           kind: t.kind,
           deadline: t.deadline,
           earliest: t.earliest,
           createdAt: t.createdAt,
         }));
-        const draft = draftDay(d, s, busy, sched, keptMinutes);
+        const draft = draftDay(d, s, busy, sched, keptMinutes, notBefore(d));
         const now = this.iso();
         for (const b of draft.blocks) {
           const id = randomUUID();
@@ -648,14 +771,73 @@ export class Planner {
         this.log(actor, 'generate', 'plan', d, {
           blocks: draft.blocks.map((b) => `${fromMinutes(b.start)}-${fromMinutes(b.end)} ${b.title}`),
           unscheduled: draft.unscheduled,
+          ...(draft.tooSmall.length ? { tooSmall: draft.tooSmall } : {}),
           wasConfirmed,
           calendarEvents: (eventsByDay.get(d) ?? []).length,
         });
       }
     });
     const views: DayView[] = [];
-    for (const d of all) views.push(await this.day(d, { events: eventsByDay.get(d), reconcile: !dates.includes(d) }));
+    for (const d of all) {
+      const view = await this.day(d, { events: eventsByDay.get(d), reconcile: !dates.includes(d) });
+      const exam = examDays.get(d);
+      views.push(exam ? { ...view, noAutoDraft: exam } : view);
+    }
     return views;
+  }
+
+  /** Final-exam days in a scheduled draft: drafted auto blocks not in the calendar go; nothing new is planned. */
+  private leaveExamDays(examDays: Map<string, string>, actor: Actor) {
+    if (!examDays.size) return;
+    const clock = localParts(new Date(this.now()), this.timeZone);
+    transaction(this.db, () => {
+      for (const [d, exam] of examDays) {
+        const from = d === clock.date ? clock.time : '00:00';
+        const rows = this.db
+          .prepare("SELECT * FROM blocks WHERE date = ? AND start >= ? AND origin = 'auto' AND google_event_id IS NULL AND removed = 0 ORDER BY start")
+          .all(d, from) as unknown as BlockRow[];
+        this.db.prepare("DELETE FROM blocks WHERE date = ? AND start >= ? AND origin = 'auto' AND google_event_id IS NULL").run(d, from);
+        this.log(actor, 'skip', 'plan', d, {
+          reason: 'final exam day: no automatic draft',
+          exam,
+          removedDraftBlocks: rows.map((r) => ({ start: r.start, end: r.end, title: r.title, todoId: r.todo_id })),
+        });
+      }
+    });
+  }
+
+  /** The final exam on `day` (title), if the Kelly calendar has one; null otherwise or without a calendar. */
+  async finalExamOn(day: string): Promise<string | null> {
+    const cal = await this.cal();
+    if (!cal) return null;
+    return examDayTitle(await this.calendarEvents(cal, day), this.settings());
+  }
+
+  /** A line in change_log about a scheduled job (e.g. a post it skipped on purpose). */
+  logJob(action: string, key: string, detail: Record<string, unknown>) {
+    this.log('system', action, 'job', key, detail);
+  }
+
+  /**
+   * A failure, in change_log (action "fail"): which stage, the error code and status, a short message; never
+   * secrets (Google and notifier messages carry none). Owner rule: keep every record, failures included.
+   */
+  recordFailure(actor: Actor, entity: string, entityId: string | null, stage: string, error: unknown, extra: Record<string, unknown> = {}) {
+    try {
+      this.log(actor, 'fail', entity, entityId, { stage, ...errorInfo(error), ...extra });
+    } catch {
+      // the record of a failure must never cause another one
+    }
+  }
+
+  /** Runs one Google write; a failure is recorded with its stage before it is thrown again. */
+  private async gwrite<T>(stage: string, entityId: string | null, extra: Record<string, unknown>, actor: Actor, fn: () => Promise<T>): Promise<T> {
+    try {
+      return await fn();
+    } catch (error) {
+      this.recordFailure(actor, 'calendar', entityId, stage, error, extra);
+      throw error;
+    }
   }
 
   /** The plan of one day with the owner's calendar events. Reads calendar changes back first. */
@@ -680,12 +862,14 @@ export class Planner {
     const plan = this.plan(day);
     const rows = this.blocks(day);
     const removedSynced = (this.db.prepare('SELECT COUNT(*) AS n FROM blocks WHERE date = ? AND removed = 1').get(day) as { n: number }).n;
-    const blocks = rows.map((r) => toBlock(r));
+    const marks = this.reportMarks(day);
+    const withMark = <T extends { id: string }>(x: T): T => (marks.has(x.id) ? { ...x, reported: marks.get(x.id) } : x);
+    const blocks = rows.map((r) => withMark(toBlock(r)));
     const eventViews: EventView[] = (events ?? [])
       .filter((e) => !e.plannerBlockId && !e.declined)
       .map((e) => {
         const c = this.clip(e, day);
-        return {
+        return withMark({
           id: e.id,
           seriesId: e.recurringEventId,
           start: c ? fromMinutes(c.start) : null,
@@ -696,7 +880,7 @@ export class Planner {
           category: e.category,
           deadline: e.deadlineTodoId !== null,
           examMarker: e.examSourceId !== null,
-        };
+        } as EventView);
       });
     const busy = this.busyFrom(events ?? [], day);
     for (let i = 0; i < blocks.length; i++) {
@@ -715,6 +899,12 @@ export class Planner {
       blocks,
       events: eventViews,
       unscheduled: plan ? JSON.parse(plan.unscheduled) : [],
+      overdue:
+        daysBetween(this.today(), day) < 0
+          ? []
+          : this.listTodos('open')
+              .filter((t) => t.deadline !== null && t.deadline < day)
+              .map((t) => ({ todoId: t.id, title: t.title, deadline: t.deadline!, minutes: Math.max(0, t.estimateMinutes - t.doneMinutes) })),
       warnings,
       calendarConnected: cal !== null,
     };
@@ -730,14 +920,37 @@ export class Planner {
     if (toMinutes(start) >= toMinutes(end)) throw bad('start must be before end');
   }
 
+  /**
+   * Refuses a time that has passed (2026-11-26: an event went into a past date unnoticed). Grace: a start up to
+   * PAST_GRACE_MINUTES ago counts as now ("지금부터"). allowPast: the owner said on purpose it is in the past.
+   * A repeating event is refused only when the whole series is over.
+   */
+  private refusePast(timing: Timing, recurrence: string[] | null, allowPast: boolean, what: string) {
+    if (allowPast) return;
+    const now = localParts(new Date(this.now()), this.timeZone);
+    let problem: string | null = null;
+    if (recurrence) {
+      const until = untilDate(recurrence, this.timeZone);
+      if (until && until < now.date) problem = `the series ends on ${until}, which is in the past`;
+    } else if (timing.date < now.date) problem = `${timing.date} is in the past (today is ${now.date})`;
+    else if (timing.kind === 'timed' && timing.date === now.date && toMinutes(timing.start) < now.minutes - PAST_GRACE_MINUTES) {
+      problem = `${timing.start} today has already passed (now ${now.time})`;
+    }
+    if (problem) {
+      throw new PlannerError(400, 'past_time', `${what}: ${problem}. Nothing was written. Check the date with the owner; if they want ` +
+        'to record something in the past on purpose, call again with allowPast (allow_past) = true.');
+    }
+  }
+
   addBlock(body: Record<string, unknown>, actor: Actor): Block {
-    only(body, ['date', 'start', 'end', 'title', 'todoId', 'category']);
+    only(body, ['date', 'start', 'end', 'title', 'todoId', 'category', 'allowPast']);
     const d = date(body.date, 'date');
     if (body.category !== undefined && !isCategory(body.category)) throw bad(`category must be one of ${CATEGORIES.join(', ')}`);
     if (daysBetween(this.today(), d) < 0) throw bad('Cannot plan a day in the past');
     const start = time(body.start, 'start');
     const end = time(body.end, 'end');
     this.checkTimes(start, end);
+    this.refusePast({ kind: 'timed', date: d, start, end }, null, flag(body.allowPast, 'allowPast'), 'A plan block');
     let title = text(body.title, 'title', MAX_TITLE, false);
     const todoId = body.todoId === undefined || body.todoId === null ? null : String(body.todoId);
     const todo = todoId ? this.todoRow(todoId) : null;
@@ -756,8 +969,12 @@ export class Planner {
     return toBlock(this.blockRow(id));
   }
 
-  updateBlock(id: string, body: Record<string, unknown>, actor: Actor): Block {
-    only(body, ['date', 'start', 'end', 'title']);
+  /**
+   * Moves, resizes or renames a block. The answer lists what the new time overlaps (`overlaps`); dryRun writes
+   * nothing, so Kelly can ask first like block_add (2026-11-26: overlaps showed only at confirm).
+   */
+  async updateBlock(id: string, body: Record<string, unknown>, actor: Actor): Promise<Block & { overlaps: Overlap[]; dryRun?: true }> {
+    only(body, ['date', 'start', 'end', 'title', 'dryRun', 'allowPast']);
     const row = this.blockRow(id);
     const d = body.date === undefined ? row.date : date(body.date, 'date');
     if (daysBetween(this.today(), d) < 0) throw bad('Cannot move a block into the past');
@@ -771,6 +988,10 @@ export class Planner {
           : row.end;
     this.checkTimes(start, end);
     const title = body.title === undefined ? row.title : text(body.title, 'title', MAX_TITLE)!;
+    const moved = d !== row.date || start !== row.start || end !== row.end;
+    if (moved) this.refusePast({ kind: 'timed', date: d, start, end }, null, flag(body.allowPast, 'allowPast'), 'Moving a plan block');
+    const overlaps = moved ? await this.overlaps({ kind: 'timed', date: d, start, end }, { blockId: id }) : [];
+    if (flag(body.dryRun, 'dryRun')) return { ...toBlock(row), date: d, start, end, title, overlaps, dryRun: true };
     transaction(this.db, () => {
       // A manual edit makes the block the owner's: regeneration keeps it.
       this.db
@@ -778,9 +999,9 @@ export class Planner {
         .run(d, start, end, title, this.iso(), id);
       this.markEdited(row.date);
       if (d !== row.date) this.markEdited(d);
-      this.log(actor, 'update', 'block', id, { before: { date: row.date, start: row.start, end: row.end, title: row.title }, after: { date: d, start, end, title } });
+      this.log(actor, 'update', 'block', id, { before: { date: row.date, start: row.start, end: row.end, title: row.title }, after: { date: d, start, end, title }, overlaps });
     });
-    return toBlock(this.blockRow(id));
+    return { ...toBlock(this.blockRow(id)), overlaps };
   }
 
   removeBlock(id: string, actor: Actor, reason?: string): void {
@@ -818,33 +1039,49 @@ export class Planner {
     const result: DayView[] = [];
     for (const d of unique) {
       const written: string[] = [];
-      for (const r of this.blocks(d, true)) {
-        if (r.removed) {
-          if (r.google_event_id) await cal.deleteEvent(r.google_event_id);
-          this.db.prepare('DELETE FROM blocks WHERE id = ?').run(r.id);
-          written.push(`deleted ${r.start}-${r.end} ${r.title}`);
-          continue;
+      let current: BlockRow | null = null;
+      try {
+        for (const r of this.blocks(d, true)) {
+          current = r;
+          if (r.removed) {
+            if (r.google_event_id) await cal.deleteEvent(r.google_event_id);
+            this.db.prepare('DELETE FROM blocks WHERE id = ?').run(r.id);
+            written.push(`deleted ${r.start}-${r.end} ${r.title}`);
+            continue;
+          }
+          const input: EventInput = {
+            summary: r.title,
+            description: 'Personal AI 계획 블록. 여기서 옮기거나 지우면 planner도 따라가요.',
+            category: r.category,
+            timing: { kind: 'timed', date: r.date, start: r.start, end: r.end },
+            blockId: r.id,
+          };
+          if (!r.google_event_id) {
+            const eventId = await cal.insertEvent(input);
+            this.db.prepare('UPDATE blocks SET google_event_id = ? WHERE id = ?').run(eventId, r.id);
+            written.push(`added ${r.start}-${r.end} ${r.title}`);
+          } else if (r.synced_date !== r.date || r.synced_start !== r.start || r.synced_end !== r.end || r.synced_title !== r.title) {
+            await cal.patchEvent(r.google_event_id, input);
+            written.push(`updated ${r.start}-${r.end} ${r.title}`);
+          } else {
+            continue;
+          }
+          this.db
+            .prepare('UPDATE blocks SET synced_date = date, synced_start = start, synced_end = end, synced_title = title WHERE id = ?')
+            .run(r.id);
         }
-        const input: EventInput = {
-          summary: r.title,
-          description: 'Personal AI 계획 블록. 여기서 옮기거나 지우면 planner도 따라가요.',
-          category: r.category,
-          timing: { kind: 'timed', date: r.date, start: r.start, end: r.end },
-          blockId: r.id,
-        };
-        if (!r.google_event_id) {
-          const eventId = await cal.insertEvent(input);
-          this.db.prepare('UPDATE blocks SET google_event_id = ? WHERE id = ?').run(eventId, r.id);
-          written.push(`added ${r.start}-${r.end} ${r.title}`);
-        } else if (r.synced_date !== r.date || r.synced_start !== r.start || r.synced_end !== r.end || r.synced_title !== r.title) {
-          await cal.patchEvent(r.google_event_id, input);
-          written.push(`updated ${r.start}-${r.end} ${r.title}`);
-        } else {
-          continue;
-        }
-        this.db
-          .prepare('UPDATE blocks SET synced_date = date, synced_start = start, synced_end = end, synced_title = title WHERE id = ?')
-          .run(r.id);
+      } catch (error) {
+        // Partial write (2026-11-26 review): every write above is already recorded on its block, so confirming
+        // again continues where it stopped. The owner sees what went in and what did not.
+        const failed = current ? `${current.removed ? 'delete' : current.google_event_id ? 'update' : 'add'} ${current.start}-${current.end} ${current.title}` : null;
+        const info = errorInfo(error);
+        this.log(actor, 'fail', 'plan', d, { stage: 'confirm', written, failed, confirmedBefore: result.map((v) => v.date), ...info });
+        throw new PlannerError(502, 'calendar_partial',
+          `Google Calendar failed while confirming ${d} (${info.message}). ` +
+          `${result.length ? `Already confirmed: ${result.map((v) => v.date).join(', ')}. ` : ''}` +
+          `Written for ${d}: ${written.length ? written.join('; ') : 'nothing'}. Not written: ${failed ?? 'unknown'} and the rest of that day` +
+          `${unique.length > result.length + 1 ? ` and ${unique.slice(result.length + 1).join(', ')}` : ''}. ` +
+          'Tell the owner exactly this; calling confirm again with the same dates continues where it stopped.');
       }
       this.touchPlan(d, 'confirmed');
       this.log(actor, 'confirm', 'plan', d, { calendar: written });
@@ -932,40 +1169,58 @@ export class Planner {
     body: Record<string, unknown>,
     actor: Actor,
   ): Promise<{ id: string; title: string; category: Category; when: string; overlaps: Overlap[]; replaced: Overlap[]; dryRun?: true }> {
-    const { dryRun, replace, rest } = runFlags(body);
+    const { dryRun, replace, allowPast, rest } = runFlags(body);
     const spec = this.eventSpec(rest);
+    this.refusePast(spec.timing, spec.recurrence, allowPast, `"${spec.title}"`);
     const cal = await this.requireCal();
-    const overlaps = await this.overlaps(spec.timing);
+    const overlaps = await this.overlaps(spec.timing, {}, spec.recurrence);
     const when = describeWhen(spec.timing, spec.recurrence, this.timeZone);
     if (dryRun) return { id: '', title: spec.title, category: spec.category, when, overlaps, replaced: [], dryRun: true };
-    const id = await cal.insertEvent(specInput(spec));
+    const id = await this.gwrite('event_add', null, { title: spec.title, timing: spec.timing }, actor, () => cal.insertEvent(specInput(spec)));
     this.log(actor, 'create', 'event', id, {
       title: spec.title, category: spec.category, timing: spec.timing, recurrence: spec.recurrence, location: spec.location, notes: spec.notes,
-      overlaps, replace,
+      overlaps, replace, ...(allowPast ? { allowPast } : {}),
     });
     const replaced = replace ? await this.replaceOverlaps(overlaps, actor, id) : [];
     return { id, title: spec.title, category: spec.category, when, overlaps, replaced };
   }
 
-  /** Timed events and plan blocks that share time with `timing` (one day; all-day items never count). */
-  async overlaps(timing: Timing, skip: { eventId?: string; blockId?: string } = {}): Promise<Overlap[]> {
+  /**
+   * Timed events and plan blocks that share time with `timing` (all-day items never count). A repeating event
+   * (`recurrence`) is checked on every occurrence from today up to OVERLAP_HORIZON_DAYS ahead (2026-11-26: only
+   * the first date was checked, so a weekly Friday event missed the 12/11 exam); each overlap names its date.
+   */
+  async overlaps(timing: Timing, skip: { eventId?: string; blockId?: string; seriesId?: string } = {}, recurrence: string[] | null = null): Promise<Overlap[]> {
     if (timing.kind !== 'timed') return [];
-    const view = await this.day(timing.date, { reconcile: false });
+    const today = this.today();
+    const from = timing.date > today ? timing.date : today;
+    const dates = recurrence?.length
+      ? occurrences(recurrence, timing.date, from, addDays(from, OVERLAP_HORIZON_DAYS), this.timeZone)
+      : [timing.date];
+    if (!dates.length) return [];
+    const cal = await this.cal();
+    const events = cal
+      ? (await cal.listEvents(this.dayRange(dates[0]).timeMin, this.dayRange(dates[dates.length - 1]).timeMax)).filter((e) => e.status !== 'cancelled')
+      : [];
     const lo = toMinutes(timing.start);
     const hi = timing.endDate && timing.endDate !== timing.date ? 24 * 60 : toMinutes(timing.end);
-    const hits = (start: string | null, end: string | null) => start !== null && end !== null && toMinutes(start) < hi && lo < toMinutes(end);
     const out: Overlap[] = [];
-    for (const e of view.events) {
-      if (e.allDay || e.deadline || e.examMarker || e.id === skip.eventId || !hits(e.start, e.end)) continue;
-      const repeating = e.seriesId !== null;
-      const replaceable = !repeating && e.category !== 'class' && !EXAM_TITLE.test(e.title) && !TRAVEL_TITLE.test(e.title);
-      out.push({ kind: 'event', id: e.id, title: e.title, start: e.start!, end: e.end!, category: e.category, location: e.location, repeating, replaceable });
+    for (const d of dates) {
+      for (const e of events) {
+        if (e.allDay || e.plannerBlockId || e.declined || e.deadlineTodoId || e.examSourceId) continue;
+        if (e.id === skip.eventId || (skip.seriesId && (e.id === skip.seriesId || e.recurringEventId === skip.seriesId))) continue;
+        const c = this.clip(e, d);
+        if (!c || !(c.start < hi && lo < c.end)) continue;
+        const repeating = e.recurringEventId !== null;
+        const replaceable = !repeating && e.category !== 'class' && !EXAM_TITLE.test(e.summary) && !TRAVEL_TITLE.test(e.summary);
+        out.push({ kind: 'event', date: d, id: e.id, title: e.summary, start: fromMinutes(c.start), end: fromMinutes(c.end), category: e.category, location: e.location, repeating, replaceable });
+      }
+      for (const b of this.blocks(d)) {
+        if (b.id === skip.blockId || !(toMinutes(b.start) < hi && lo < toMinutes(b.end))) continue;
+        out.push({ kind: 'block', date: d, id: b.id, title: b.title, start: b.start, end: b.end, category: b.category, location: null, repeating: false, replaceable: true });
+      }
     }
-    for (const b of view.blocks) {
-      if (b.id === skip.blockId || !hits(b.start, b.end)) continue;
-      out.push({ kind: 'block', id: b.id, title: b.title, start: b.start, end: b.end, category: b.category, location: null, repeating: false, replaceable: true });
-    }
-    return out.sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+    return out.sort((a, b) => a.date.localeCompare(b.date) || toMinutes(a.start) - toMinutes(b.start));
   }
 
   /** Removes the replaceable overlaps; every removal is logged with what was removed and why. */
@@ -1020,7 +1275,7 @@ export class Planner {
     raw: Record<string, unknown>,
     actor: Actor,
   ): Promise<{ id: string; scope: string; overlaps: Overlap[]; replaced: Overlap[]; dryRun?: true }> {
-    const { dryRun, replace, rest: body } = runFlags(raw);
+    const { dryRun, replace, allowPast, rest: body } = runFlags(raw);
     only(body, ['title', 'date', 'start', 'end', 'category', 'location', 'notes', 'scope', 'repeat', ...REPEAT_FIELDS]);
     const scope = (body.scope ?? 'this') as 'this' | 'series';
     if (scope !== 'this' && scope !== 'series') throw bad('scope must be "this" (one occurrence) or "series" (every occurrence)');
@@ -1039,12 +1294,11 @@ export class Planner {
         const d = date(body.date, 'date');
         timing = { kind: 'allDay', date: d, endDate: addDays(d, daysBetween(current.date, current.endDate)) };
       } else {
-        const d = body.date === undefined ? current.date : date(body.date, 'date');
-        const start = body.start === undefined ? current.start : time(body.start, 'start');
-        const length = toMinutes(current.end) - toMinutes(current.start);
-        const end = body.end !== undefined ? time(body.end, 'end') : body.start !== undefined ? fromMinutes(Math.min(24 * 60, toMinutes(start) + length)) : current.end;
-        this.checkTimes(start, end);
-        timing = { kind: 'timed', date: d, start, end };
+        timing = movedTiming(current, {
+          date: body.date === undefined ? undefined : date(body.date, 'date'),
+          start: body.start === undefined ? undefined : time(body.start, 'start'),
+          end: body.end === undefined ? undefined : time(body.end, 'end'),
+        });
       }
     }
     if (body.category !== undefined && (!isCategory(body.category) || body.category === 'deadline')) throw bad('category is invalid');
@@ -1058,14 +1312,18 @@ export class Planner {
       importedFrom: event.importedFrom ?? undefined,
     };
     const moved = timing !== current;
-    const overlaps = moved ? await this.overlaps(timing, { eventId: id }) : [];
+    const rule = scope === 'series' ? (input.recurrence ?? event.recurrence) : null;
+    if (moved || repeatChange) this.refusePast(timing, rule, allowPast, `Moving "${event.summary}"`);
+    const overlaps = moved || repeatChange
+      ? await this.overlaps(timing, scope === 'series' ? { seriesId: event.id } : { eventId: id }, rule)
+      : [];
     if (dryRun) return { id: event.id, scope, overlaps, replaced: [], dryRun: true };
-    await cal.patchEvent(event.id, input);
+    await this.gwrite('event_update', event.id, { title: event.summary, scope }, actor, () => cal.patchEvent(event.id, input));
     this.log(actor, 'update', 'event', event.id, {
       scope,
       before: { title: event.summary, timing: current, category: event.category, location: event.location, notes: event.description },
       after: { title: input.summary, timing, category: input.category, location: input.location, notes: input.description, ...(repeatChange ? { recurrence: input.recurrence } : {}) },
-      overlaps, replace,
+      overlaps, replace, ...(allowPast ? { allowPast } : {}),
     });
     const replaced = replace ? await this.replaceOverlaps(overlaps, actor, event.id) : [];
     return { id: event.id, scope, overlaps, replaced };
@@ -1077,7 +1335,7 @@ export class Planner {
     if (scope !== 'this' && scope !== 'series') throw bad('scope must be "this" or "series"');
     const cal = await this.requireCal();
     const event = await this.editable(cal, id, scope);
-    await cal.deleteEvent(event.id);
+    await this.gwrite('event_remove', event.id, { title: event.summary, scope }, actor, () => cal.deleteEvent(event.id));
     // Everything needed to put it back is kept in the log (owner rule 2026-11-25: keep every record).
     this.log(actor, 'remove', 'event', event.id, {
       scope, title: event.summary, timing: this.eventTiming(event), category: event.category, location: event.location,
@@ -1091,6 +1349,206 @@ export class Planner {
     const s = localParts(new Date(e.start!), this.timeZone);
     const t = localParts(new Date(e.end!), this.timeZone);
     return t.date === s.date ? { kind: 'timed', date: s.date, start: s.time, end: t.time } : { kind: 'timed', date: s.date, start: s.time, end: t.time, endDate: t.date };
+  }
+
+  // ---- "넣어줘": one todo at the owner's time, straight into the calendar ----------------------
+
+  /**
+   * Schedules an open todo at the time the owner gave and writes just that block to the calendar, linked to the
+   * todo (2026-11-26: "넣어줘" needed todo -> generate -> confirm of a whole day, and Kelly tried to confirm the wrong
+   * date). dryRun: nothing is written; the block and what it overlaps come back for the owner to see.
+   */
+  async scheduleTodo(id: string, body: Record<string, unknown>, actor: Actor): Promise<{ todo: Todo; block: Block | { date: string; start: string; end: string; title: string; category: Category }; overlaps: Overlap[]; dryRun?: true }> {
+    only(body, ['date', 'start', 'end', 'dryRun', 'allowPast']);
+    const row = this.todoRow(id);
+    if (row.status !== 'open') throw new PlannerError(409, 'conflict', `Todo "${row.title}" is ${row.status}; only open todos can be scheduled`);
+    const d = date(body.date, 'date');
+    if (daysBetween(this.today(), d) < 0) throw bad('Cannot schedule a todo on a day in the past');
+    const start = time(body.start, 'start');
+    const end = time(body.end, 'end');
+    this.checkTimes(start, end);
+    const timing: Timing = { kind: 'timed', date: d, start, end };
+    this.refusePast(timing, null, flag(body.allowPast, 'allowPast'), `"${row.title}"`);
+    const category = KIND_CATEGORY[row.kind];
+    const overlaps = await this.overlaps(timing);
+    if (flag(body.dryRun, 'dryRun')) return { todo: toTodo(row), block: { date: d, start, end, title: row.title, category }, overlaps, dryRun: true };
+    const cal = await this.requireCal();
+    const blockId = randomUUID();
+    const eventId = await this.gwrite('todo_schedule', id, { title: row.title, date: d, start, end }, actor, () =>
+      cal.insertEvent({
+        summary: row.title,
+        description: 'Personal AI 계획 블록. 여기서 옮기거나 지우면 planner도 따라가요.',
+        category,
+        timing,
+        blockId,
+      }),
+    );
+    const now = this.iso();
+    transaction(this.db, () => {
+      this.db
+        .prepare(`INSERT INTO blocks (id, date, start, end, title, todo_id, origin, category, google_event_id, synced_date, synced_start, synced_end, synced_title, created_at, updated_at)
+                  VALUES (?, ?, ?, ?, ?, ?, 'manual', ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(blockId, d, start, end, row.title, id, category, eventId, d, start, end, row.title, now, now);
+      this.log(actor, 'create', 'block', blockId, { date: d, start, end, title: row.title, todoId: id, via: 'todo_schedule', calendarEventId: eventId, overlaps });
+    });
+    return { todo: toTodo(row), block: toBlock(this.blockRow(blockId)), overlaps };
+  }
+
+  // ---- actual times: what really happened (Kelly's main purpose, AGENTS.md) ------------------
+
+  /**
+   * Records what really happened with a planned item: when it really started/ended, how long it took, whether it
+   * was done, partly done, skipped or late, and the owner's reason. Never overwritten: a correction is a new
+   * report (`corrects`). A report on a block linked to a todo adds its minutes to the todo's progress (the
+   * difference for a correction); it never completes the todo.
+   */
+  async addReport(body: Record<string, unknown>, actor: Actor): Promise<{ report: ReportView; todo?: Todo }> {
+    only(body, ['eventId', 'blockId', 'title', 'date', 'category', 'plannedStart', 'plannedEnd', 'actualStart', 'actualEnd', 'minutes', 'status', 'percent', 'note', 'corrects']);
+    if (!REPORT_STATUSES.includes(body.status as ReportStatus)) throw bad(`status must be one of ${REPORT_STATUSES.join(', ')}`);
+    const status = body.status as ReportStatus;
+    let corrected: ReportRow | null = null;
+    if (body.corrects !== undefined) {
+      corrected = (this.db.prepare('SELECT * FROM reports WHERE id = ?').get(int(body.corrects, 'corrects', 1, Number.MAX_SAFE_INTEGER)) as ReportRow | undefined) ?? null;
+      if (!corrected) throw new PlannerError(404, 'not_found', `Report ${body.corrects} not found`);
+    }
+    const item = corrected ? itemOf(corrected) : await this.reportItem(body);
+    if (daysBetween(this.today(), item.date) > 0) throw bad('Cannot report on a day that has not come yet');
+    const actualStart = body.actualStart === undefined ? null : time(body.actualStart, 'actualStart');
+    const actualEnd = body.actualEnd === undefined ? null : time(body.actualEnd, 'actualEnd');
+    let minutes = body.minutes === undefined ? null : int(body.minutes, 'minutes', 0, 24 * 60);
+    if (minutes === null && actualStart && actualEnd) minutes = (toMinutes(actualEnd) - toMinutes(actualStart) + 24 * 60) % (24 * 60);
+    // only the real end given: it started as planned
+    if (minutes === null && actualEnd && item.plannedStart && !actualStart) minutes = Math.max(0, toMinutes(actualEnd) - toMinutes(item.plannedStart));
+    if (minutes === null && status === 'skipped') minutes = 0;
+    if (minutes === null && status === 'done' && item.plannedMinutes !== null) minutes = item.plannedMinutes;
+    if (minutes === null) throw bad('Say how long it took: minutes, or actualStart and actualEnd (or for a late item at least actualEnd)');
+    const percent = body.percent === undefined ? (status === 'done' || status === 'late' ? 100 : status === 'skipped' ? 0 : null) : int(body.percent, 'percent', 0, 100);
+    const note = text(body.note, 'note', MAX_NOTES, false);
+    const todo = item.todoId ? (this.db.prepare('SELECT * FROM todos WHERE id = ?').get(item.todoId) as TodoRow | undefined) : undefined;
+    const before = corrected && corrected.todo_id === item.todoId ? corrected.todo_minutes : 0;
+    const delta = todo ? minutes - before : 0;
+    const id = transaction(this.db, () => {
+      const r = this.db
+        .prepare(`INSERT INTO reports (item_kind, item_id, todo_id, title, category, course, date, planned_start, planned_end, planned_minutes,
+                    actual_start, actual_end, minutes, status, percent, note, corrects, todo_minutes, actor, created_at)
+                  VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+        .run(item.kind, item.itemId, item.todoId, item.title, item.category, courseOf(item.title), item.date, item.plannedStart, item.plannedEnd,
+          item.plannedMinutes, actualStart, actualEnd, minutes, status, percent, note, corrected?.id ?? null, todo ? minutes : 0, actor, this.iso());
+      const reportId = Number(r.lastInsertRowid);
+      this.log(actor, 'create', 'report', String(reportId), { ...item, actualStart, actualEnd, minutes, status, percent, note, corrects: corrected?.id ?? null });
+      if (todo && delta !== 0) {
+        const total = Math.max(0, Math.min(100 * 60, todo.done_minutes + delta));
+        this.db.prepare('UPDATE todos SET done_minutes = ?, updated_at = ? WHERE id = ?').run(total, this.iso(), todo.id);
+        this.log(actor, 'progress', 'todo', todo.id, { title: todo.title, addedMinutes: delta, doneMinutes: total, before: todo.done_minutes, reason: `report #${reportId}` });
+      }
+      return reportId;
+    });
+    const report = toReport(this.db.prepare('SELECT * FROM reports WHERE id = ?').get(id) as unknown as ReportRow);
+    return todo ? { report, todo: toTodo(this.todoRow(todo.id)) } : { report };
+  }
+
+  /** What a report is about: a block, a Kelly calendar event, or something the owner names (title + date). */
+  private async reportItem(body: Record<string, unknown>): Promise<ReportItem> {
+    if (body.blockId !== undefined) {
+      const row = this.db.prepare('SELECT * FROM blocks WHERE id = ?').get(String(body.blockId)) as BlockRow | undefined;
+      if (!row) throw new PlannerError(404, 'not_found', `Block ${body.blockId} not found`);
+      return { kind: 'block', itemId: row.id, todoId: row.todo_id, title: row.title, category: row.category, date: row.date, plannedStart: row.start, plannedEnd: row.end, plannedMinutes: toMinutes(row.end) - toMinutes(row.start) };
+    }
+    if (body.eventId !== undefined) {
+      if (typeof body.eventId !== 'string' || !/^[A-Za-z0-9_@.-]{3,300}$/.test(body.eventId)) throw bad('eventId must be an event_id shown by day/week');
+      const cal = await this.requireCal();
+      const e = await cal.getEvent(body.eventId);
+      if (!e || e.status === 'cancelled') throw new PlannerError(404, 'not_found', `Event ${body.eventId} not found in the managed calendar`);
+      if (e.plannerBlockId) return this.reportItem({ blockId: e.plannerBlockId });
+      const t = this.eventTiming(e);
+      if (t.kind !== 'timed') return { kind: 'event', itemId: e.id, todoId: null, title: e.summary, category: e.category, date: t.date, plannedStart: null, plannedEnd: null, plannedMinutes: null };
+      const length = Math.round((Date.parse(e.end!) - Date.parse(e.start!)) / 60_000);
+      return { kind: 'event', itemId: e.id, todoId: null, title: e.summary, category: e.category, date: t.date, plannedStart: t.start, plannedEnd: t.endDate ? '24:00' : t.end, plannedMinutes: length };
+    }
+    const title = text(body.title, 'title (or eventId / blockId)', MAX_TITLE)!;
+    const d = date(body.date, 'date');
+    if (body.category !== undefined && !isCategory(body.category)) throw bad(`category must be one of ${CATEGORIES.join(', ')}`);
+    const ps = body.plannedStart === undefined ? null : time(body.plannedStart, 'plannedStart');
+    const pe = body.plannedEnd === undefined ? null : time(body.plannedEnd, 'plannedEnd');
+    if (ps && pe) this.checkTimes(ps, pe);
+    return { kind: 'other', itemId: null, todoId: null, title, category: (body.category as Category | undefined) ?? null, date: d, plannedStart: ps, plannedEnd: pe, plannedMinutes: ps && pe ? toMinutes(pe) - toMinutes(ps) : null };
+  }
+
+  /** The latest report per item of a day (the day view marks reported items). */
+  private reportMarks(day: string): Map<string, ReportMark> {
+    const rows = this.db.prepare('SELECT * FROM reports WHERE date = ? AND item_id IS NOT NULL ORDER BY id').all(day) as unknown as ReportRow[];
+    const out = new Map<string, ReportMark>();
+    for (const r of rows) out.set(r.item_id!, { reportId: r.id, status: r.status, minutes: r.minutes, actualStart: r.actual_start, actualEnd: r.actual_end });
+    return out;
+  }
+
+  /** Reports of a day or a range (newest last), corrected ones included and marked. */
+  reports(from: string, to: string): ReportView[] {
+    const rows = this.db.prepare('SELECT * FROM reports WHERE date BETWEEN ? AND ? ORDER BY date, id').all(from, to) as unknown as ReportRow[];
+    const corrected = new Set(rows.map((r) => r.corrects).filter((x): x is number => x !== null));
+    return rows.map((r) => ({ ...toReport(r), ...(corrected.has(r.id) ? { correctedLater: true } : {}) }));
+  }
+
+  /**
+   * The owner's real pace over the last `days` days: actual minutes against planned minutes, by category and by
+   * course code (STA256, CSC207, ...). Corrected reports count only in their latest version. Partly done work
+   * counts against the planned share it covered (percent); without a percent it is left out of the ratio.
+   */
+  pace(days = 28): PaceView {
+    int(days, 'days', 1, 365);
+    const to = this.today();
+    const from = addDays(to, -(days - 1));
+    const rows = (this.db.prepare('SELECT * FROM reports WHERE date BETWEEN ? AND ? ORDER BY id').all(from, to) as unknown as ReportRow[]);
+    const superseded = new Set(rows.map((r) => r.corrects).filter((x): x is number => x !== null));
+    const live = rows.filter((r) => !superseded.has(r.id));
+    const group = (key: (r: ReportRow) => string | null) => {
+      const map = new Map<string, ReportRow[]>();
+      for (const r of live) {
+        const k = key(r);
+        if (k === null) continue;
+        map.set(k, [...(map.get(k) ?? []), r]);
+      }
+      return [...map.entries()].map(([k, rs]) => paceGroup(k, rs)).sort((a, b) => b.reports - a.reports || a.key.localeCompare(b.key));
+    };
+    return { from, to, days, overall: paceGroup('all', live), byCategory: group((r) => r.category ?? 'none'), byCourse: group((r) => r.course) };
+  }
+
+  // ---- agenda: what is coming (exams, deadlines) ------------------------------------------
+
+  /**
+   * Upcoming exams (exam events in the Kelly calendar, with their exam-day markers), deadlines of open todos and
+   * overdue todos for the next `days` days, sorted (2026-11-24: "첫 기말이 언제야" was answered from one course).
+   */
+  async agenda(days = 30): Promise<{ from: string; to: string; calendarConnected: boolean; items: AgendaItem[] }> {
+    int(days, 'days', 1, 180);
+    const today = this.today();
+    const last = addDays(today, days - 1);
+    const items: AgendaItem[] = [];
+    const cal = await this.cal();
+    const exams = new Set<string>();
+    if (cal) {
+      const events = (await cal.listEvents(this.dayRange(today).timeMin, this.dayRange(last).timeMax)).filter((e) => e.status !== 'cancelled');
+      for (const e of events.filter(isExamEvent)) {
+        const t = this.eventTiming(e) as Extract<Timing, { kind: 'timed' }>;
+        exams.add(e.id);
+        items.push({ kind: 'exam', date: t.date, start: t.start, end: t.end, title: e.summary, label: examMarkerTitle(e.summary, t.start, t.end).replace(/^시험\(이날\): /, ''), eventId: e.id, location: e.location, daysLeft: daysBetween(today, t.date) });
+      }
+      for (const e of events) {
+        if (!e.allDay || !e.examSourceId || exams.has(e.examSourceId) || !e.date) continue;
+        items.push({ kind: 'exam_marker', date: e.date, title: e.summary, daysLeft: daysBetween(today, e.date) });
+      }
+    } else {
+      const rows = this.db.prepare('SELECT date, title FROM exam_markers WHERE date BETWEEN ? AND ?').all(today, last) as Array<{ date: string; title: string }>;
+      for (const r of rows) items.push({ kind: 'exam_marker', date: r.date, title: r.title, daysLeft: daysBetween(today, r.date) });
+    }
+    for (const t of this.listTodos('open')) {
+      if (!t.deadline || t.deadline > last) continue;
+      const left = Math.max(0, t.estimateMinutes - t.doneMinutes);
+      items.push({ kind: t.deadline < today ? 'overdue' : 'deadline', date: t.deadline, title: t.title, todoId: t.id, minutesLeft: left, daysLeft: daysBetween(today, t.deadline) });
+    }
+    const order = { overdue: 0, exam: 1, exam_marker: 1, deadline: 2 } as const;
+    items.sort((a, b) => a.date.localeCompare(b.date) || order[a.kind] - order[b.kind] || (a.start ?? '').localeCompare(b.start ?? ''));
+    return { from: today, to: last, calendarConnected: cal !== null, items };
   }
 
   // ---- deadline markers ---------------------------------------------------------------------
@@ -1594,7 +2052,7 @@ export class Planner {
           this.log(actor, 'create', 'event', eventId, { fromProposal: code, n: row.n, title: spec.title, category: spec.category, timing: spec.timing });
         });
       } else {
-        eventId = await cal.insertEvent(specInput(spec));
+        eventId = await this.gwrite('proposal_apply', code, { n: row.n, title: spec.title, written: written.map((w) => w.n) }, actor, () => cal.insertEvent(specInput(spec)));
         this.db.prepare('UPDATE proposal_items SET event_id = ? WHERE proposal_id = ? AND n = ?').run(eventId, p.id, row.n);
         this.log(actor, 'create', 'event', eventId, { fromProposal: code, n: row.n, title: spec.title, category: spec.category, timing: spec.timing, recurrence: spec.recurrence });
       }
@@ -1715,6 +2173,8 @@ const EXAM_MARKER_FORMAT = 'v1';
 const EXAM_MARKER_DAYS = 120;
 /** Exams and quizzes (titles in the Kelly calendar), not study sessions about them. */
 export const EXAM_TITLE = /final exam|midterm|term test|\btest\s*\d|\bquiz\b|\bexam\b|기말|중간고사|시험|퀴즈/i;
+/** Also a sitting when it is a todo title ("FAS Technical Test"); not used for exam markers. */
+const SITTING_TITLE = /\btest\b|\bmidterm\b|\bquiz/i;
 /** Getting somewhere cannot be replaced by something else at that time. */
 const TRAVEL_TITLE = /이동|출발|travel|commute|\bbus\b|버스/i;
 const STUDY_TITLE = /대비|준비|공부|복습|오답|훑기|지난|기출|풀기|연습|정리|study|review|prep|practice|이동|도착|대기/i;
@@ -1741,12 +2201,257 @@ export function examMarkerTitle(summary: string, start: string, end: string): st
   return `시험(이날): ${what} ${start}–${end}`;
 }
 
-/** dryRun / replace flags of event_add and event_update, taken out before the field check. */
-function runFlags(body: Record<string, unknown>): { dryRun: boolean; replace: boolean; rest: Record<string, unknown> } {
-  const { dryRun, replace, ...rest } = body ?? {};
-  if (dryRun !== undefined && typeof dryRun !== 'boolean') throw bad('dryRun must be true or false');
-  if (replace !== undefined && typeof replace !== 'boolean') throw bad('replace must be true or false');
-  return { dryRun: dryRun === true, replace: replace === true, rest };
+/** dryRun / replace / allowPast flags of event_add and event_update, taken out before the field check. */
+function runFlags(body: Record<string, unknown>): { dryRun: boolean; replace: boolean; allowPast: boolean; rest: Record<string, unknown> } {
+  const { dryRun, replace, allowPast, ...rest } = body ?? {};
+  return { dryRun: flag(dryRun, 'dryRun'), replace: flag(replace, 'replace'), allowPast: flag(allowPast, 'allowPast'), rest };
+}
+
+function flag(value: unknown, field: string): boolean {
+  if (value !== undefined && typeof value !== 'boolean') throw bad(`${field} must be true or false`);
+  return value === true;
+}
+
+/** A start up to this many minutes ago still counts as "now" (refusePast). */
+const PAST_GRACE_MINUTES = 15;
+/** A repeating event is checked for overlaps on its occurrences up to this many days ahead. */
+export const OVERLAP_HORIZON_DAYS = 120;
+
+/** Error code, status and a short message of a failure (for change_log; never secrets). */
+export function errorInfo(error: unknown): { code: string; status: number | null; message: string } {
+  const e = error as { code?: unknown; status?: unknown; reconnect?: unknown; message?: unknown; name?: unknown } | null;
+  const status = typeof e?.status === 'number' ? e.status : null;
+  const code = error instanceof GoogleError ? (error.reconnect ? 'calendar_not_connected' : 'calendar_error')
+    : typeof e?.code === 'string' ? e.code
+    : typeof e?.name === 'string' ? e.name : 'error';
+  const message = String(e?.message ?? error).replace(/[\r\n\t]+/g, ' ').slice(0, 300);
+  return { code, status, message };
+}
+
+/** The final exam among a day's events (owner decision 2026-11-26: no automatic draft on that day). */
+export function examDayTitle(events: CalendarEvent[], s: Pick<Settings, 'noDraftExamWords'>): string | null {
+  if (!s.noDraftExamWords.length) return null;
+  return events.find((e) => e.status !== 'cancelled' && isExamEvent(e) && titleHas(e.summary, s.noDraftExamWords))?.summary ?? null;
+}
+
+/** Course code in a title: "S3 · STA256 연속확률변수" -> STA256. */
+export function courseOf(title: string): string | null {
+  return /\b([A-Z]{3}\d{3})/.exec(title)?.[1] ?? null;
+}
+
+/**
+ * The new timing of a timed event when date, start and/or end change. The length is kept when only the start
+ * (or the date) moves, across midnight too (2026-11-26: moving an overnight event by its start failed with
+ * "start must be before end"). An end at or before the start means the next day only for an overnight event.
+ */
+export function movedTiming(current: Extract<Timing, { kind: 'timed' }>, change: { date?: string; start?: string; end?: string }): Extract<Timing, { kind: 'timed' }> {
+  const d = change.date ?? current.date;
+  const start = change.start ?? current.start;
+  const nights = current.endDate ? daysBetween(current.date, current.endDate) : 0;
+  const length = nights * 24 * 60 + toMinutes(current.end) - toMinutes(current.start);
+  let end: string;
+  let extra = 0;
+  if (change.end !== undefined) {
+    end = change.end;
+    if (toMinutes(end) <= toMinutes(start)) {
+      if (!nights) throw bad('start must be before end');
+      extra = 1;
+    }
+  } else if (change.start !== undefined) {
+    const total = toMinutes(start) + length;
+    extra = Math.floor(total / (24 * 60));
+    end = fromMinutes(total % (24 * 60));
+    if (extra && total % (24 * 60) === 0 && extra === 1 && !nights) {
+      // ends exactly at midnight: keep it on the same day as before ("24:00")
+      extra = 0;
+      end = '24:00';
+    }
+  } else {
+    end = current.end;
+    extra = nights;
+  }
+  if (!extra) {
+    if (toMinutes(start) >= toMinutes(end)) throw bad('start must be before end');
+    return { kind: 'timed', date: d, start, end };
+  }
+  return { kind: 'timed', date: d, start, end, endDate: addDays(d, extra) };
+}
+
+/**
+ * Local dates of a series written by repeatRule (DAILY, WEEKLY+BYDAY, MONTHLY by date or nth weekday, YEARLY;
+ * INTERVAL, UNTIL, COUNT) from `first`, keeping those within [from, to]. COUNT counts from the first date.
+ */
+export function occurrences(recurrence: string[], first: string, from: string, to: string, timeZone: string, max = 400): string[] {
+  const rule = recurrence.find((l) => l.startsWith('RRULE:'));
+  if (!rule) return first >= from && first <= to ? [first] : [];
+  const f = Object.fromEntries(rule.slice(6).split(';').map((p) => p.split('=') as [string, string]));
+  const interval = Number(f.INTERVAL ?? 1);
+  const count = f.COUNT ? Number(f.COUNT) : Number.POSITIVE_INFINITY;
+  const until = f.UNTIL ? untilLocal(f.UNTIL, timeZone) : null;
+  const last = until && until < to ? until : to;
+  const byDay: string[] = (f.BYDAY ?? '').split(',').filter(Boolean);
+  const [fy, fm, fd] = first.split('-').map(Number);
+  const mondayIndex = (d: string) => Math.floor((daysBetween('2000-01-03', d)) / 7); // 2000-01-03 was a Monday
+  const matches = (d: string): boolean => {
+    const [y, m, day] = d.split('-').map(Number);
+    switch (f.FREQ) {
+      case 'DAILY':
+        return daysBetween(first, d) % interval === 0;
+      case 'WEEKLY': {
+        const days = byDay.length ? byDay : [BYDAY[weekdayOf(first)]];
+        return days.includes(BYDAY[weekdayOf(d)]) && (mondayIndex(d) - mondayIndex(first)) % interval === 0;
+      }
+      case 'MONTHLY': {
+        if (((y - fy) * 12 + m - fm) % interval !== 0) return false;
+        const nth = byDay.length ? /^(-?\d)([A-Z]{2})$/.exec(byDay[0]) : null;
+        if (!nth) return day === fd;
+        if (BYDAY[weekdayOf(d)] !== nth[2]) return false;
+        const n = Number(nth[1]);
+        return n > 0 ? Math.ceil(day / 7) === n : Number(addDays(d, 7).slice(5, 7)) !== m;
+      }
+      case 'YEARLY':
+        return (y - fy) % interval === 0 && m === fm && day === fd;
+      default:
+        return d === first;
+    }
+  };
+  const out: string[] = [];
+  let seen = 0;
+  for (let d = first, i = 0; d <= last && seen < count && out.length < max && i < 20_000; d = addDays(d, 1), i++) {
+    if (!matches(d)) continue;
+    seen++;
+    if (d >= from) out.push(d);
+  }
+  return out;
+}
+
+interface ReportRow {
+  id: number;
+  item_kind: 'event' | 'block' | 'other';
+  item_id: string | null;
+  todo_id: string | null;
+  title: string;
+  category: Category | null;
+  course: string | null;
+  date: string;
+  planned_start: string | null;
+  planned_end: string | null;
+  planned_minutes: number | null;
+  actual_start: string | null;
+  actual_end: string | null;
+  minutes: number | null;
+  status: ReportStatus;
+  percent: number | null;
+  note: string | null;
+  corrects: number | null;
+  todo_minutes: number;
+  actor: string;
+  created_at: string;
+}
+
+interface ReportItem {
+  kind: 'event' | 'block' | 'other';
+  itemId: string | null;
+  todoId: string | null;
+  title: string;
+  category: Category | null;
+  date: string;
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  plannedMinutes: number | null;
+}
+
+export interface ReportView {
+  id: number;
+  itemKind: 'event' | 'block' | 'other';
+  itemId: string | null;
+  todoId: string | null;
+  title: string;
+  category: Category | null;
+  course: string | null;
+  date: string;
+  plannedStart: string | null;
+  plannedEnd: string | null;
+  plannedMinutes: number | null;
+  actualStart: string | null;
+  actualEnd: string | null;
+  minutes: number | null;
+  status: ReportStatus;
+  percent: number | null;
+  note: string | null;
+  corrects: number | null;
+  createdAt: string;
+  correctedLater?: true;
+}
+
+export interface PaceGroup {
+  key: string;
+  reports: number;
+  done: number;
+  partial: number;
+  skipped: number;
+  late: number;
+  /** Planned minutes of the work that was done (partly done: the share in percent). */
+  plannedMinutes: number;
+  actualMinutes: number;
+  /** actual / planned: 1.3 means it took 30% longer than planned. null: nothing to compare. */
+  ratio: number | null;
+  /** Average minutes the real end was after the planned end (negative: earlier). */
+  endDelayMinutes: number | null;
+}
+
+export interface PaceView {
+  from: string;
+  to: string;
+  days: number;
+  overall: PaceGroup;
+  byCategory: PaceGroup[];
+  byCourse: PaceGroup[];
+}
+
+export interface AgendaItem {
+  kind: 'exam' | 'exam_marker' | 'deadline' | 'overdue';
+  date: string;
+  start?: string;
+  end?: string;
+  title: string;
+  label?: string;
+  eventId?: string;
+  location?: string | null;
+  todoId?: string;
+  minutesLeft?: number;
+  daysLeft: number;
+}
+
+function itemOf(r: ReportRow): ReportItem {
+  return { kind: r.item_kind, itemId: r.item_id, todoId: r.todo_id, title: r.title, category: r.category, date: r.date, plannedStart: r.planned_start, plannedEnd: r.planned_end, plannedMinutes: r.planned_minutes };
+}
+
+function toReport(r: ReportRow): ReportView {
+  return {
+    id: r.id, itemKind: r.item_kind, itemId: r.item_id, todoId: r.todo_id, title: r.title, category: r.category, course: r.course, date: r.date,
+    plannedStart: r.planned_start, plannedEnd: r.planned_end, plannedMinutes: r.planned_minutes, actualStart: r.actual_start, actualEnd: r.actual_end,
+    minutes: r.minutes, status: r.status, percent: r.percent, note: r.note, corrects: r.corrects, createdAt: r.created_at,
+  };
+}
+
+function paceGroup(key: string, rows: ReportRow[]): PaceGroup {
+  let planned = 0;
+  let actual = 0;
+  const delays: number[] = [];
+  for (const r of rows) {
+    if (r.actual_end && r.planned_end) delays.push(toMinutes(r.actual_end) - toMinutes(r.planned_end));
+    if (r.status === 'skipped' || !r.planned_minutes || r.minutes === null || !r.percent) continue;
+    planned += (r.planned_minutes * r.percent) / 100;
+    actual += r.minutes;
+  }
+  const count = (s: ReportStatus) => rows.filter((r) => r.status === s).length;
+  return {
+    key, reports: rows.length, done: count('done'), partial: count('partial'), skipped: count('skipped'), late: count('late'),
+    plannedMinutes: Math.round(planned), actualMinutes: actual,
+    ratio: planned > 0 ? Math.round((actual / planned) * 100) / 100 : null,
+    endDelayMinutes: delays.length ? Math.round(delays.reduce((a, b) => a + b, 0) / delays.length) : null,
+  };
 }
 
 export function deadlineTitle(todoTitle: string): string {
@@ -1944,9 +2649,18 @@ function overlapWarnings(items: Array<{ n: number; title: string; spec: EventSpe
       const x = timed[a].spec.timing as { start: string; end: string };
       const y = timed[b].spec.timing as { start: string; end: string };
       if (!(toMinutes(x.start) < toMinutes(y.end) && toMinutes(y.start) < toMinutes(x.end))) continue;
-      const dx = occurrenceDays(timed[a].spec);
-      const dy = occurrenceDays(timed[b].spec);
-      const shared = [...dx].filter((d) => dy.has(d));
+      const sa = timed[a].spec;
+      const sb = timed[b].spec;
+      let shared: string[];
+      if (!sa.recurrence !== !sb.recurrence) {
+        // a one-off item (date) against a repeating one: does the series fall on that date? (2026-11-26)
+        const [one, series] = sa.recurrence ? [sb, sa] : [sa, sb];
+        shared = occurrences(series.recurrence!, series.timing.date, one.timing.date, one.timing.date, 'America/Toronto').length ? [one.timing.date] : [];
+      } else {
+        const dx = occurrenceDays(sa);
+        const dy = occurrenceDays(sb);
+        shared = [...dx].filter((d) => dy.has(d));
+      }
       if (shared.length) out.push(`${timed[a].n} "${timed[a].title}"와(과) ${timed[b].n} "${timed[b].title}"이(가) 시간이 겹쳐요 (${shared.map((d) => DAY_KO[d] ?? shortDate(d)).join('·')})`);
     }
   }

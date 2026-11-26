@@ -7,6 +7,7 @@ checked here for shape and again by the planner. Results are compact JSON plus a
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Callable
 
@@ -29,9 +30,10 @@ CATEGORY_LABEL = {"class": "수업", "study": "공부", "task": "할 일", "dead
 REPEATS = ("none", "daily", "weekdays", "weekly", "biweekly", "monthly", "yearly")
 
 ACTIONS = (
-    "day", "week", "generate", "confirm",
+    "day", "week", "agenda", "generate", "confirm",
     "block_add", "block_update", "block_remove",
-    "todo_list", "todo_add", "todo_update", "todo_progress",
+    "todo_list", "todo_add", "todo_update", "todo_progress", "todo_schedule",
+    "report", "pace",
     "event_add", "event_update", "event_remove",
     "calendars", "reference_sync", "reference_search",
     "proposal_create", "proposal_list", "proposal_show", "proposal_edit", "proposal_apply", "proposal_discard",
@@ -40,7 +42,11 @@ ACTIONS = (
 
 SETTING_KEYS = ("dayStart", "dayEnd", "maxFocusMinutes", "breakMinutes", "maxBlockMinutes", "minBlockMinutes",
                 "undatedDailyMinutes", "remindMinutes", "remindScope", "shortEventMinutes", "shortRemindMinutes",
-                "sleepStart", "sleepEnd", "lastBus", "homePlace", "places", "travel", "protectedEvents")
+                "sleepStart", "sleepEnd", "lastBus", "homePlace", "places", "travel", "protectedEvents",
+                "noDraftExamWords", "quietEvents", "bundleMinutes", "draftAt")
+
+REPORT_STATUSES = ("done", "partial", "skipped", "late")
+REPORT_LABEL = {"done": "끝냄", "partial": "일부", "skipped": "건너뜀", "late": "늦게 끝냄"}
 
 
 def _bad(message: str) -> CliError:
@@ -90,11 +96,33 @@ def _pick(args: dict[str, Any], mapping: dict[str, str]) -> dict[str, Any]:
 
 # ---- display -----------------------------------------------------------------------------
 
-def _day_lines(day: dict[str, Any]) -> list[str]:
+def _overdue_lines(items: list[dict[str, Any]]) -> list[str]:
+    """Open todos past their deadline: no longer planned by themselves; the owner decides (2026-11-26)."""
+    return [f"  [마감 지남] {o['title']} (마감 {o['deadline']}, 남은 {o['minutes']}분, todo_id {o['todoId']}) - "
+            "자동으로 다시 넣지 않음: 끝냈는지(todo_progress done), 새 마감인지(todo_update), 그만둘지 주인에게 물어보기"
+            for o in items]
+
+
+def _reported(item: dict[str, Any]) -> str:
+    """Marker for an item the owner already reported on (actual times)."""
+    r = item.get("reported")
+    if not r:
+        return ""
+    parts = [REPORT_LABEL.get(r.get("status"), r.get("status"))]
+    if r.get("actualStart") or r.get("actualEnd"):
+        parts.append(f"실제 {r.get('actualStart') or '?'}-{r.get('actualEnd') or '?'}")
+    if r.get("minutes") is not None:
+        parts.append(f"{r['minutes']}분")
+    return f" [보고: {' · '.join(parts)}, report_id {r['reportId']}]"
+
+
+def _day_lines(day: dict[str, Any], overdue: bool = True) -> list[str]:
     status = {"none": "계획 없음", "draft": "초안(미확정)", "confirmed": "확정"}.get(day.get("status"), day.get("status"))
     head = f"{day['date']}({day.get('weekday', '')}) {status}"
     if day.get("pendingChanges"):
         head += " - 캘린더에 아직 반영 안 된 변경 있음"
+    if day.get("noAutoDraft"):
+        head += f" - 기말 시험일이라 자동 초안 없음 ({day['noAutoDraft']})"
     rows: list[tuple[str, str]] = []
     for e in day.get("events", []):
         marker = e.get("deadline") or e.get("examMarker")
@@ -102,16 +130,18 @@ def _day_lines(day: dict[str, Any]) -> list[str]:
                  else CATEGORY_LABEL.get(e.get("category") or "", "일정"))
         when = "종일" if e.get("allDay") else f"{e['start']}-{e['end']}"
         ref = "" if marker else f" (event_id {e['id']}{', 반복' if e.get('seriesId') else ''})"
-        rows.append(("00:00" if e.get("allDay") else e.get("start") or "00:00", f"  [{label}] {when} {e['title']}{ref}"))
+        rows.append(("00:00" if e.get("allDay") else e.get("start") or "00:00", f"  [{label}] {when} {e['title']}{ref}{_reported(e)}"))
     for b in day.get("blocks", []):
         label = CATEGORY_LABEL.get(b.get("category") or "", "할 일")
-        rows.append((b["start"], f"  [계획·{label}] {b['start']}-{b['end']} {b['title']} (block_id {b['id']})"))
+        rows.append((b["start"], f"  [계획·{label}] {b['start']}-{b['end']} {b['title']} (block_id {b['id']}){_reported(b)}"))
     rows.sort(key=lambda r: r[0])
     lines = [head] + [r[1] for r in rows]
     if not rows:
         lines.append("  (비어 있음)")
     for u in day.get("unscheduled", []):
         lines.append(f"  [못 넣음] {u['title']} {u['minutes']}분")
+    if overdue:
+        lines += _overdue_lines(day.get("overdue", []))
     for w in day.get("warnings", []):
         lines.append(f"  [주의] {w}")
     if not day.get("calendarConnected"):
@@ -121,7 +151,14 @@ def _day_lines(day: dict[str, Any]) -> list[str]:
 
 def _days(result: dict[str, Any]) -> dict[str, Any]:
     days = result.get("days", [])
-    return {"ok": True, "days": days, "display": "\n".join(line for d in days for line in _day_lines(d))}
+    lines = [line for d in days for line in _day_lines(d, overdue=False)]
+    # The same overdue todo shows on every later day: list each one once, after the days.
+    seen: dict[str, dict[str, Any]] = {}
+    for d in days:
+        for o in d.get("overdue", []):
+            seen.setdefault(o["todoId"], o)
+    lines += _overdue_lines(list(seen.values()))
+    return {"ok": True, "days": days, "display": "\n".join(lines)}
 
 
 def _todo_line(t: dict[str, Any]) -> str:
@@ -132,7 +169,16 @@ def _todo_line(t: dict[str, Any]) -> str:
     parts.append(f"우선순위 {t['priority']}")
     if t.get("status") != "open":
         parts.append(t["status"])
-    return " · ".join(parts) + f" (todo_id {t['id']})"
+    elif t["doneMinutes"] >= t["estimateMinutes"]:
+        # reaching the estimate does not complete a todo (2026-11-26): ask whether it is finished
+        parts.append("예상 시간 다 씀 - 끝났는지 물어보기(끝났으면 todo_progress done)")
+    line = " · ".join(parts) + f" (todo_id {t['id']})"
+    dropped = t.get("droppedBlocks") or []
+    if dropped:
+        line += "\n  초안에서 뺀 블록: " + ", ".join(
+            f"{b['date']} {b['start']}-{b['end']}" + (" (캘린더에 있음: 그날 confirm하면 지워짐)" if b.get("inCalendar") else "")
+            for b in dropped)
+    return line
 
 
 # ---- actions -----------------------------------------------------------------------------
@@ -181,9 +227,18 @@ def _minutes(t: str) -> int:
     return int(h) * 60 + int(m)
 
 
+def _allow_past(args: dict[str, Any]) -> dict[str, Any]:
+    """allow_past=true only when the owner said on purpose that it is in the past (e.g. logging what they did)."""
+    value = args.get("allow_past", False)
+    if not isinstance(value, bool):
+        raise _bad("allow_past must be true or false")
+    return {"allowPast": True} if value else {}
+
+
 def a_block_add(client, args):
     body = {"date": _date(args, "date"), "start": _time(args, "start"), "end": _time(args, "end")}
     body.update(_pick(args, {"title": "title", "todo_id": "todoId"}))
+    body.update(_allow_past(args))
     if args.get("confirmed_by_user") is not True:
         day = _get(client, f"/day?date={body['date']}")
         lo, hi = _minutes(body["start"]), _minutes(body["end"])
@@ -212,8 +267,19 @@ def a_block_update(client, args):
         body["title"] = args["title"]
     if not body:
         raise _bad("give date, start, end or title to change")
-    return {"ok": True, **_post(client, f"/blocks/{block_id}/update", body),
-            "note": "Changed in the draft; confirm to write it to the calendar."}
+    body.update(_allow_past(args))
+    # Like block_add: what the new time overlaps is asked before anything moves (2026-11-26).
+    if args.get("confirmed_by_user") is not True and any(k in body for k in ("date", "start", "end")):
+        preview = _post(client, f"/blocks/{block_id}/update", {**body, "dryRun": True}).get("block", {})
+        overlaps = preview.get("overlaps") or []
+        if overlaps:
+            raise CliError("needs_confirmation",
+                           f"Moving the block to {preview.get('date')} {preview.get('start')}-{preview.get('end')} overlaps:\n" +
+                           "\n".join(_overlap_lines(overlaps)) +
+                           "\nNothing was moved. Show the owner this list and ask: keep both, or another time. End your turn; "
+                           "call again with the same arguments and confirmed_by_user=true only if they want both.")
+    out = _post(client, f"/blocks/{block_id}/update", body)
+    return {"ok": True, **out, "note": "Changed in the draft; confirm to write it to the calendar."}
 
 
 def a_block_remove(client, args):
@@ -237,9 +303,15 @@ TODO_FIELDS = {"title": "title", "notes": "notes", "kind": "kind", "priority": "
 def a_todo_add(client, args):
     if not args.get("title") or args.get("estimate_minutes") is None:
         raise _bad("todo_add needs title and estimate_minutes (ask the user or estimate sensibly and say so)")
-    todo = _post(client, "/todos", _pick(args, TODO_FIELDS))["todo"]
-    return {"ok": True, "todo": todo, "display": _todo_line(todo),
-            "note": "Saved. It is planned into the next draft (generate) or the 23:00 draft."}
+    out = _post(client, "/todos", _pick(args, TODO_FIELDS))
+    todo = out["todo"]
+    result = {"ok": True, "todo": todo, "display": _todo_line(todo),
+              "note": "Saved. It is planned into the next draft (generate) or the evening draft. If the owner gave a time "
+                      "for it, use todo_schedule."}
+    if out.get("warnings"):
+        result["warnings"] = out["warnings"]
+        result["display"] += "\n" + "\n".join(f"  [주의] {w}" for w in out["warnings"])
+    return result
 
 
 def a_todo_update(client, args):
@@ -258,6 +330,121 @@ def a_todo_progress(client, args):
     body = _pick(args, {"minutes": "minutes", "done": "done"})
     todo = _post(client, f"/todos/{todo_id}/progress", body)["todo"]
     return {"ok": True, "todo": todo, "display": _todo_line(todo)}
+
+
+def a_todo_schedule(client, args):
+    """"넣어줘" at a time the owner gave: one block for the todo, straight into the calendar after the OK."""
+    todo_id = _id(args, "todo_id")
+    body = {"date": _date(args, "date"), "start": _time(args, "start"), "end": _time(args, "end"), **_allow_past(args)}
+    if args.get("confirmed_by_user") is not True:
+        preview = _post(client, f"/todos/{todo_id}/schedule", {**body, "dryRun": True})
+        block = preview["block"]
+        lines = [f"{block['date']} {block['start']}-{block['end']} {block['title']} "
+                 f"({CATEGORY_LABEL.get(block.get('category'), '할 일')}) -> Kelly 캘린더"]
+        if preview.get("overlaps"):
+            lines += ["겹치는 것:"] + _overlap_lines(preview["overlaps"])
+        raise CliError("needs_confirmation",
+                       "Nothing was written yet. Show the owner this change:\n" + "\n".join(lines) +
+                       "\nAsk whether to put it in the calendar (if something overlaps: keep both or another time). End your "
+                       "turn; after they agree call again with the same arguments and confirmed_by_user=true.")
+    out = _post(client, f"/todos/{todo_id}/schedule", body)
+    b = out["block"]
+    lines = [f"캘린더에 넣음: {b['date']} {b['start']}-{b['end']} {b['title']} (block_id {b['id']})"]
+    if out.get("overlaps"):
+        lines += ["같은 시간에 있는 것 (그대로 둠):"] + _overlap_lines(out["overlaps"])
+    return {"ok": True, **out, "display": "\n".join(lines),
+            "note": "Only this block was written to the Kelly calendar; the rest of that day's draft is unchanged."}
+
+
+# ---- what really happened (actual times) and the owner's pace --------------------------------
+
+def a_report(client, args):
+    status = args.get("report_status")
+    if status not in REPORT_STATUSES:
+        raise _bad(f"report_status must be one of {', '.join(REPORT_STATUSES)} (done / partly done / skipped / finished late)")
+    body: dict[str, Any] = {"status": status}
+    if args.get("corrects_report_id") is not None:
+        if not isinstance(args["corrects_report_id"], int):
+            raise _bad("corrects_report_id must be the report_id shown by day")
+        body["corrects"] = args["corrects_report_id"]
+    elif args.get("block_id"):
+        body["blockId"] = _id(args, "block_id")
+    elif args.get("event_id"):
+        body["eventId"] = _event_id(args)
+    else:
+        if not args.get("title"):
+            raise _bad("say what the report is about: block_id or event_id from day, or title and date for something unplanned")
+        body["title"] = args["title"]
+        body["date"] = _date(args, "date")
+        if args.get("category"):
+            body["category"] = _category(args, True)
+        for key, target in (("start", "plannedStart"), ("end", "plannedEnd")):
+            if args.get(key):
+                body[target] = _time(args, key)
+    for key, target in (("actual_start", "actualStart"), ("actual_end", "actualEnd")):
+        if args.get(key):
+            body[target] = _time(args, key)
+    body.update(_pick(args, {"minutes": "minutes", "percent": "percent", "notes": "note"}))
+    out = _post(client, "/reports", body)
+    r = out["report"]
+    planned = f"계획 {r['plannedStart']}-{r['plannedEnd']} ({r['plannedMinutes']}분)" if r.get("plannedStart") else "계획 시간 없음"
+    actual = f"실제 {r.get('actualStart') or '?'}-{r.get('actualEnd') or '?'}" if (r.get("actualStart") or r.get("actualEnd")) else "실제"
+    line = (f"기록함 (report_id {r['id']}): {r['date']} {r['title']} · {REPORT_LABEL.get(r['status'], r['status'])} · {planned} · "
+            f"{actual} {r['minutes']}분" + (f" · {r['percent']}%" if r.get("percent") is not None else "") +
+            (f" · 이유: {r['note']}" if r.get("note") else "") + (f" · report {r['corrects']} 정정" if r.get("corrects") else ""))
+    lines = [line]
+    if out.get("todo"):
+        lines.append("  할 일 진행: " + _todo_line(out["todo"]))
+    return {"ok": True, **out, "display": "\n".join(lines),
+            "note": "Recorded (never overwritten; a correction is a new report with corrects_report_id). Now OFFER, do not make, "
+                    "calendar changes that follow (e.g. move what comes next); change nothing without the owner's answer."}
+
+
+def _pace_line(g: dict[str, Any]) -> str:
+    ratio = f"실제/계획 {g['ratio']}배" if g.get("ratio") is not None else "비교할 기록 없음"
+    delay = f", 끝 시각 평균 {g['endDelayMinutes']:+d}분" if g.get("endDelayMinutes") is not None else ""
+    return (f"  {g['key']}: {ratio} (계획 {g['plannedMinutes']}분 → 실제 {g['actualMinutes']}분{delay}; 보고 {g['reports']}개: "
+            f"끝냄 {g['done']}, 늦게 {g['late']}, 일부 {g['partial']}, 건너뜀 {g['skipped']})")
+
+
+def a_pace(client, args):
+    days = 28 if args.get("days") is None else args["days"]
+    if not isinstance(days, int) or not 1 <= days <= 365:
+        raise _bad("days must be 1-365")
+    p = _get(client, f"/pace?days={days}")
+    lines = [f"주인 속도 {p['from']}~{p['to']} ({p['days']}일)", _pace_line(p["overall"]).replace("  all:", "  전체:")]
+    if p["byCourse"]:
+        lines.append("과목별:")
+        lines += [_pace_line(g) for g in p["byCourse"]]
+    if p["byCategory"]:
+        lines.append("분류별:")
+        lines += [_pace_line({**g, "key": CATEGORY_LABEL.get(g["key"], g["key"])}) for g in p["byCategory"]]
+    return {"ok": True, "pace": p, "display": "\n".join(lines),
+            "note": "Use the ratio when estimating (estimate x ratio for that course or category) and tell the owner you did."}
+
+
+AGENDA_LABEL = {"exam": "시험", "exam_marker": "시험 표시", "deadline": "마감", "overdue": "마감 지남"}
+
+
+def a_agenda(client, args):
+    days = 30 if args.get("days") is None else args["days"]
+    if not isinstance(days, int) or not 1 <= days <= 180:
+        raise _bad("days must be 1-180")
+    a = _get(client, f"/agenda?days={days}")
+    lines = [f"{a['from']}~{a['to']} 다가오는 시험·마감"]
+    for i in a["items"]:
+        when = f" {i['start']}-{i['end']}" if i.get("start") else ""
+        what = i.get("label") or i["title"]
+        extra = f", 남은 {i['minutesLeft']}분" if i.get("minutesLeft") is not None else ""
+        d = i["daysLeft"]
+        lines.append(f"  {i['date']}{when} [{AGENDA_LABEL.get(i['kind'], i['kind'])}] {what}"
+                     f" ({'오늘' if d == 0 else f'D-{d}' if d > 0 else f'{-d}일 지남'}{extra})")
+    if not a["items"]:
+        lines.append("  (없음)")
+    if not a.get("calendarConnected"):
+        lines.append("  (Google Calendar 미연결: 시험 일정은 기록된 시험 표시만)")
+    return {"ok": True, **a, "display": "\n".join(lines),
+            "note": "This is the whole list across all courses; answer from it (e.g. the first final), not from one course."}
 
 
 # ---- fixed events (classes, appointments, routines, birthdays) ----------------------------
@@ -324,7 +511,9 @@ KEEP_NOTE = "그대로 둠: 수업·시험·이동·반복 일정"
 
 
 def _overlap_lines(overlaps: list[dict[str, Any]]) -> list[str]:
-    return [f"  {o['start']}-{o['end']} {o['title']}" + ("" if o.get("replaceable") else f" ({KEEP_NOTE})") for o in overlaps]
+    # A repeating event is checked on every date in the next 120 days: each line says which date (2026-11-26).
+    return [f"  {o['date'] + ' ' if o.get('date') else ''}{o['start']}-{o['end']} {o['title']}" +
+            ("" if o.get("replaceable") else f" ({KEEP_NOTE})") for o in overlaps]
 
 
 def _replace_flag(args: dict[str, Any]) -> bool:
@@ -359,6 +548,7 @@ def _replaced_lines(result: dict[str, Any]) -> list[str]:
 
 def a_event_add(client, args):
     body = _event_fields({k: args[k] for k in EVENT_KEYS if k not in ("replace",) and k in args}, "event_add")
+    body.update(_allow_past(args))
     replace = _replace_flag(args)
     if not body.get("allDay"):
         preview = _post(client, "/events", {**body, "dryRun": True})["event"]
@@ -379,6 +569,7 @@ def a_event_update(client, args):
                               "event_update", partial=True))
     if len(body) == 1:
         raise _bad("give what to change: date, start, end, title, category, location, notes or the repeat rule")
+    body.update(_allow_past(args))
     replace = _replace_flag(args)
     if args.get("confirmed_by_user") is not True:
         preview = _post(client, f"/events/{event_id}/update", {**body, "dryRun": True})["event"]
@@ -545,6 +736,15 @@ def a_settings_update(client, args):
     unknown = [k for k in settings if k not in SETTING_KEYS]
     if unknown:
         raise _bad(f"unknown settings: {', '.join(unknown)}")
+    if args.get("confirmed_by_user") is not True:
+        # Settings can silence reminders or move the day: the owner sees "before -> after" first (2026-11-26).
+        current = (_get(client, "/status") or {}).get("settings", {})
+        lines = [f"  {k}: {json.dumps(current.get(k), ensure_ascii=False)} -> {json.dumps(v, ensure_ascii=False)}"
+                 for k, v in settings.items()]
+        raise CliError("needs_confirmation",
+                       "Changing planner settings needs the owner's OK. Nothing was saved. Show the owner exactly this, "
+                       "ask, end your turn, and call again with the same settings and confirmed_by_user=true only after "
+                       "they agree:\n" + "\n".join(lines))
     return {"ok": True, **_post(client, "/settings", settings), "note": "Saved and logged; tell the user what changed."}
 
 
@@ -561,9 +761,10 @@ def a_calendar_connect(client, args):
 
 
 HANDLERS: dict[str, Callable[[Any, dict[str, Any]], dict[str, Any]]] = {
-    "day": a_day, "week": a_week, "generate": a_generate, "confirm": a_confirm,
+    "day": a_day, "week": a_week, "agenda": a_agenda, "generate": a_generate, "confirm": a_confirm,
     "block_add": a_block_add, "block_update": a_block_update, "block_remove": a_block_remove,
     "todo_list": a_todo_list, "todo_add": a_todo_add, "todo_update": a_todo_update, "todo_progress": a_todo_progress,
+    "todo_schedule": a_todo_schedule, "report": a_report, "pace": a_pace,
     "event_add": a_event_add, "event_update": a_event_update, "event_remove": a_event_remove,
     "calendars": a_calendars, "reference_sync": a_reference_sync, "reference_search": a_reference_search,
     "proposal_create": a_proposal_create, "proposal_list": a_proposal_list, "proposal_show": a_proposal_show,

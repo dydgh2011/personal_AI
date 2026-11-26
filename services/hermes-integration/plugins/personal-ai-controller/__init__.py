@@ -10,7 +10,10 @@
 - Tool `personal_ai_document`: read documents the owner attached in chat (PDF, DOCX,
   text) in small pieces, only from Hermes's attachment folder (document_client.py).
 - Hook `pre_tool_call`: blocks tool calls that would bypass the controller or
-  touch credentials (see guard.py).
+  touch credentials, changes made in a turn that read outside text, and confirmations the owner did not give
+  (see guard.py). Hooks `pre_llm_call` / `post_tool_call` keep what happened in the current turn (turn_state.py).
+- Hook `transform_llm_output`: appends what really changed in this turn, or a warning when the answer claims a
+  change that did not happen (change_summary.py).
 
 Mounted read-only from the repository (services/hermes-integration/plugins).
 """
@@ -26,6 +29,7 @@ from pathlib import Path
 from typing import Any
 
 try:  # loaded as a package by Hermes
+    from . import change_summary
     from . import controller_client as client_lib
     from . import document_client
     from . import guard
@@ -35,6 +39,7 @@ try:  # loaded as a package by Hermes
     from . import school_client
 except ImportError:  # loaded as a plain module (tests)
     sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import change_summary  # type: ignore[no-redef]
     import controller_client as client_lib  # type: ignore[no-redef]
     import document_client  # type: ignore[no-redef]
     import guard  # type: ignore[no-redef]
@@ -197,6 +202,15 @@ PLANNER_SCHEMA: dict[str, Any] = {
         "schedule, make proposals (drafts of fixed events) the user picks from: proposal_create (title, items), "
         "proposal_list, proposal_show (proposal), proposal_edit (proposal, add_items, update_items [{n, ...}], "
         "remove_items), proposal_apply (proposal, item_numbers?, confirmed_by_user), proposal_discard. "
+        "agenda (days?, default 30): every upcoming exam, exam-day marker, deadline and overdue todo across all courses; "
+        "use it for 'when is my first final / what is due'. todo_schedule (todo_id, date, start, end, confirmed_by_user): "
+        "the owner gave a time for a todo ('넣어줘'): shows the change first, then writes just that block to the calendar. "
+        "report (block_id or event_id from day, or title+date; report_status done|partial|skipped|late, actual_start?, "
+        "actual_end?, minutes?, percent?, notes = the owner's reason, corrects_report_id? to correct): record what really "
+        "happened when the owner tells you; then only OFFER calendar changes. pace (days?): actual/planned ratio by course "
+        "and category; use it when estimating and say so. Exams and quizzes are events (category class), not todos; only "
+        "their preparation is a todo. A time in the past is refused unless allow_past=true (only when the owner says it "
+        "is past on purpose). block_update asks first when the new time overlaps. "
         "status / settings_update / changes (change log) / calendar_connect. Show `display` when present. Never claim "
         "something is in the calendar before the call succeeded."
     ),
@@ -205,7 +219,9 @@ PLANNER_SCHEMA: dict[str, Any] = {
         "properties": {
             "action": {"type": "string", "enum": list(planner_client.ACTIONS)},
             "date": {"type": "string", "description": "YYYY-MM-DD local date (day/week start, generate start, block date)."},
-            "days": {"type": "integer", "minimum": 1, "maximum": 14, "description": "generate: number of days (default 1)."},
+            "days": {"type": "integer", "minimum": 1, "maximum": 365,
+                     "description": "generate: number of days (default 1, at most 14); agenda: days ahead (default 30, "
+                                    "at most 180); pace: days back (default 28)."},
             "dates": {"type": "array", "items": {"type": "string"}, "description": "confirm: the dates to confirm."},
             "start": {"type": "string", "description": "HH:MM block start."},
             "end": {"type": "string", "description": "HH:MM block end (block_update: optional, keeps the length)."},
@@ -217,10 +233,10 @@ PLANNER_SCHEMA: dict[str, Any] = {
             "earliest": {"type": "string", "description": "YYYY-MM-DD: do not plan before this day."},
             "priority": {"type": "integer", "minimum": 1, "maximum": 3, "description": "1 high, 2 normal, 3 low."},
             "kind": {"type": "string", "enum": ["task", "study", "habit"]},
-            "notes": {"type": "string"},
+            "notes": {"type": "string", "description": "Notes of a todo/event; report: the owner's reason in their words."},
             "status": {"type": "string", "enum": ["open", "done", "all", "archived"],
                        "description": "todo_list filter (open/done/all) or todo_update status (open/done/archived)."},
-            "minutes": {"type": "integer", "minimum": 0, "maximum": 1440, "description": "todo_progress: minutes spent."},
+            "minutes": {"type": "integer", "minimum": 0, "maximum": 1440, "description": "todo_progress / report: minutes spent."},
             "done": {"type": "boolean", "description": "todo_progress: the todo is finished."},
             "category": {"type": "string", "enum": list(planner_client.CATEGORIES),
                          "description": "Event category = its colour: class 수업, study 공부, task 할 일, routine 루틴, "
@@ -255,9 +271,21 @@ PLANNER_SCHEMA: dict[str, Any] = {
                                      "category, repeat, interval, repeat_days, monthly_by, until, count, location, notes)."},
             "settings": {"type": "object", "description": "settings_update: dayStart, dayEnd, maxFocusMinutes, "
                          "breakMinutes, maxBlockMinutes, minBlockMinutes, undatedDailyMinutes, remindMinutes, remindScope (all|planner), "
-                         "shortEventMinutes (events this long or shorter use shortRemindMinutes; 0 = off), shortRemindMinutes. "
-                         "Proposal checks: sleepStart, sleepEnd (HH:MM), lastBus {weekday, saturday, sunday}, homePlace, "
-                         "places [{name, match[]}], travel [{from, to, minutes}], protectedEvents [title words]."},
+                         "shortEventMinutes (events this long or shorter use shortRemindMinutes; 0 = off), shortRemindMinutes, "
+                         "quietEvents [title words: no reminder], bundleMinutes (one reminder lists events starting within "
+                         "this many minutes; 0 = off), draftAt (HH:MM 18:00-23:55 evening draft, null = 30 min before "
+                         "sleepStart), noDraftExamWords [final-exam title words: no automatic draft that day; [] = off]. "
+                         "Proposal checks: sleepStart, sleepEnd (HH:MM; sleepEnd is also the morning message time), lastBus "
+                         "{weekday, saturday, sunday}, homePlace, places [{name, match[]}], travel [{from, to, minutes}], "
+                         "protectedEvents [title words]."},
+            "allow_past": {"type": "boolean", "description": "event_add/event_update/block_add/block_update/todo_schedule: the "
+                           "owner said on purpose that the time is in the past (e.g. logging something). Never on your own."},
+            "report_status": {"type": "string", "enum": list(planner_client.REPORT_STATUSES),
+                              "description": "report: done, partial (part done), skipped, late (finished later than planned)."},
+            "actual_start": {"type": "string", "description": "report: HH:MM when it really started."},
+            "actual_end": {"type": "string", "description": "report: HH:MM when it really ended."},
+            "percent": {"type": "integer", "minimum": 0, "maximum": 100, "description": "report: how much of it got done."},
+            "corrects_report_id": {"type": "integer", "minimum": 1, "description": "report: the report_id this one corrects."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200},
             "confirmed_by_user": {"type": "boolean", "description": "true only when the user explicitly agreed to this "
                                   "exact change in the conversation (confirm, deadline change, dropping a todo, an overlap)."},
@@ -504,3 +532,8 @@ def register(ctx) -> None:
     ctx.register_command("ai-usage", handler=llm_client.handle_usage,
                          description="오늘 AI 무료 한도와 유료 사용액")
     ctx.register_hook("pre_tool_call", guard.pre_tool_call)
+    # One turn = one incoming message: pre_llm_call starts it clean, post_tool_call records what really changed
+    # and what outside text was read (turn_state.py); the footer lists the changes (change_summary.py).
+    ctx.register_hook("pre_llm_call", guard.pre_llm_call)
+    ctx.register_hook("post_tool_call", guard.post_tool_call)
+    ctx.register_hook("transform_llm_output", change_summary.transform_llm_output)

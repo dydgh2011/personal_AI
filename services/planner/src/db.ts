@@ -132,6 +132,35 @@ const MIGRATIONS: string[] = [
     updated_at TEXT NOT NULL
   );
   `,
+  // 5: what really happened with planned items (2026-11-26, Kelly's main purpose: fit plans to the owner's real
+  //    pace). Never updated: a correction is a new row pointing at the one it corrects.
+  `
+  CREATE TABLE reports (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    item_kind TEXT NOT NULL,                   -- event | block | other
+    item_id TEXT,                              -- calendar event id or block id
+    todo_id TEXT,                              -- the todo of the block, if any
+    title TEXT NOT NULL,
+    category TEXT,
+    course TEXT,                               -- course code from the title (STA256, CSC207, ...)
+    date TEXT NOT NULL,                        -- local YYYY-MM-DD of the planned item
+    planned_start TEXT,
+    planned_end TEXT,
+    planned_minutes INTEGER,
+    actual_start TEXT,
+    actual_end TEXT,
+    minutes INTEGER,                           -- minutes it really took
+    status TEXT NOT NULL,                      -- done | partial | skipped | late
+    percent INTEGER,                           -- how much got done (0-100)
+    note TEXT,                                 -- the owner's reason or note
+    corrects INTEGER REFERENCES reports(id),   -- a correction of an earlier report
+    todo_minutes INTEGER NOT NULL DEFAULT 0,   -- minutes this report counts on its todo
+    actor TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX reports_date ON reports(date);
+  CREATE INDEX reports_item ON reports(item_id);
+  `,
 ];
 
 export function openDatabase(file: string): DatabaseSync {

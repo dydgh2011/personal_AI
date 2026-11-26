@@ -19,6 +19,12 @@ controller ◀─(delegator 토큰, 조회만)── hermes-broker [task watcher
 - 같은 `key`는 한 번만 보낸다(`notifier-data` 볼륨에 30일 보관). broker가 재시작해도 최근 2시간 안에 끝난 작업만 다시 보내고, notifier가 중복을 거른다.
 - Discord가 실패하면 기록하지 않고 호출자에게 502/503을 돌려준다. broker는 다음 주기에 다시 시도한다.
 - 분당 20건으로 제한한다.
+- 로그(요청마다 type, key, 상태, Discord 상태, 실패 이유 `error`)는 stdout과 `notifier-data` 볼륨의 `/var/lib/notifier/logs/notifier-YYYY-MM-DD.jsonl`(UTC 날짜)에 덧붙인다. 지우거나 다시 쓰지 않는다(2026-11-26: 컨테이너를 다시 만들면 로그가 사라져 11/25 아침 메시지가 왜 안 나갔는지 알 수 없었음). 위치는 `NOTIFIER_LOG_DIR`(`off`면 stdout만). 웹훅 URL은 여기에도 남지 않는다.
+
+## planner 메시지 (2026-11-26 추가 필드, 모두 선택)
+- `plan.remind` {minutes, shortMinutes, shortEventMinutes, scope, bundleMinutes, quiet[]}: 아침 메시지의 "⏰ 일정 15분 전(…)에 알려드릴게요…" 줄을 실제 설정으로 만든다. 없으면 알림 줄을 쓰지 않는다(예전의 고정 문구 "일정 15분 전에 알려드릴게요"는 없앰).
+- `reminder.also` [{title, start, location}] (최대 10): 같이 알리는 다음 일정. "이어서 12:20 …" 줄로 붙는다.
+- 알 수 없는 필드는 여전히 거부하므로 **notifier를 planner보다 먼저 배포**해야 한다.
 
 ## 설치
 ```powershell

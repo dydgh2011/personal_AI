@@ -20,6 +20,8 @@ export interface PlanDay {
   blocks: Array<{ start: string; end: string; title: string; category?: Category }>;
   events: Array<{ start: string | null; end: string | null; title: string; allDay: boolean; category?: Category | null }>;
   unscheduled: Array<{ title: string; minutes: number }>;
+  /** Open todos past their deadline: the planner no longer plans them; the owner says what to do (2026-11-26). */
+  overdue?: Array<{ title: string; deadline: string; minutes: number }>;
 }
 
 export interface PlanMessage {
@@ -27,6 +29,17 @@ export interface PlanMessage {
   days: PlanDay[];
   calendarConnected: boolean;
   todayBlocks?: Array<{ start: string; end: string; title: string }>;
+  /** The planner's real reminder settings (2026-11-26); without it the message says nothing about reminders. */
+  remind?: RemindInfo;
+}
+
+export interface RemindInfo {
+  minutes: number;
+  shortMinutes: number;
+  shortEventMinutes: number;
+  scope: 'all' | 'planner';
+  bundleMinutes: number;
+  quiet: string[];
 }
 
 export interface ReminderMessage {
@@ -35,6 +48,8 @@ export interface ReminderMessage {
   minutesBefore: number;
   location: string | null;
   fromPlanner: boolean;
+  /** Events starting soon after this one, reminded in the same message (2026-11-26). */
+  also?: Array<{ title: string; start: string; location: string | null }>;
 }
 
 export interface CalendarMessage {
@@ -87,11 +102,11 @@ function slot(v: unknown, field: string) {
 }
 
 export function parsePlan(value: unknown): PlanMessage {
-  const p = obj(value, 'plan', ['kind', 'days', 'calendarConnected', 'todayBlocks']);
+  const p = obj(value, 'plan', ['kind', 'days', 'calendarConnected', 'todayBlocks', 'remind']);
   if (p.kind !== 'proposal' && p.kind !== 'week' && p.kind !== 'today') throw new ValidationError('plan.kind must be proposal, week or today');
   if (typeof p.calendarConnected !== 'boolean') throw new ValidationError('plan.calendarConnected must be a boolean');
   const days = list(p.days, 'plan.days', 14, (v, i) => {
-    const d = obj(v, `plan.days[${i}]`, ['date', 'weekday', 'status', 'blocks', 'events', 'unscheduled']);
+    const d = obj(v, `plan.days[${i}]`, ['date', 'weekday', 'status', 'blocks', 'events', 'unscheduled', 'overdue']);
     if (typeof d.date !== 'string' || !DATE.test(d.date)) throw new ValidationError('day.date must be YYYY-MM-DD');
     if (typeof d.weekday !== 'string' || !WEEKDAYS.includes(d.weekday)) throw new ValidationError('day.weekday is invalid');
     if (d.status !== 'none' && d.status !== 'draft' && d.status !== 'confirmed') throw new ValidationError('day.status is invalid');
@@ -116,15 +131,47 @@ export function parsePlan(value: unknown): PlanMessage {
         if (typeof x.minutes !== 'number' || !Number.isInteger(x.minutes) || x.minutes < 0 || x.minutes > 6000) throw new ValidationError('unscheduled.minutes is invalid');
         return { title: text(x.title, 'unscheduled.title', 200), minutes: x.minutes };
       }),
+      ...(d.overdue === undefined ? {} : {
+        overdue: list(d.overdue, 'day.overdue', 20, (o, j) => {
+          const x = obj(o, `overdue[${j}]`, ['title', 'deadline', 'minutes']);
+          if (typeof x.deadline !== 'string' || !DATE.test(x.deadline)) throw new ValidationError('overdue.deadline must be YYYY-MM-DD');
+          if (typeof x.minutes !== 'number' || !Number.isInteger(x.minutes) || x.minutes < 0 || x.minutes > 6000) throw new ValidationError('overdue.minutes is invalid');
+          return { title: text(x.title, 'overdue.title', 200), deadline: x.deadline, minutes: x.minutes };
+        }),
+      }),
     };
   });
   if (days.length < 1) throw new ValidationError('plan.days must not be empty');
   const todayBlocks = p.todayBlocks === undefined ? undefined : list(p.todayBlocks, 'plan.todayBlocks', 40, (b, j) => slot(b, `todayBlocks[${j}]`));
-  return { kind: p.kind, days, calendarConnected: p.calendarConnected, todayBlocks };
+  return { kind: p.kind, days, calendarConnected: p.calendarConnected, todayBlocks, ...(p.remind === undefined ? {} : { remind: parseRemind(p.remind) }) };
+}
+
+function whole(value: unknown, field: string, min: number, max: number): number {
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < min || value > max) throw new ValidationError(`${field} must be a whole number ${min}-${max}`);
+  return value;
+}
+
+function parseRemind(value: unknown): RemindInfo {
+  const r = obj(value, 'plan.remind', ['minutes', 'shortMinutes', 'shortEventMinutes', 'scope', 'bundleMinutes', 'quiet']);
+  if (r.scope !== 'all' && r.scope !== 'planner') throw new ValidationError('remind.scope must be all or planner');
+  return {
+    minutes: whole(r.minutes, 'remind.minutes', 1, 240),
+    shortMinutes: whole(r.shortMinutes, 'remind.shortMinutes', 1, 240),
+    shortEventMinutes: whole(r.shortEventMinutes, 'remind.shortEventMinutes', 0, 240),
+    scope: r.scope,
+    bundleMinutes: whole(r.bundleMinutes, 'remind.bundleMinutes', 0, 240),
+    quiet: list(r.quiet, 'remind.quiet', 30, (w, i) => text(w, `remind.quiet[${i}]`, 60)),
+  };
+}
+
+function dateTime(value: unknown, field: string): string {
+  const s = text(value, field, 40);
+  if (Number.isNaN(Date.parse(s))) throw new ValidationError(`${field} must be a date-time`);
+  return s;
 }
 
 export function parseReminder(value: unknown): ReminderMessage {
-  const r = obj(value, 'reminder', ['title', 'start', 'minutesBefore', 'location', 'fromPlanner']);
+  const r = obj(value, 'reminder', ['title', 'start', 'minutesBefore', 'location', 'fromPlanner', 'also']);
   const start = text(r.start, 'reminder.start', 40);
   if (Number.isNaN(Date.parse(start))) throw new ValidationError('reminder.start must be a date-time');
   if (typeof r.minutesBefore !== 'number' || !Number.isInteger(r.minutesBefore) || r.minutesBefore < 0 || r.minutesBefore > 240) {
@@ -137,6 +184,16 @@ export function parseReminder(value: unknown): ReminderMessage {
     minutesBefore: r.minutesBefore,
     location: r.location === null || r.location === undefined ? null : text(r.location, 'reminder.location', 200),
     fromPlanner: r.fromPlanner,
+    ...(r.also === undefined ? {} : {
+      also: list(r.also, 'reminder.also', 10, (a, i) => {
+        const x = obj(a, `reminder.also[${i}]`, ['title', 'start', 'location']);
+        return {
+          title: text(x.title, 'also.title', 200),
+          start: dateTime(x.start, 'also.start'),
+          location: x.location === null || x.location === undefined ? null : text(x.location, 'also.location', 200),
+        };
+      }),
+    }),
   };
 }
 
@@ -207,6 +264,19 @@ function unscheduledLine(day: PlanDay): string | null {
   return `⚠️ 시간이 모자라 못 넣은 일: ${day.unscheduled.map((u) => `${plain(u.title, 60)} ${hours(u.minutes)}`).join(', ')}`;
 }
 
+/** Overdue todos of these days, each once (a week lists the same todo on every day). */
+function overdueLine(days: PlanDay[]): string | null {
+  const seen = new Map<string, { title: string; deadline: string; minutes: number }>();
+  for (const d of days) for (const o of d.overdue ?? []) seen.set(`${o.deadline}|${o.title}`, o);
+  if (!seen.size) return null;
+  const items = [...seen.values()].slice(0, 8).map((o) => {
+    const [, m, day] = o.deadline.split('-').map(Number);
+    return `${plain(o.title, 60)} (${m}/${day}까지${o.minutes ? `, 남은 ${hours(o.minutes)}` : ''})`;
+  });
+  const more = seen.size > 8 ? ` 외 ${seen.size - 8}개` : '';
+  return `📌 마감이 지나 자동으로 다시 넣지 않는 할 일: ${items.join(', ')}${more} — 끝냈으면 "끝냈어", 아니면 새 마감이나 그만둘지 Kelly에게 알려주세요.`;
+}
+
 function fit(lines: string[]): string {
   const text = lines.join('\n');
   return text.length > DISCORD_LIMIT ? `${text.slice(0, DISCORD_LIMIT - 1)}…` : text;
@@ -223,8 +293,10 @@ export function formatPlan(p: PlanMessage, mentionUserId: string | null): string
     if (total) lines.push(`할 일 합계 ${hours(total)}`);
     const u = unscheduledLine(day);
     if (u) lines.push(u);
+    const o = overdueLine([day]);
+    if (o) lines.push(o);
     if (day.status !== 'confirmed') lines.push('괜찮으면 `@Kelly 오늘 계획 확정해줘`, 바꿀 게 있으면 Kelly에게 말해주세요.');
-    lines.push('일정 15분 전에 알려드릴게요.');
+    if (p.remind) lines.push(remindLine(p.remind));
   } else if (p.kind === 'proposal') {
     const day = p.days[0];
     lines.push(`${mention}**📝 내일 ${shortDate(day.date, day.weekday)} 계획 초안**${day.status === 'confirmed' ? ' · 이미 확정됨' : ''}`);
@@ -233,6 +305,8 @@ export function formatPlan(p: PlanMessage, mentionUserId: string | null): string
     if (total) lines.push(`할 일 합계 ${hours(total)}`);
     const u = unscheduledLine(day);
     if (u) lines.push(u);
+    const o = overdueLine([day]);
+    if (o) lines.push(o);
     if (p.todayBlocks?.length) {
       lines.push('');
       lines.push(`오늘 계획했던 일: ${p.todayBlocks.slice(0, 8).map((b) => plain(b.title, 40)).join(', ')} — 끝낸 일이 있으면 Kelly에게 알려주세요.`);
@@ -253,6 +327,8 @@ export function formatPlan(p: PlanMessage, mentionUserId: string | null): string
       const u = unscheduledLine(day);
       if (u) lines.push(u);
     }
+    const o = overdueLine(p.days);
+    if (o) lines.push('', o);
     lines.push('');
     lines.push('바꿀 게 있으면 Kelly에게 말해주세요. 괜찮으면 `@Kelly 다음 주 계획 확정해줘` — 확정하면 Google Calendar에 들어가요.');
   }
@@ -260,10 +336,30 @@ export function formatPlan(p: PlanMessage, mentionUserId: string | null): string
   return fit(lines);
 }
 
+/**
+ * How reminders work, from the planner's real settings (2026-11-26: the fixed "일정 15분 전에" was wrong for
+ * short events, quiet events and bundling).
+ */
+function remindLine(r: RemindInfo): string {
+  const which = r.scope === 'planner' ? '계획 블록' : '일정';
+  const when = r.shortEventMinutes > 0 && r.shortMinutes !== r.minutes
+    ? `${r.minutes}분 전(${hours(r.shortEventMinutes)} 이하 짧은 일정은 ${r.shortMinutes}분 전)`
+    : `${r.minutes}분 전`;
+  const parts = [`${which} ${when}에 알려드릴게요.`];
+  if (r.bundleMinutes > 0) parts.push(`${r.bundleMinutes}분 안에 이어지는 일정은 한 번에 묶어요.`);
+  if (r.quiet.length) {
+    const shown = r.quiet.slice(0, 8).map((w) => plain(w, 20)).join('·');
+    parts.push(`제목에 ${shown}${r.quiet.length > 8 ? ' 등' : ''} 중 하나가 들어간 일정은 알리지 않아요.`);
+  }
+  return `⏰ ${parts.join(' ')}`;
+}
+
 export function formatReminder(r: ReminderMessage, mentionUserId: string | null): string {
   const at = torontoClock(r.start);
   const where = r.location ? ` · 📍 ${plain(r.location, 80)}` : '';
-  return fit([`${mentionUserId ? `<@${mentionUserId}> ` : ''}**⏰ ${r.minutesBefore}분 뒤** ${at} ${plain(r.title)}${where}`]);
+  const lines = [`${mentionUserId ? `<@${mentionUserId}> ` : ''}**⏰ ${r.minutesBefore}분 뒤** ${at} ${plain(r.title)}${where}`];
+  for (const x of r.also ?? []) lines.push(`이어서 ${torontoClock(x.start)} ${plain(x.title)}${x.location ? ` · 📍 ${plain(x.location, 80)}` : ''}`);
+  return fit(lines);
 }
 
 export function formatCalendar(c: CalendarMessage, mentionUserId: string | null): string {

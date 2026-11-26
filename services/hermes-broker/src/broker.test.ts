@@ -251,6 +251,19 @@ describe('hermes-broker', () => {
         assert.ok([400, 404, 405].includes((await send(method, path)).status), `${method} ${path}`);
       }
       assert.equal(got.length, 4);
+      // dry runs (overlap previews) do not count as writes; the new report/pace/agenda/schedule routes are forwarded
+      for (let i = 0; i < 5; i++) {
+        assert.equal((await send('POST', '/planner/events', { title: 'x', dryRun: true })).status, 200, `preview ${i}`);
+      }
+      assert.equal((await send('POST', '/planner/reports', { blockId: TASK_ID, status: 'done' })).status, 200);
+      assert.equal((await send('POST', `/planner/todos/${TASK_ID}/schedule`, { date: '2026-11-27', start: '10:00', end: '11:00', dryRun: true })).status, 200);
+      assert.equal((await send('GET', '/planner/pace?days=28')).status, 200);
+      assert.equal((await send('GET', '/planner/agenda?days=30')).status, 200);
+      assert.equal((await send('GET', '/planner/agenda?days=x')).status, 400);
+      assert.equal(got.at(-1)!.url, '/agenda?days=30');
+      assert.equal((await send('POST', '/planner/todos', { title: 'y', estimateMinutes: 30 })).status, 200);
+      assert.equal((await send('POST', '/planner/todos', { title: 'z', estimateMinutes: 30 })).status, 200);
+      assert.equal((await send('POST', '/planner/todos', { title: 'w', estimateMinutes: 30 })).status, 429, 'only the 3 real writes counted');
     } finally {
       await new Promise((r) => withPlanner.close(r));
       await new Promise((r) => planner.close(r));

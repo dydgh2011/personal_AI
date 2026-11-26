@@ -4,13 +4,17 @@ import type { AddressInfo } from 'node:net';
 import { createApi } from './api.js';
 import { GoogleConnection } from './connection.js';
 import { openDatabase } from './db.js';
-import { parseClientFile, SCOPES, type CalendarApi, type CalendarEvent, type EventInput, type GoogleAccount } from './google.js';
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { jsonLinesLogger } from './filelog.js';
+import { GoogleError, parseClientFile, SCOPES, type CalendarApi, type CalendarEvent, type EventInput, type GoogleAccount } from './google.js';
 import { Jobs } from './jobs.js';
-import type { NotifyEvent } from './notify.js';
-import { Planner, PlannerError } from './planner.js';
+import { NotifyError, type NotifyEvent } from './notify.js';
+import { movedTiming, occurrences, Planner, PlannerError, type Block } from './planner.js';
 import { planChecks } from './checks.js';
-import { DEFAULT_SETTINGS, draftDay, freeIntervals, reminderLead, shareFor } from './schedule.js';
-import { addDays, localParts, toInstant } from './time.js';
+import { DEFAULT_SETTINGS, draftDay, draftMinutes, freeIntervals, morningMinutes, reminderLead, shareFor } from './schedule.js';
+import { addDays, daysBetween, localParts, toInstant } from './time.js';
 
 const TZ = 'America/Toronto';
 const silent = { info: () => {}, warn: () => {} };
@@ -318,6 +322,10 @@ describe('time', () => {
     assert.equal(toInstant('2026-07-01', '23:00', TZ).toISOString(), '2026-07-02T03:00:00.000Z'); // EDT
     assert.deepEqual(localParts(new Date('2026-11-22T04:30:00Z'), TZ), { date: '2026-11-21', time: '23:30', weekday: 6, minutes: 1410 });
     assert.equal(addDays('2026-12-31', 1), '2027-01-01');
+    // months of different lengths (was off by one: 11-25 -> 12-01 counted 7)
+    assert.equal(daysBetween('2026-11-25', '2026-12-01'), 6);
+    assert.equal(daysBetween('2026-11-21', '2026-12-10'), 19);
+    assert.equal(daysBetween('2026-02-27', '2026-03-01'), 2);
   });
 });
 
@@ -343,6 +351,20 @@ describe('schedule', () => {
     assert.deepEqual(draft.unscheduled, []);
   });
 
+  it('does not plan work whose deadline has passed', () => {
+    const t = { id: 'a', title: 'A', priority: 2, remaining: 120, deadline: '2026-11-26', earliest: null, createdAt: '' };
+    assert.equal(shareFor(t, '2026-11-26', DEFAULT_SETTINGS), 120);
+    assert.equal(shareFor(t, '2026-11-27', DEFAULT_SETTINGS), 0);
+  });
+
+  it('plans nothing before notBefore (redrafting today)', () => {
+    const draft = draftDay('2026-11-27', DEFAULT_SETTINGS, [], [
+      { id: 'due', title: 'Due', priority: 1, remaining: 60, deadline: '2026-11-27', earliest: null, createdAt: '' },
+    ], 0, 15 * 60 + 2);
+    // 15:05 is the earliest; the free time is shared out (at most 60 minutes before the block, 2026-11-26)
+    assert.deepEqual(draft.blocks.map((b) => [b.start, b.end]), [[965, 1025]]);
+  });
+
   it('reports deadline work that does not fit', () => {
     const draft = draftDay('2026-11-22', { ...DEFAULT_SETTINGS, dayStart: '09:00', dayEnd: '10:00' }, [], [
       { id: 'due', title: 'Due', priority: 1, remaining: 180, deadline: '2026-11-22', earliest: null, createdAt: '' },
@@ -359,7 +381,8 @@ describe('Planner', () => {
     const [day] = await planner.generate('2026-11-22', 1, 'hermes');
     assert.equal(day.status, 'draft');
     assert.deepEqual(day.events.map((e) => [e.title, e.start, e.end]), [['수업', '09:00', '11:00']]);
-    assert.deepEqual(day.blocks.map((b) => [b.start, b.end]), [['07:00', '08:30'], ['11:10', '11:40']]);
+    // largest free gap first (11:10-22:30), spread inside it (2026-11-26: no longer stacked from 07:00)
+    assert.deepEqual(day.blocks.map((b) => [b.start, b.end]), [['12:10', '13:40'], ['14:50', '15:20']]);
     assert.ok(day.blocks.every((b) => b.todoId === todo.id && !b.inCalendar));
 
     const [confirmed] = await planner.confirm(['2026-11-22'], 'hermes');
@@ -383,7 +406,7 @@ describe('Planner', () => {
     planner.addTodo({ title: '운동', estimateMinutes: 60 }, 'hermes');
     const [day] = await planner.generate('2026-11-22', 1, 'hermes');
     await planner.confirm(['2026-11-22'], 'hermes');
-    const moved = planner.updateBlock(day.blocks[0].id, { start: '18:00' }, 'hermes');
+    const moved = await planner.updateBlock(day.blocks[0].id, { start: '18:00' }, 'hermes');
     assert.deepEqual([moved.start, moved.end, moved.origin, moved.pending], ['18:00', '19:00', 'manual', true]);
     const reopened = await planner.day('2026-11-22');
     assert.equal(reopened.status, 'draft');
@@ -417,10 +440,14 @@ describe('Planner', () => {
     const t = planner.addTodo({ title: '보고서', estimateMinutes: 90, deadline: '2026-11-30' }, 'hermes');
     planner.updateTodo(t.id, { deadline: '2026-12-02' }, 'hermes');
     planner.progressTodo(t.id, 90, false, 'hermes');
-    const [done, update, create] = planner.changes(3);
+    const [progress, update, create] = planner.changes(3);
     assert.equal(create.action, 'create');
     assert.deepEqual((update.detail as any).changes.deadline, { from: '2026-11-30', to: '2026-12-02' });
-    assert.equal(done.action, 'complete');
+    // reaching the estimate is not "finished" (2026-11-26): only done=true completes
+    assert.equal(progress.action, 'progress');
+    assert.equal(planner.listTodos('open').length, 1);
+    planner.progressTodo(t.id, undefined, true, 'hermes');
+    assert.equal(planner.changes(1)[0].action, 'complete');
     assert.equal(planner.listTodos('open').length, 0);
   });
 });
@@ -463,8 +490,8 @@ describe('Managed calendar', () => {
     assert.ok(day.blocks.every((b) => b.end <= '09:50' || b.start >= '11:10'), 'blocks keep clear of the lecture');
     assert.equal(day.events.find((e) => e.title === 'CSC263 강의')?.category, 'class');
 
-    await planner.updateEvent(lecture.id, { start: '13:00', scope: 'series' }, 'hermes');
-    assert.equal(localParts(new Date(cal.events.get(lecture.id)!.start!), TZ).time, '13:00');
+    await planner.updateEvent(lecture.id, { start: '21:00', scope: 'series' }, 'hermes');
+    assert.equal(localParts(new Date(cal.events.get(lecture.id)!.start!), TZ).time, '21:00');
     assert.deepEqual(cal.events.get(lecture.id)!.recurrence, stored.recurrence, 'the series keeps its rule');
     await assert.rejects(planner.updateEvent(lecture.id, { date: '2026-11-24', scope: 'series' }, 'hermes'), /series cannot move/);
     await assert.rejects(planner.addEvent({ title: 'x', date: '2026-11-23', start: '10:00', end: '11:00', category: 'deadline' }, 'hermes'), /category/);
@@ -664,24 +691,32 @@ describe('Managed calendar', () => {
 });
 
 describe('Jobs', () => {
-  it('posts tomorrow at 23:00, the week on Sunday 23:00 and today at 05:00, each once', async () => {
-    const { planner, sent, jobs, setClock } = setup(toInstant('2026-11-21', '22:59', TZ).getTime());
+  it('posts tomorrow at 22:30 (30 min before sleep), the week on Sunday and today at 06:00 (sleep end), each once', async () => {
+    const { planner, sent, jobs, setClock } = setup(toInstant('2026-11-21', '22:29', TZ).getTime());
     planner.addTodo({ title: '알고리즘 과제', estimateMinutes: 60, deadline: '2026-11-23' }, 'hermes');
     await jobs.tick();
     assert.equal(sent.filter((e) => e.type === 'plan').length, 0);
 
-    setClock(toInstant('2026-11-21', '23:00', TZ).getTime()); // Saturday
+    setClock(toInstant('2026-11-21', '22:30', TZ).getTime()); // Saturday
     await jobs.tick();
+    setClock(toInstant('2026-11-21', '23:00', TZ).getTime()); // the old time: not again
     await jobs.tick();
     const proposals = sent.filter((e) => e.type === 'plan');
     assert.equal(proposals.length, 1);
     assert.equal(proposals[0].type === 'plan' && proposals[0].plan.kind, 'proposal');
     assert.equal(proposals[0].type === 'plan' && proposals[0].plan.days[0].date, '2026-11-22');
 
-    setClock(toInstant('2026-11-22', '05:00', TZ).getTime());
+    setClock(toInstant('2026-11-22', '05:30', TZ).getTime());
+    await jobs.tick();
+    assert.equal(sent.filter((e) => e.type === 'plan').length, 1, 'not inside the sleep window any more');
+    setClock(toInstant('2026-11-22', '06:00', TZ).getTime());
     await jobs.tick();
     const today = sent.at(-1)!;
     assert.ok(today.type === 'plan' && today.plan.kind === 'today' && today.plan.days[0].date === '2026-11-22');
+    assert.deepEqual(today.type === 'plan' && today.plan.remind, { minutes: 15, shortMinutes: 5, shortEventMinutes: 60, scope: 'all', bundleMinutes: 30, quiet: DEFAULT_SETTINGS.quietEvents });
+    setClock(toInstant('2026-11-22', '06:30', TZ).getTime());
+    await jobs.tick();
+    assert.equal(sent.filter((e) => e.type === 'plan').length, 2, 'once a day');
 
     setClock(toInstant('2026-11-22', '23:05', TZ).getTime()); // Sunday
     await jobs.tick();
@@ -690,8 +725,8 @@ describe('Jobs', () => {
     assert.deepEqual(week.type === 'plan' && week.plan.days.map((d) => d.date), Array.from({ length: 7 }, (_, i) => addDays('2026-11-23', i)));
   });
 
-  it('skips the 05:00 message for a completely empty day', async () => {
-    const { sent, jobs } = setup(toInstant('2026-11-22', '05:00', TZ).getTime());
+  it('skips the morning message for a completely empty day', async () => {
+    const { sent, jobs } = setup(toInstant('2026-11-22', '06:00', TZ).getTime());
     await jobs.tick();
     assert.equal(sent.filter((e) => e.type === 'plan').length, 0);
   });
@@ -787,3 +822,404 @@ describe('Google OAuth', () => {
     assert.ok(!JSON.stringify(conn.status()).includes('rt'));
   });
 });
+
+describe('Draft fixes (2026-11-26 review)', () => {
+  it('redrafting today keeps the blocks that already started and plans only after now', async () => {
+    const { planner, setClock } = setup(toInstant('2026-11-27', '06:00', TZ).getTime());
+    const todo = planner.addTodo({ title: '과제', estimateMinutes: 240, deadline: '2026-11-27' }, 'hermes');
+    const [morning] = await planner.generate('2026-11-27', 1, 'hermes');
+    assert.equal(morning.blocks[0].start, '08:00'); // spread: not stacked from dayStart (2026-11-26)
+    setClock(toInstant('2026-11-27', '15:02', TZ).getTime());
+    const [day] = await planner.generate('2026-11-27', 1, 'hermes');
+    const before = day.blocks.filter((b) => b.start < '15:02');
+    const after = day.blocks.filter((b) => b.start >= '15:02');
+    // the morning blocks stay as they were (a record of the plan), new ones start at 15:05 or later
+    assert.deepEqual(before.map((b) => b.start), morning.blocks.map((b) => b.start));
+    assert.ok(after.length > 0 && after.every((b) => b.start >= '15:05'));
+    // past time is not counted as done: all 240 minutes are planned again after now
+    assert.equal(after.reduce((s, b) => s + toMin(b.end) - toMin(b.start), 0), 240);
+    assert.equal(after[0].todoId, todo.id);
+  });
+
+  it('an overdue todo is not planned again; the day view lists it as overdue', async () => {
+    const { planner } = setup(toInstant('2026-11-27', '00:30', TZ).getTime());
+    const t = planner.addTodo({ title: 'FAS Technical Test', estimateMinutes: 120, deadline: '2026-11-26' }, 'hermes');
+    const [day] = await planner.generate('2026-11-27', 1, 'hermes');
+    assert.deepEqual(day.blocks, []);
+    assert.deepEqual(day.unscheduled, []);
+    assert.deepEqual(day.overdue, [{ todoId: t.id, title: 'FAS Technical Test', deadline: '2026-11-26', minutes: 120 }]);
+    // past days do not list it
+    assert.deepEqual((await planner.day('2026-11-25')).overdue, []);
+  });
+
+  it('the 23:00 and 05:00 messages carry overdue todos (only when there are some)', async () => {
+    const { planner, jobs, sent, setClock } = setup(toInstant('2026-11-27', '23:00', TZ).getTime());
+    planner.addTodo({ title: '보고서', estimateMinutes: 60, deadline: '2026-11-30' }, 'hermes');
+    planner.addTodo({ title: 'FAS Technical Test', estimateMinutes: 120, deadline: '2026-11-27' }, 'hermes');
+    await jobs.tick();
+    const proposal = sent.find((e) => e.type === 'plan' && e.plan.kind === 'proposal');
+    assert.ok(proposal && proposal.type === 'plan');
+    assert.deepEqual(proposal.plan.days[0].overdue, [{ title: 'FAS Technical Test', deadline: '2026-11-27', minutes: 120 }]);
+    setClock(toInstant('2026-11-28', '06:00', TZ).getTime());
+    await jobs.tick();
+    const today = sent.find((e) => e.type === 'plan' && e.plan.kind === 'today');
+    assert.ok(today && today.type === 'plan' && today.plan.days[0].overdue?.length === 1);
+    // a day with nothing overdue sends no overdue field (older notifiers reject unknown fields)
+    const { planner: p2 } = setup(toInstant('2026-11-27', '10:00', TZ).getTime());
+    const { planDay } = await import('./notify.js');
+    assert.equal('overdue' in planDay(await p2.day('2026-11-28')), false);
+  });
+
+  it('a finished or dropped todo leaves the plan from now on; manual blocks and past blocks stay', async () => {
+    const { planner, cal, setClock, jobs, db } = setup(toInstant('2026-11-27', '06:00', TZ).getTime());
+    const a = planner.addTodo({ title: '리포트', estimateMinutes: 600, deadline: '2026-11-30' }, 'hermes');
+    const b = planner.addTodo({ title: '읽기', estimateMinutes: 300, deadline: '2026-11-30' }, 'hermes');
+    await planner.generate('2026-11-27', 4, 'hermes');
+    await planner.confirm(['2026-11-28'], 'hermes');
+    const manual = planner.addBlock({ date: '2026-11-29', start: '20:00', end: '21:00', todoId: a.id }, 'hermes');
+    setClock(toInstant('2026-11-27', '12:00', TZ).getTime());
+    const todayBefore = (await planner.day('2026-11-27')).blocks.filter((x) => x.todoId === a.id);
+
+    const done = planner.progressTodo(a.id, undefined, true, 'hermes');
+    assert.equal(done.status, 'done');
+    assert.ok(done.droppedBlocks!.length > 0);
+    assert.ok(done.droppedBlocks!.some((x) => x.date === '2026-11-28' && x.inCalendar));
+    const left = async (d: string) => (await planner.day(d)).blocks.filter((x) => x.todoId === a.id);
+    // today: only blocks that started before noon remain
+    assert.deepEqual((await left('2026-11-27')).map((x) => x.start), todayBefore.filter((x) => x.start < '12:00').map((x) => x.start));
+    assert.deepEqual(await left('2026-11-28'), []);
+    assert.deepEqual((await left('2026-11-29')).map((x) => x.id), [manual.id]);
+    // the confirmed day is a draft again; confirming deletes the calendar events of the dropped blocks
+    const day28 = await planner.day('2026-11-28');
+    assert.equal(day28.pendingChanges, true);
+    await planner.confirm(['2026-11-28'], 'hermes');
+    assert.ok(![...cal.events.values()].some((e) => e.summary === '리포트' && e.start!.startsWith('2026-11-28')));
+    // archiving via todo_update does the same; the jobs tick cleans up anything left behind
+    const archived = planner.updateTodo(b.id, { status: 'archived' }, 'hermes');
+    assert.ok(archived.droppedBlocks!.length > 0);
+    db.prepare("UPDATE todos SET status = 'open' WHERE id = ?").run(b.id);
+    await planner.generate('2026-11-30', 1, 'hermes');
+    db.prepare("UPDATE todos SET status = 'done' WHERE id = ?").run(b.id);
+    await jobs.tick();
+    assert.deepEqual((await planner.day('2026-11-30')).blocks.filter((x) => x.todoId === b.id), []);
+    const log = planner.changes(200).filter((c) => c.action === 'remove' && c.entity === 'block');
+    assert.ok(log.some((c) => (c.detail as { reason: string }).reason === 'todo done'));
+  });
+});
+
+describe('Review fixes 2 (2026-11-26)', () => {
+  const at = (d: string, t: string) => toInstant(d, t, TZ).getTime();
+
+  it('final-exam days: no automatic draft and no draft message; Kelly can still generate; the morning shows the calendar', async () => {
+    const { planner, cal, jobs, sent, setClock } = setup(at('2026-12-09', '12:00'));
+    cal.add('STA256H5 Final Exam', '2026-12-10', '17:00', '20:00', { category: 'class' });
+    cal.add('STA256 시험장 도착·대기', '2026-12-10', '16:30', '17:00', { category: 'routine' });
+    planner.addTodo({ title: 'CSC236 복습', estimateMinutes: 600, deadline: '2026-12-15', kind: 'study' }, 'hermes');
+    // Kelly's own generate (the owner asked) still plans the exam day
+    const [asked] = await planner.generate('2026-12-10', 1, 'hermes');
+    assert.ok(asked.blocks.length > 0 && !asked.noAutoDraft);
+
+    setClock(at('2026-12-09', '22:30'));
+    await jobs.tick();
+    assert.equal(sent.filter((e) => e.type === 'plan').length, 0, 'no draft message for the exam day');
+    assert.deepEqual((await planner.day('2026-12-10')).blocks, [], 'drafted auto blocks left the draft');
+    const skip = planner.changes(50).find((c) => c.entity === 'plan' && c.action === 'skip')!;
+    assert.equal((skip.detail as any).exam, 'STA256H5 Final Exam');
+    assert.ok((skip.detail as any).removedDraftBlocks.length > 0, 'what left the draft is recorded');
+    assert.ok(planner.changes(50).some((c) => c.entity === 'job' && c.action === 'skip'));
+
+    setClock(at('2026-12-10', '06:00'));
+    await jobs.tick();
+    const morning = sent.find((e) => e.type === 'plan' && e.plan.kind === 'today');
+    assert.ok(morning && morning.type === 'plan');
+    assert.deepEqual(morning.plan.days[0].blocks, []);
+    assert.ok(morning.plan.days[0].events.some((e) => e.title === 'STA256H5 Final Exam'));
+
+    // the Sunday week draft: the exam day just has no auto blocks
+    setClock(at('2026-12-13', '22:30'));
+    cal.add('CSC236H5 Final Exam', '2026-12-16', '09:00', '12:00', { category: 'class' });
+    await jobs.tick();
+    const week = sent.find((e) => e.type === 'plan' && e.plan.kind === 'week');
+    assert.ok(week && week.type === 'plan');
+    assert.deepEqual(week.plan.days.find((d) => d.date === '2026-12-16')!.blocks, []);
+    assert.ok(week.plan.days.find((d) => d.date === '2026-12-14')!.blocks.length > 0);
+
+    // the words are a setting; [] turns it off; a quiz or a study session about a final is not a final
+    assert.throws(() => planner.updateSettings({ noDraftExamWords: 'final' }, 'hermes'), /noDraftExamWords/);
+    assert.deepEqual(planner.updateSettings({ noDraftExamWords: [] }, 'hermes').noDraftExamWords, []);
+    assert.equal(await planner.finalExamOn('2026-12-16'), null);
+    planner.updateSettings({ noDraftExamWords: ['final', '기말'] }, 'hermes');
+    cal.add('CSC236 Final Exam Prep', '2026-12-15', '09:00', '12:00', { category: 'study' });
+    assert.equal(await planner.finalExamOn('2026-12-15'), null);
+    assert.equal(await planner.finalExamOn('2026-12-16'), 'CSC236H5 Final Exam');
+  });
+
+  it('reminders: quiet events get none, close events come in one message, each event once', async () => {
+    const { cal, sent, jobs, setClock } = setup(at('2026-11-22', '11:50'));
+    cal.add('점심 (밀프렙)', '2026-11-22', '12:00', '12:30');
+    cal.add('S3 · STA256 연속확률변수', '2026-11-22', '12:00', '12:45', { location: 'UTM 도서관' });
+    cal.add('LeetCode 1문제', '2026-11-22', '12:20', '12:50');
+    cal.add('CSC207 강의', '2026-11-22', '13:00', '14:00');
+    for (const t of ['11:55', '12:15', '12:45', '12:55', '12:58']) {
+      setClock(at('2026-11-22', t));
+      await jobs.tick();
+    }
+    const reminders = sent.filter((e) => e.type === 'reminder').map((e) => (e.type === 'reminder' ? e.reminder : null)!);
+    assert.deepEqual(reminders.map((r) => [r.title, r.minutesBefore, (r.also ?? []).map((x) => x.title)]), [
+      ['S3 · STA256 연속확률변수', 5, ['LeetCode 1문제']],
+      ['CSC207 강의', 5, []],
+    ]);
+    assert.equal('also' in reminders[1], false, 'no also field when alone (older notifiers reject unknown fields)');
+  });
+
+  it('the evening draft time is a setting; the morning follows sleepEnd', () => {
+    const { planner } = setup();
+    assert.equal(draftMinutes(DEFAULT_SETTINGS), 22 * 60 + 30);
+    assert.equal(draftMinutes({ ...DEFAULT_SETTINGS, sleepStart: '23:30' }), 23 * 60);
+    assert.equal(draftMinutes({ ...DEFAULT_SETTINGS, sleepStart: '01:00' }), 23 * 60, 'after midnight: 23:00');
+    assert.equal(draftMinutes({ ...DEFAULT_SETTINGS, draftAt: '21:00' }), 21 * 60);
+    assert.equal(morningMinutes(DEFAULT_SETTINGS), 6 * 60);
+    assert.throws(() => planner.updateSettings({ draftAt: '12:00' }, 'hermes'), /draftAt/);
+    assert.equal(planner.updateSettings({ draftAt: '21:30', bundleMinutes: 0, quietEvents: ['점심'] }, 'hermes').draftAt, '21:30');
+    assert.equal(planner.updateSettings({ draftAt: null }, 'hermes').draftAt, null);
+    assert.throws(() => planner.updateSettings({ bundleMinutes: 500 }, 'hermes'), /bundleMinutes/);
+  });
+
+  it('records what really happened, never overwritten; todo progress follows; pace by course and category', async () => {
+    const { planner, cal, setClock, db } = setup(at('2026-11-27', '10:00'));
+    const todo = planner.addTodo({ title: 'S3 · STA256 연속확률변수', estimateMinutes: 300, deadline: '2026-11-30', kind: 'study' }, 'hermes');
+    const block = planner.addBlock({ date: '2026-11-27', start: '13:00', end: '14:15', todoId: todo.id }, 'hermes');
+    const tomorrow = planner.addBlock({ date: '2026-11-28', start: '13:00', end: '14:00', title: '내일 일' }, 'hermes');
+    const c2 = cal.add('C2 · CSC207 W08 MVC', '2026-11-27', '15:00', '16:15', { category: 'study' });
+    const leet = cal.add('LeetCode 1문제', '2026-11-27', '17:00', '17:30', { category: 'routine' });
+    setClock(at('2026-11-27', '20:00'));
+
+    const late = await planner.addReport({ blockId: block.id, status: 'late', actualEnd: '14:45', note: '문제가 어려웠음' }, 'hermes');
+    assert.deepEqual([late.report.minutes, late.report.plannedMinutes, late.report.course, late.todo!.doneMinutes, late.todo!.status], [105, 75, 'STA256', 105, 'open']);
+    const fixed = await planner.addReport({ corrects: late.report.id, status: 'late', minutes: 90, actualEnd: '14:30' }, 'hermes');
+    assert.equal(fixed.todo!.doneMinutes, 90, 'a correction adds only the difference');
+    await planner.addReport({ eventId: c2, status: 'partial', minutes: 75, percent: 50 }, 'hermes');
+    await planner.addReport({ eventId: leet, status: 'skipped', note: '피곤해서' }, 'hermes');
+    await planner.addReport({ title: '산책', date: '2026-11-27', status: 'done', minutes: 30 }, 'hermes');
+    await assert.rejects(planner.addReport({ blockId: tomorrow.id, status: 'done' }, 'hermes'), /not come yet/);
+    await assert.rejects(planner.addReport({ blockId: block.id, status: 'partial' }, 'hermes'), /how long/);
+    await assert.rejects(planner.addReport({ blockId: block.id, status: 'finished' }, 'hermes'), /status/);
+
+    assert.equal((db.prepare('SELECT COUNT(*) AS n FROM reports').get() as { n: number }).n, 5, 'corrections are new rows');
+    const day = await planner.day('2026-11-27');
+    assert.deepEqual(day.blocks.find((b) => b.id === block.id)!.reported, { reportId: fixed.report.id, status: 'late', minutes: 90, actualStart: null, actualEnd: '14:30' });
+    assert.equal(day.events.find((e) => e.id === leet)!.reported!.status, 'skipped');
+    assert.ok(planner.reports('2026-11-27', '2026-11-27').find((r) => r.id === late.report.id)!.correctedLater);
+
+    const pace = planner.pace(7);
+    const course = (k: string) => pace.byCourse.find((g) => g.key === k)!;
+    assert.deepEqual([course('STA256').plannedMinutes, course('STA256').actualMinutes, course('STA256').ratio, course('STA256').endDelayMinutes], [75, 90, 1.2, 15]);
+    assert.deepEqual([course('CSC207').plannedMinutes, course('CSC207').actualMinutes, course('CSC207').ratio], [38, 75, 2]);
+    assert.equal(pace.byCategory.find((g) => g.key === 'routine')!.skipped, 1);
+    assert.equal(pace.overall.reports, 4, 'the corrected report counts once');
+    assert.ok(planner.changes(30).some((c) => c.entity === 'report' && c.action === 'create'));
+    assert.ok(planner.changes(30).some((c) => c.entity === 'todo' && c.action === 'progress' && (c.detail as any).reason.startsWith('report #')));
+  });
+
+  it('a repeating event is checked on every occurrence in the horizon and names the dates', async () => {
+    const { planner, cal } = setup();
+    cal.add('CSC207H5 Final Exam', '2026-12-11', '17:00', '20:00', { category: 'class' });
+    const weekly = await planner.addEvent({ title: '금요 스터디', date: '2026-11-27', start: '17:00', end: '18:00', category: 'personal', repeat: 'weekly', dryRun: true }, 'hermes');
+    assert.deepEqual(weekly.overlaps.map((o) => [o.date, o.title, o.replaceable]), [['2026-12-11', 'CSC207H5 Final Exam', false]]);
+    const twice = await planner.addEvent({ title: '금요 스터디', date: '2026-11-27', start: '17:00', end: '18:00', category: 'personal', repeat: 'weekly', count: 2, dryRun: true }, 'hermes');
+    assert.deepEqual(twice.overlaps, []);
+    assert.deepEqual(occurrences(['RRULE:FREQ=WEEKLY;BYDAY=TU,TH;INTERVAL=2'], '2026-11-24', '2026-11-24', '2026-12-10', TZ), ['2026-11-24', '2026-11-26', '2026-12-08', '2026-12-10']);
+    assert.deepEqual(occurrences(['RRULE:FREQ=MONTHLY;BYDAY=-1TU'], '2026-11-24', '2026-11-24', '2027-01-31', TZ), ['2026-11-24', '2026-12-29', '2027-01-26']);
+    assert.deepEqual(occurrences(['RRULE:FREQ=DAILY;INTERVAL=3;COUNT=3'], '2026-11-20', '2026-11-22', '2026-12-31', TZ), ['2026-11-23', '2026-11-26']);
+    assert.deepEqual(occurrences(['RRULE:FREQ=WEEKLY;BYDAY=FR;UNTIL=20261205T045959Z'], '2026-11-27', '2026-11-21', '2026-12-31', TZ), ['2026-11-27', '2026-12-04']);
+  });
+
+  it('a one-off proposal item overlapping a weekly one is flagged', () => {
+    const { planner } = setup();
+    const p = planner.createProposal({ title: 't', items: [
+      { title: '월요 수업', date: '2026-11-23', start: '10:00', end: '11:00', category: 'class', repeat: 'weekly' },
+      { title: '치과', date: '2026-11-30', start: '10:30', end: '11:30', category: 'personal' },
+      { title: '화요 약속', date: '2026-11-24', start: '10:30', end: '11:30', category: 'personal' },
+    ] }, 'hermes');
+    assert.equal(p.warnings.length, 1, p.warnings.join('\n'));
+    assert.match(p.warnings[0], /월요 수업.*치과.*11\/30/);
+  });
+
+  it('drafts no crumbs and spreads blocks over the free gaps', () => {
+    const s = DEFAULT_SETTINGS;
+    const tiny = draftDay('2026-11-29', s, [], [{ id: 'sub', title: 'CSC207 A3 Submission', priority: 1, remaining: 5, deadline: '2026-11-29', earliest: null, createdAt: '' }]);
+    assert.deepEqual(tiny.blocks, []);
+    assert.deepEqual(tiny.tooSmall, [{ todoId: 'sub', title: 'CSC207 A3 Submission', minutes: 5 }]);
+    const split = draftDay('2026-11-29', s, [], [{ id: 'a', title: 'A', priority: 1, remaining: 100, deadline: '2026-11-29', earliest: null, createdAt: '' }]);
+    assert.deepEqual(split.blocks.map((b) => b.end - b.start), [75, 25], 'not 90 + a 10-minute crumb');
+    const busy = [{ start: 9 * 60, end: 17 * 60 }];
+    const two = draftDay('2026-11-29', s, busy, [
+      { id: 'a', title: 'A', priority: 1, remaining: 60, deadline: '2026-11-29', earliest: null, createdAt: '1' },
+      { id: 'b', title: 'B', priority: 1, remaining: 60, deadline: '2026-11-29', earliest: null, createdAt: '2' },
+    ]);
+    // the evening gap (17:10-22:30) is larger than the morning one (07:00-08:50); blocks spaced out inside it
+    assert.deepEqual(two.blocks.map((b) => [b.title, b.start, b.end]), [['A', 1090, 1150], ['B', 1220, 1280]]);
+    for (const b of [...split.blocks, ...two.blocks]) assert.ok(b.end - b.start >= s.minBlockMinutes);
+  });
+
+  it('moving an overnight event by its start keeps its length across midnight', async () => {
+    const { planner, cal } = setup();
+    const e = await planner.addEvent({ title: '밤샘 작업', date: '2026-11-22', start: '22:00', end: '01:00', endDate: '2026-11-23', category: 'task' }, 'hermes');
+    await planner.updateEvent(e.id, { start: '23:00' }, 'hermes');
+    const moved = cal.events.get(e.id)!;
+    assert.equal(moved.end, toInstant('2026-11-23', '02:00', TZ).toISOString());
+    const t = { kind: 'timed' as const, date: '2026-11-22', start: '22:00', end: '01:00', endDate: '2026-11-23' };
+    assert.deepEqual(movedTiming(t, { start: '20:00' }), { kind: 'timed', date: '2026-11-22', start: '20:00', end: '23:00' });
+    assert.deepEqual(movedTiming(t, { date: '2026-11-25' }), { ...t, date: '2026-11-25', endDate: '2026-11-26' });
+    assert.deepEqual(movedTiming(t, { end: '00:30' }), { ...t, end: '00:30' });
+    assert.throws(() => movedTiming({ kind: 'timed', date: '2026-11-22', start: '10:00', end: '11:00' }, { end: '09:00' }), /before end/);
+    assert.deepEqual(movedTiming({ kind: 'timed', date: '2026-11-22', start: '10:00', end: '11:00' }, { start: '23:30' }), { kind: 'timed', date: '2026-11-22', start: '23:30', end: '00:30', endDate: '2026-11-23' });
+  });
+
+  it('block_update reports overlaps; dryRun moves nothing', async () => {
+    const { planner, cal } = setup();
+    const b = planner.addBlock({ date: '2026-11-22', start: '10:00', end: '11:00', title: '독서' }, 'hermes');
+    cal.add('병원', '2026-11-22', '12:00', '13:00');
+    const preview = await planner.updateBlock(b.id, { start: '12:30', dryRun: true }, 'hermes');
+    assert.deepEqual([preview.dryRun, preview.start, preview.end, preview.overlaps.map((o) => o.title)], [true, '12:30', '13:30', ['병원']]);
+    assert.equal((await planner.day('2026-11-22')).blocks[0].start, '10:00');
+    const moved = await planner.updateBlock(b.id, { start: '12:30' }, 'hermes');
+    assert.deepEqual([moved.start, moved.overlaps.length], ['12:30', 1]);
+    assert.deepEqual((await planner.updateBlock(b.id, { title: '책' }, 'hermes')).overlaps, [], 'a rename checks nothing');
+  });
+
+  it('refuses a time in the past unless allowPast', async () => {
+    const { planner, cal } = setup(); // Saturday 2026-11-21 10:00
+    const ev = (over: Record<string, unknown>) => ({ title: 'x', date: '2026-11-21', start: '12:00', end: '13:00', category: 'personal', ...over });
+    await assert.rejects(planner.addEvent(ev({ date: '2026-11-20' }), 'hermes'), (e: PlannerError) => e.code === 'past_time' && /allowPast/.test(e.message));
+    await assert.rejects(planner.addEvent(ev({ start: '09:00', end: '09:30' }), 'hermes'), /already passed/);
+    await assert.rejects(planner.addEvent(ev({ start: '09:00', end: '09:30', dryRun: true }), 'hermes'), /already passed/, 'the preview says so too');
+    assert.ok((await planner.addEvent(ev({ start: '09:50', end: '10:30' }), 'hermes')).id, '10 minutes ago counts as now');
+    const logged = await planner.addEvent(ev({ date: '2026-11-20', allowPast: true }), 'hermes');
+    assert.ok(cal.events.has(logged.id));
+    await assert.rejects(planner.addEvent(ev({ date: '2026-11-01', repeat: 'weekly', until: '2026-11-15' }), 'hermes'), /series ends/);
+    assert.ok((await planner.addEvent(ev({ date: '2026-11-02', repeat: 'weekly' }), 'hermes')).id, 'a running series may start in the past');
+    assert.throws(() => planner.addBlock({ date: '2026-11-21', start: '08:00', end: '09:00', title: 'b' }, 'hermes'), /already passed/);
+    assert.ok(planner.addBlock({ date: '2026-11-21', start: '08:00', end: '09:00', title: 'b', allowPast: true }, 'hermes').id);
+    const later = await planner.addEvent(ev({ date: '2026-11-23' }), 'hermes');
+    await assert.rejects(planner.updateEvent(later.id, { date: '2026-11-19' }, 'hermes'), /in the past/);
+    await planner.updateEvent(later.id, { title: '새 이름' }, 'hermes');
+  });
+
+  it('records failures: a partly written confirm says what went in and continues on retry; job and notifier failures', async () => {
+    const { planner, cal, jobs, setClock } = setup();
+    planner.addBlock({ date: '2026-11-22', start: '10:00', end: '11:00', title: 'A' }, 'hermes');
+    planner.addBlock({ date: '2026-11-22', start: '12:00', end: '13:00', title: 'B' }, 'hermes');
+    await planner.cal();
+    const insert = cal.insertEvent.bind(cal);
+    let calls = 0;
+    cal.insertEvent = async (i) => {
+      if (++calls === 2) throw new GoogleError(503, 'Google Calendar POST failed: Backend Error');
+      return insert(i);
+    };
+    await assert.rejects(planner.confirm(['2026-11-22'], 'hermes'), (e: PlannerError) =>
+      e.code === 'calendar_partial' && /added 10:00-11:00 A/.test(e.message) && /add 12:00-13:00 B/.test(e.message));
+    const fail = planner.changes(5).find((c) => c.action === 'fail')!;
+    assert.deepEqual([fail.entity, (fail.detail as any).stage, (fail.detail as any).status, (fail.detail as any).written], ['plan', 'confirm', 503, ['added 10:00-11:00 A']]);
+    await planner.confirm(['2026-11-22'], 'hermes');
+    assert.equal([...cal.events.values()].filter((e) => e.plannerBlockId).length, 2, 'the retry continued, nothing doubled');
+
+    // a failing job is recorded once per error (not every tick), and its recovery too
+    const sync = planner.syncDeadlines.bind(planner);
+    planner.syncDeadlines = async () => { throw new GoogleError(500, 'Google Calendar PATCH failed: boom'); };
+    await jobs.tick();
+    setClock(SAT_10 + 30_000);
+    await jobs.tick();
+    assert.equal(planner.changes(50).filter((c) => c.action === 'fail' && c.entityId === 'deadlines').length, 1);
+    planner.syncDeadlines = sync;
+    await jobs.tick();
+    assert.ok(planner.changes(5).some((c) => c.action === 'recover' && c.entityId === 'deadlines'));
+
+    // an event write that fails is recorded with its stage
+    cal.insertEvent = async () => { throw new GoogleError(403, 'Google Calendar POST failed: Forbidden'); };
+    await assert.rejects(planner.addEvent({ title: '치과', date: '2026-11-24', start: '15:00', end: '16:00', category: 'personal' }, 'hermes'));
+    assert.equal((planner.changes(1)[0].detail as any).stage, 'event_add');
+  });
+
+  it('a notifier that rejects a message is recorded (not retried)', async () => {
+    const db = openDatabase(':memory:');
+    const account = new FakeAccount();
+    const clock = toInstant('2026-11-22', '06:00', TZ).getTime();
+    const google = new GoogleConnection(db, null, 'http://127.0.0.1:8720/oauth/callback', TZ, fetch, () => clock, account);
+    const planner = new Planner(db, google, TZ, () => clock);
+    account.managed.add('수업', '2026-11-22', '09:00', '10:00');
+    const jobs = new Jobs(db, planner, async () => { throw new NotifyError(400, 'Notifier answered 400: Unexpected plan fields: remind'); }, silent, () => clock);
+    await jobs.tick();
+    const fail = planner.changes(10).find((c) => c.action === 'fail')!;
+    assert.deepEqual([fail.entity, fail.entityId, (fail.detail as any).status], ['notify', 'plan:today:2026-11-22', 400]);
+  });
+
+  it('agenda: exams, deadlines and overdue todos ahead, sorted', async () => {
+    const { planner, cal } = setup();
+    cal.add('STA256H5 Final Exam', '2026-12-10', '17:00', '20:00', { category: 'class' });
+    cal.add('MAT223 Quiz 7', '2026-11-30', '09:00', '09:30', { category: 'class' });
+    cal.add('STA256 지난 시험 ① (시간 재기)', '2026-12-05', '09:00', '10:15', { category: 'study' });
+    cal.add('CSC236H5 Final Exam', '2027-01-30', '09:00', '12:00', { category: 'class' });
+    planner.addTodo({ title: 'HW#4', estimateMinutes: 120, deadline: '2026-12-01' }, 'hermes');
+    planner.addTodo({ title: 'FAS Technical Test', estimateMinutes: 120, deadline: '2026-11-20' }, 'hermes');
+    await planner.syncExamMarkers();
+    const a = await planner.agenda();
+    assert.deepEqual(a.items.map((i) => [i.kind, i.date, i.label ?? i.title]), [
+      ['overdue', '2026-11-20', 'FAS Technical Test'],
+      ['exam', '2026-11-30', 'MAT223 퀴즈 7 09:00–09:30'],
+      ['deadline', '2026-12-01', 'HW#4'],
+      ['exam', '2026-12-10', 'STA256 기말 17:00–20:00'],
+    ]);
+    assert.equal(a.items[3].daysLeft, 19);
+    assert.equal((await planner.agenda(90)).items.at(-1)!.title, 'CSC236H5 Final Exam');
+  });
+
+  it('todo_schedule: preview with overlaps, then just that block in the calendar, linked to the todo', async () => {
+    const { planner, cal } = setup();
+    const todo = planner.addTodo({ title: 'CSC207 A3', estimateMinutes: 120, deadline: '2026-11-25', kind: 'study' }, 'hermes');
+    cal.add('병원', '2026-11-22', '14:00', '15:00');
+    const preview = await planner.scheduleTodo(todo.id, { date: '2026-11-22', start: '14:30', end: '15:30', dryRun: true }, 'hermes');
+    assert.deepEqual([preview.dryRun, preview.overlaps.map((o) => o.title), cal.events.size], [true, ['병원'], 1]);
+    const done = await planner.scheduleTodo(todo.id, { date: '2026-11-22', start: '16:00', end: '17:00' }, 'hermes');
+    const block = done.block as Block;
+    assert.deepEqual([block.todoId, block.inCalendar, block.pending, block.category], [todo.id, true, false, 'study']);
+    assert.equal([...cal.events.values()].find((e) => e.plannerBlockId === block.id)!.summary, 'CSC207 A3');
+    // a redraft keeps it and plans the rest around it
+    const [day] = await planner.generate('2026-11-22', 1, 'hermes');
+    assert.ok(day.blocks.some((b) => b.id === block.id));
+    planner.progressTodo(todo.id, undefined, true, 'hermes');
+    await assert.rejects(planner.scheduleTodo(todo.id, { date: '2026-11-23', start: '10:00', end: '11:00' }, 'hermes'), /only open todos/);
+  });
+
+  it('warns when an exam or quiz sitting is added as a todo', () => {
+    const { planner } = setup();
+    assert.match(planner.addTodo({ title: 'FAS Technical Test', estimateMinutes: 120, deadline: '2026-11-26' }, 'hermes').warnings![0], /event_add/);
+    assert.equal(planner.addTodo({ title: 'STA256 기말 대비', estimateMinutes: 600 }, 'hermes').warnings, undefined);
+    assert.equal(planner.addTodo({ title: '장보기', estimateMinutes: 30 }, 'hermes').warnings, undefined);
+  });
+
+  it('writes logs to an append-only JSON-lines file per day', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'planner-log-'));
+    const out: string[] = [];
+    let now = new Date('2026-11-26T10:00:00Z');
+    const log = jsonLinesLogger(join(dir, 'logs'), 'planner', () => now, (l) => out.push(l));
+    log.info('request', { status: 200 });
+    log.warn('Job failed', { job: 'x' });
+    now = new Date('2026-11-27T00:00:01Z');
+    log.info('next day');
+    const first = readFileSync(join(dir, 'logs', 'planner-2026-11-26.jsonl'), 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    assert.deepEqual(first.map((l) => [l.level, l.msg]), [['info', 'request'], ['warn', 'Job failed']]);
+    assert.equal(readFileSync(join(dir, 'logs', 'planner-2026-11-27.jsonl'), 'utf8').trim().split('\n').length, 1);
+    assert.equal(out.length, 3, 'stdout too');
+    // a log file that cannot be written does not stop anything; said once
+    writeFileSync(join(dir, 'blocked'), 'x');
+    const broken = jsonLinesLogger(join(dir, 'blocked', 'logs'), 'planner', () => now, (l) => out.push(l));
+    broken.info('a');
+    broken.info('b');
+    assert.equal(out.filter((l) => l.includes('Cannot write the log file')).length, 1);
+  });
+});
+
+function toMin(t: string): number {
+  return Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+}

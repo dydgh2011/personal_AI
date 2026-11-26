@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readdirSync, readFileSync, rmdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -73,4 +73,35 @@ test('integrity check fails if a second platform block shadows the managed setti
   const result = runCheck(t, config + 'platform_toolsets:\r\n  discord: [terminal]\r\n');
   assert.equal(result.status, 1);
   assert.match(result.stderr, /repeated "platform_toolsets" keys/);
+});
+
+test('apply then check: the role section is replaced in place and other SOUL sections stay', (t) => {
+  const home = mkdtempSync(join(tmpdir(), 'hermes-config-apply-'));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
+  mkdirSync(join(home, 'backups'));
+  writeFileSync(join(home, 'config.yaml'), config);
+  const soul = '# Kelly\nBase persona.\n\n## Personal AI OS role\nOld role text.\n\n## Other notes\nKeep me.\n';
+  writeFileSync(join(home, 'SOUL.md'), soul);
+  const run = (...args) => spawnSync(process.execPath, [script, ...args], {
+    env: { ...process.env, HERMES_DATA_DIR: home }, encoding: 'utf8', windowsHide: true,
+  });
+  assert.equal(run('--check').status, 1);
+  assert.equal(run().status, 0);
+  const applied = readFileSync(join(home, 'SOUL.md'), 'utf8');
+  assert.ok(applied.includes(role.trim()));
+  assert.ok(!applied.includes('Old role text.'));
+  assert.ok(applied.startsWith('# Kelly\nBase persona.\n'));
+  assert.ok(applied.includes('## Other notes\nKeep me.'));
+  assert.equal(run('--check').status, 0);
+  assert.equal(readdirSync(join(home, 'backups')).length, 1);
+});
+
+test('the role section is one block the script can find again', () => {
+  const text = role.replace(/\r\n/g, '\n');
+  assert.equal(text.trim().split('\n## ').length, 1);
+  assert.ok(text.startsWith('## Personal AI OS role\n'));
+  // behaviour the plugin enforces in code is also told to the model (guard.py, change_summary.py)
+  for (const phrase of ['code blocks every Personal AI change', 'Planner settings change only after', '(🧾)']) {
+    assert.ok(role.includes(phrase), phrase);
+  }
 });

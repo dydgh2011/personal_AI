@@ -1,11 +1,14 @@
 import { readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { jsonLinesLogger } from './filelog.js';
 import { createNotifier, type Logger } from './notifier.js';
 import { FileStore } from './store.js';
 
-const logger: Logger = {
-  info: (msg, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg, ...fields })),
-  warn: (msg, fields = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'warn', msg, ...fields })),
-};
+const STATE_FILE = process.env.NOTIFIER_STATE_FILE || '/var/lib/notifier/sent.json';
+// In the notifier-data volume (/var/lib/notifier/logs/notifier-YYYY-MM-DD.jsonl): every request with its outcome
+// (delivered, duplicate, rejected, Discord status), so failed deliveries stay on record. "off": stdout only.
+const LOG_DIR = process.env.NOTIFIER_LOG_DIR?.trim() || join(dirname(STATE_FILE), 'logs');
+const logger: Logger = jsonLinesLogger(LOG_DIR === 'off' ? null : LOG_DIR, 'notifier');
 
 // Only real Discord webhooks: the URL comes from a secret file, but a wrong value must not
 // turn the notifier into a way to send data anywhere else.
@@ -59,7 +62,7 @@ function main(): void {
   const dashboardUrl = (process.env.NOTIFIER_DASHBOARD_URL || 'http://127.0.0.1:8710').replace(/\/+$/, '');
   if (!/^https?:\/\/[^\s/]+/.test(dashboardUrl)) throw new Error('NOTIFIER_DASHBOARD_URL must be an http(s) URL');
 
-  const store = new FileStore(process.env.NOTIFIER_STATE_FILE || '/var/lib/notifier/sent.json');
+  const store = new FileStore(STATE_FILE);
   const port = int('PORT', 8090, 1, 65535);
   const server = createNotifier(
     {

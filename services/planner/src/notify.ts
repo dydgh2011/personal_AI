@@ -1,6 +1,7 @@
 // Typed events to the notifier (the only service that can post to Discord).
 
 import type { DayView } from './planner.js';
+import type { Settings } from './schedule.js';
 
 export interface PlanDay {
   date: string;
@@ -9,6 +10,8 @@ export interface PlanDay {
   blocks: Array<{ start: string; end: string; title: string; category: string }>;
   events: Array<{ start: string | null; end: string | null; title: string; allDay: boolean; category: string | null }>;
   unscheduled: Array<{ title: string; minutes: number }>;
+  /** Open todos past their deadline (DayView.overdue); sent only when there are some. Needs notifier 2026-11-26+. */
+  overdue?: Array<{ title: string; deadline: string; minutes: number }>;
 }
 
 export interface PlanMessage {
@@ -17,6 +20,19 @@ export interface PlanMessage {
   calendarConnected: boolean;
   /** proposal: what was planned today, so the owner can say what got done. */
   todayBlocks?: Array<{ start: string; end: string; title: string }>;
+  /** How reminders work now (the real settings), for the "알려드릴게요" line. Needs notifier 2026-11-26b+. */
+  remind?: RemindInfo;
+}
+
+export interface RemindInfo {
+  minutes: number;
+  shortMinutes: number;
+  /** 0: no short-event rule. */
+  shortEventMinutes: number;
+  scope: 'all' | 'planner';
+  bundleMinutes: number;
+  /** Title words of events without a reminder. */
+  quiet: string[];
 }
 
 export interface ReminderMessage {
@@ -26,6 +42,19 @@ export interface ReminderMessage {
   minutesBefore: number;
   location: string | null;
   fromPlanner: boolean;
+  /** Events starting soon after this one, reminded together (bundleMinutes). Needs notifier 2026-11-26b+. */
+  also?: Array<{ title: string; start: string; location: string | null }>;
+}
+
+export function remindInfo(s: Settings): RemindInfo {
+  return {
+    minutes: s.remindMinutes,
+    shortMinutes: s.shortRemindMinutes,
+    shortEventMinutes: s.shortEventMinutes,
+    scope: s.remindScope,
+    bundleMinutes: s.bundleMinutes,
+    quiet: s.quietEvents.slice(0, 30),
+  };
 }
 
 export interface CalendarMessage {
@@ -50,6 +79,7 @@ export function planDay(view: DayView): PlanDay {
     blocks: view.blocks.map((b) => ({ start: b.start, end: b.end, title: b.title, category: b.category })),
     events: view.events.map((e) => ({ start: e.start, end: e.end, title: e.title, allDay: e.allDay, category: e.category })),
     unscheduled: view.unscheduled.map((u) => ({ title: u.title, minutes: u.minutes })),
+    ...(view.overdue.length ? { overdue: view.overdue.slice(0, 20).map((o) => ({ title: o.title, deadline: o.deadline, minutes: Math.min(o.minutes, 6000) })) } : {}),
   };
 }
 

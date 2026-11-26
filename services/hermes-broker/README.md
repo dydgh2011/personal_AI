@@ -18,6 +18,10 @@ Hermes 도구는 `X-Broker-Key`로 인증한 뒤 `http://hermes-broker:8080`을 
 - 응답에 토큰 문자열이 섞이면 `[redacted]`로 바꿈(방어용). 감사 로그는 JSON 한 줄: 작업 ID, agent, 프로젝트, 지시문 글자 수(내용 없음), 상태 코드
 - Node 22 내장 모듈만 사용, 비root, read-only rootfs, cap_drop ALL, 128MB / 0.5 CPU / 64 pids, 호스트 포트 없음
 
+## planner 경로
+
+`/planner/...`는 planner의 고정 경로만 `X-Planner-Key`를 붙여 넘깁니다(`src/broker.ts`의 `plannerRoutes`). 2026-11-26 추가: `POST /planner/todos/:uuid/schedule`, `POST /planner/reports`, `GET /planner/pace?days=`, `GET /planner/agenda?days=`. 쓰기(POST)는 분당 30회로 제한하되, 아무것도 쓰지 않는 겹침 미리보기(`"dryRun": true`)는 세지 않습니다.
+
 ## 학습 조회와 일정 시안
 
 | Method | Path |

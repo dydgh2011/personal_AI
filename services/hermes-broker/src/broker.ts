@@ -243,6 +243,10 @@ function plannerRoutes(): Route[] {
     p('POST', '/todos', 'todos.add'),
     p('POST', `/todos/${TASK_ID}/update`, 'todos.update'),
     p('POST', `/todos/${TASK_ID}/progress`, 'todos.progress'),
+    p('POST', `/todos/${TASK_ID}/schedule`, 'todos.schedule'),
+    p('POST', '/reports', 'reports.add'),
+    p('GET', '/pace', 'pace', { days: (v) => /^\d{1,3}$/.test(v) }),
+    p('GET', '/agenda', 'agenda', { days: (v) => /^\d{1,3}$/.test(v) }),
     p('GET', '/settings', 'settings.get'),
     p('POST', '/settings', 'settings.update'),
     p('GET', '/changes', 'changes', { limit: (v) => /^\d{1,3}$/.test(v) }),
@@ -378,7 +382,9 @@ export function createBroker(config: BrokerConfig, logger: Logger, now: () => nu
           if (typeof value !== 'object' || value === null || Array.isArray(value)) throw new HttpError(400, 'Body must be a JSON object');
           if (target === 'learning') validateLearningProposal(value as Record<string, unknown>);
           body = JSON.stringify(value);
-          consumeRateLimit(writes[target], writesPerMinute[target], now(), target === 'learning' ? 'learning proposals' : `${label} changes`);
+          // A planner dry run (overlap preview) writes nothing: it does not use up the write budget.
+          const preview = target === 'planner' && (value as Record<string, unknown>).dryRun === true;
+          if (!preview) consumeRateLimit(writes[target], writesPerMinute[target], now(), target === 'learning' ? 'learning proposals' : `${label} changes`);
         } else if (target === 'learning') {
           consumeRateLimit(learningQueries, config.learningQueriesPerMinute ?? 60, now(), 'learning queries');
         }

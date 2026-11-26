@@ -43,6 +43,14 @@ function dateParam(query: URLSearchParams, name: string, fallback: string): stri
   return v;
 }
 
+function intParam(query: URLSearchParams, name: string, fallback: number, min: number, max: number): number {
+  const v = query.get(name);
+  if (v === null) return fallback;
+  const n = /^\d{1,4}$/.test(v) ? Number(v) : NaN;
+  if (!(n >= min && n <= max)) throw new HttpError(400, 'invalid_request', `${name} must be a whole number ${min}-${max}`);
+  return n;
+}
+
 /**
  * Internal API for the hermes-broker (and operators). Every route is listed here with its input
  * checks in Planner; callers must send X-Planner-Key. Not published on the host.
@@ -111,7 +119,7 @@ export function createApi(planner: Planner, notify: Notify, clientKeys: Array<{ 
       method: 'POST',
       pattern: new RegExp(`^/blocks/(${UUID})/update$`),
       name: 'blocks.update',
-      handler: ({ body, params, actor }) => ({ block: planner.updateBlock(params[0], body, actor) }),
+      handler: async ({ body, params, actor }) => ({ block: await planner.updateBlock(params[0], body, actor) }),
     },
     {
       method: 'POST',
@@ -132,7 +140,15 @@ export function createApi(planner: Planner, notify: Notify, clientKeys: Array<{ 
         return { todos: planner.listTodos(status as 'open' | 'done' | 'all') };
       },
     },
-    { method: 'POST', pattern: /^\/todos$/, name: 'todos.add', handler: ({ body, actor }) => ({ todo: planner.addTodo(body, actor) }) },
+    {
+      method: 'POST',
+      pattern: /^\/todos$/,
+      name: 'todos.add',
+      handler: ({ body, actor }) => {
+        const { warnings, ...todo } = planner.addTodo(body, actor);
+        return warnings ? { todo, warnings } : { todo };
+      },
+    },
     {
       method: 'POST',
       pattern: new RegExp(`^/todos/(${UUID})/update$`),
@@ -149,6 +165,15 @@ export function createApi(planner: Planner, notify: Notify, clientKeys: Array<{ 
         return { todo: planner.progressTodo(params[0], body.minutes as number | undefined, body.done === true, actor) };
       },
     },
+    {
+      method: 'POST',
+      pattern: new RegExp(`^/todos/(${UUID})/schedule$`),
+      name: 'todos.schedule',
+      handler: ({ body, params, actor }) => planner.scheduleTodo(params[0], body, actor),
+    },
+    { method: 'POST', pattern: /^\/reports$/, name: 'reports.add', handler: ({ body, actor }) => planner.addReport(body, actor) },
+    { method: 'GET', pattern: /^\/pace$/, name: 'pace', handler: ({ query }) => planner.pace(intParam(query, 'days', 28, 1, 365)) },
+    { method: 'GET', pattern: /^\/agenda$/, name: 'agenda', handler: ({ query }) => planner.agenda(intParam(query, 'days', 30, 1, 180)) },
     { method: 'GET', pattern: /^\/settings$/, name: 'settings.get', handler: () => ({ settings: planner.settings() }) },
     { method: 'POST', pattern: /^\/settings$/, name: 'settings.update', handler: ({ body, actor }) => ({ settings: planner.updateSettings(body, actor) }) },
     {

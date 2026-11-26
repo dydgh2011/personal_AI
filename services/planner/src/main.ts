@@ -1,16 +1,18 @@
 import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { createApi, createOAuthServer } from './api.js';
 import { GoogleConnection } from './connection.js';
 import { openDatabase } from './db.js';
+import { jsonLinesLogger } from './filelog.js';
 import { parseClientFile, type OAuthClient } from './google.js';
 import { Jobs } from './jobs.js';
 import { notifierClient, type Notify } from './notify.js';
 import { Planner } from './planner.js';
 
-const logger = {
-  info: (msg: string, fields: Record<string, unknown> = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'info', msg, ...fields })),
-  warn: (msg: string, fields: Record<string, unknown> = {}) => console.log(JSON.stringify({ ts: new Date().toISOString(), level: 'warn', msg, ...fields })),
-};
+const DB_FILE = process.env.PLANNER_DB_FILE || '/var/lib/planner/planner.db';
+// Next to the database in the planner-data volume (/var/lib/planner/logs/planner-YYYY-MM-DD.jsonl); "off": stdout only.
+const LOG_DIR = process.env.PLANNER_LOG_DIR?.trim() || join(dirname(DB_FILE), 'logs');
+const logger = jsonLinesLogger(LOG_DIR === 'off' ? null : LOG_DIR, 'planner');
 
 function int(name: string, fallback: number, min: number, max: number): number {
   const raw = process.env[name]?.trim();
@@ -72,7 +74,7 @@ function main(): void {
     throw new Error('PLANNER_REDIRECT_URI must be http://127.0.0.1:<port>/oauth/callback (Google allows loopback redirects for desktop clients)');
   }
 
-  const db = openDatabase(process.env.PLANNER_DB_FILE || '/var/lib/planner/planner.db');
+  const db = openDatabase(DB_FILE);
   const google = new GoogleConnection(db, oauthClient, redirectUri, timeZone);
   const planner = new Planner(db, google, timeZone);
 
