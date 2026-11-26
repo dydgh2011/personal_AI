@@ -128,7 +128,7 @@ class ToolTest(unittest.TestCase):
         self.assertTrue(added["ok"])
         self.assertEqual(self.mock.planner_calls[-1][2], {"title": "치과", "date": "2026-11-24", "category": "personal",
                                                           "start": "15:00", "end": "16:00"})
-        weekly = self.planner(action="event_add", title="헬스", date="2026-11-23", start="07:00", end="08:00", category="routine",
+        weekly = self.planner(action="event_add", title="헬스", date="2026-11-24", start="07:00", end="08:00", category="routine",
                               repeat="weekly", repeat_days=["MO", "TH"], until="2026-12-31")
         self.assertTrue(weekly["ok"])
         self.assertEqual(self.mock.planner_calls[-1][2]["repeatDays"], ["MO", "TH"])
@@ -139,7 +139,8 @@ class ToolTest(unittest.TestCase):
             self.assertEqual(self.planner(action=action, event_id="evt123abc", start="16:00")["error"]["code"], "needs_confirmation")
         self.assertEqual(self.planner(action="proposal_apply", proposal="A")["error"]["code"], "needs_confirmation")
         self.assertEqual(self.planner(action="import_apply", items=[1])["error"]["code"], "usage_error", "no direct import any more")
-        self.assertEqual(len(self.mock.planner_calls), calls, "nothing sent without the OK")
+        sent = self.mock.planner_calls[calls:]
+        self.assertTrue(all(c[2] and c[2].get("dryRun") is True for c in sent), f"only previews without the OK: {sent}")
         self.assertTrue(self.planner(action="event_remove", event_id="evt123abc", scope="series", confirmed_by_user=True)["ok"])
         self.assertEqual(self.mock.planner_calls[-1][1:], ("/planner/events/evt123abc/remove", {"scope": "series"}))
 
@@ -147,6 +148,52 @@ class ToolTest(unittest.TestCase):
         found = self.planner(action="reference_search", text="gym", calendar_name="Rountine")
         self.assertEqual(found["display"], "[Rountine] Gym · 매주 화·수·목 19:00–21:00")
         self.assertEqual(self.mock.planner_calls[-1][2], {"text": "gym", "calendar": "Rountine"})
+
+    def test_planner_overlaps_ask_first_and_replace_only_after_the_answer(self):
+        args = dict(action="event_add", title="HW#4", date="2026-11-23", start="08:00", end="10:00", category="study")
+        asked = self.planner(**args)
+        self.assertEqual(asked["error"]["code"], "needs_confirmation")
+        self.assertIn("07:00-08:30 알고리즘 과제", asked["error"]["message"])
+        self.assertIn("09:00-11:00 CSC263 (그대로 둠", asked["error"]["message"])
+        self.assertTrue(all(c[2].get("dryRun") for c in self.mock.planner_calls), "nothing written before the answer")
+        done = self.planner(**args, replace=True, confirmed_by_user=True)
+        self.assertTrue(done["ok"])
+        self.assertEqual(self.mock.planner_calls[-1][2]["replace"], True)
+        self.assertIn("대체해서 지운 것", done["display"])
+        self.assertIn("아직 겹치는 것:\n  09:00-11:00 CSC263", done["display"])
+        # no overlap: written at once; all-day: no preview
+        self.assertTrue(self.planner(action="event_add", title="치과", date="2026-11-24", start="15:00", end="16:00", category="personal")["ok"])
+        n = len(self.mock.planner_calls)
+        self.assertTrue(self.planner(action="event_add", title="시험(이날): X", date="2026-11-23", all_day=True, category="class")["ok"])
+        self.assertEqual(len(self.mock.planner_calls), n + 1)
+        # a plan block on top of something: asked, and pointed to replace
+        blk = self.planner(action="block_add", date="2026-11-23", start="09:30", end="10:00", title="x")
+        self.assertEqual(blk["error"]["code"], "needs_confirmation")
+        self.assertIn("replace=true", blk["error"]["message"])
+
+    def test_confirmation_needs_an_owner_turn_between_preview_and_ok(self):
+        import guard as g
+        gate = g.ConfirmationGate(clock=lambda: 1000.0)
+        args = {"action": "event_remove", "event_id": "e1"}
+        ok = {**args, "confirmed_by_user": True}
+        # Kelly sets the OK herself without showing anything: blocked
+        self.assertIn("not shown to the owner", gate.check("personal_ai_planner", ok, "s1", "t1"))
+        # preview and OK in the same turn: blocked
+        self.assertIsNone(gate.check("personal_ai_planner", args, "s1", "t1"))
+        self.assertIn("same turn", gate.check("personal_ai_planner", ok, "s1", "t1"))
+        # the owner answered (new turn): accepted once; replace does not change what was shown
+        self.assertIsNone(gate.check("personal_ai_planner", {**ok, "replace": True}, "s1", "t2"))
+        self.assertIsNotNone(gate.check("personal_ai_planner", ok, "s1", "t3"), "a preview is used once")
+        # different arguments or another session: not the change that was shown
+        gate.check("personal_ai_planner", args, "s1", "t4")
+        self.assertIsNotNone(gate.check("personal_ai_planner", {**ok, "event_id": "e2"}, "s1", "t5"))
+        self.assertIsNotNone(gate.check("personal_ai_planner", ok, "s2", "t5"))
+        # other tools and calls without session info are not gated
+        self.assertIsNone(gate.check("web_search", {"confirmed_by_user": True}, "s1", "t6"))
+        self.assertIsNone(gate.check("personal_ai_planner", ok, "", ""))
+        # the hook wires it in
+        self.assertEqual(g.pre_tool_call("personal_ai_school", {"action": "deadline_dismiss", "confirmed_by_user": True},
+                                         session_id="s9", turn_id="t1")["action"], "block")
 
     def test_planner_proposals(self):
         made = self.planner(action="proposal_create", title="루틴 시안 A", items=[

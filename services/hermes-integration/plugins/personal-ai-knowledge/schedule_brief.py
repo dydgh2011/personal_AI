@@ -184,6 +184,8 @@ def _planner_items() -> list[dict[str, Any]]:
             for day in data.get("days", []) if isinstance(data, dict) else []:
                 for e in day.get("events", []):
                     title = str(e.get("title") or "")
+                    if e.get("examMarker") or title.startswith("시험(이날)"):
+                        continue  # the exam itself is listed; its all-day marker would be a duplicate
                     if not (e.get("deadline") or e.get("category") == "deadline" or EVENT_WORTH.search(title)):
                         continue
                     y, mo, d = (int(x) for x in str(day["date"]).split("-"))

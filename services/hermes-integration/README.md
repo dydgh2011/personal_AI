@@ -252,3 +252,15 @@ docker run --rm --network none -e PYTHONDONTWRITEBYTECODE=1 -v "${PWD}\services\
 - 브로커 키 파일에 접근할 수 있는 Hermes 프로세스는 호출 자격을 공유합니다. 프로세스별 격리가 필요하면 게이트웨이와 도구 실행을 별도 Unix 사용자 또는 컨테이너로 나눕니다.
 - `pre_tool_call` 가드는 패턴 기반이라 의도적인 난독화를 모두 막지는 못합니다. 주 통제는 toolset 제거와 인증 정보 부재입니다.
 - Hermes(LLM)가 쓸 수 있는 `browser`, `web`, `cronjob`, `memory` 등은 유지됩니다. cron 작업도 같은 축소 toolset으로 실행됩니다.
+
+## Discord 대화 매일 새로 시작 (2026-11-26)
+
+Hermes 본체는 시간 기준 대화 초기화를 없앴다. 그래서 Discord 대화가 며칠씩 한 세션으로 이어지고, 압축할 때 옛 대화가 다시 섞였다. 주인이 공식 카탈로그의 커뮤니티 플러그인 `hermes-session-reset-policy`(커밋 `0f2ea5ad995f1e4ba7c92c2dbd21afa868b8ae21` 고정)를 설치했다. 위치는 `data/hermes/plugins/`. 설정은 `data/hermes/config.yaml`의 `session_reset: {mode: daily, at_hour: 9}`.
+
+- 하루가 지난 뒤 첫 메시지에서 `/new`와 같은 방식으로 새 대화를 시작한다. 타이머나 백그라운드 작업은 없다.
+- 컨테이너 시계가 UTC라 `at_hour: 9`는 토론토 04:00(겨울), 05:00(여름)이다.
+- 대화 기록은 지식 저장소와 `state.db`에 그대로 남는다.
+- 확인: `agent.log`의 `session-reset-policy: reset` 줄.
+- 끄기: `session_reset.mode: none` 후 hermes 재시작.
+- 업데이트는 카탈로그의 커밋 고정값이 바뀔 때만 한다(`hermes plugins update`). 그때 코드를 다시 검토한다.
+

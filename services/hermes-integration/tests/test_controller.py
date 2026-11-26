@@ -150,9 +150,21 @@ class MockController:
                         return self._send(200, {"days": [day]})
                     if method == "POST" and sub[:1] == ["todos"]:
                         return self._send(200, {"todo": todo})
-                    if method == "POST" and sub == ["events"]:
-                        return self._send(200, {"event": {"id": "evt123abc", "title": "치과", "category": "personal",
-                                                          "when": "11/24(화) 15:00–16:00"}})
+                    if method == "POST" and sub[:1] == ["events"] and sub[-1:] != ["remove"]:
+                        body = json.loads(raw) if raw else {}
+                        # like the planner: what is already on 2026-11-23 before 11:00 overlaps
+                        overlaps = []
+                        if body.get("date", "2026-11-23") == "2026-11-23" and body.get("start", "99:99") < "11:00":
+                            overlaps = [{"kind": "block", "id": day["blocks"][0]["id"], "title": "알고리즘 과제", "start": "07:00",
+                                         "end": "08:30", "category": "study", "location": None, "repeating": False, "replaceable": True},
+                                        {"kind": "event", "id": "lec1_20261123T140000Z", "title": "CSC263", "start": "09:00",
+                                         "end": "11:00", "category": "class", "location": None, "repeating": True, "replaceable": False}]
+                        replaced = [o for o in overlaps if o["replaceable"]] if body.get("replace") and not body.get("dryRun") else []
+                        if sub == ["events"]:
+                            return self._send(200, {"event": {"id": "" if body.get("dryRun") else "evt123abc", "title": body.get("title", "치과"),
+                                                              "category": body.get("category", "personal"), "when": "11/24(화) 15:00–16:00",
+                                                              "overlaps": overlaps, "replaced": replaced}})
+                        return self._send(200, {"event": {"id": sub[1], "scope": "this", "overlaps": overlaps, "replaced": replaced}})
                     if method == "POST" and sub[:1] == ["events"]:
                         return self._send(200, {"id": sub[1], "scope": "this"})
                     if method == "GET" and sub == ["calendars"]:

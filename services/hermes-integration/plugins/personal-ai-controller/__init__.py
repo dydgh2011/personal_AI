@@ -185,7 +185,14 @@ PLANNER_SCHEMA: dict[str, Any] = {
         "(deadline change or status archived needs confirmed_by_user), todo_progress (minutes and/or done=true). "
         "event_add (title, date, start/end or all_day, category, repeat?, interval?, repeat_days?, monthly_by?, "
         "until? or count?, location?): a fixed event the user asked for. event_update / event_remove (event_id, scope "
-        "this|series, confirmed_by_user). The user's old calendars are reference only, never copied as they are: "
+        "this|series, confirmed_by_user). Never choose a time the user did not give: ask. event_add, event_update and "
+        "block_add check what is already planned in that time; when something overlaps nothing is written and you get "
+        "the list: show it, ask keep both / replace / another time, end your turn, then call again with "
+        "confirmed_by_user=true (+ replace=true when the user said the new one replaces the old ones; classes, exams, "
+        "travel and repeating events are never removed). After a replace, tell the user what was removed and offer to "
+        "move it. To put something in place of existing items use replace, never add a second copy (no extra block). "
+        "Every confirmed_by_user=true must come in a later turn than the call that showed the change, after the user "
+        "answered: code checks this. The user's old calendars are reference only, never copied as they are: "
         "calendars, reference_sync, reference_search (text, calendar_name, date/until, repeating). To set up the "
         "schedule, make proposals (drafts of fixed events) the user picks from: proposal_create (title, items), "
         "proposal_list, proposal_show (proposal), proposal_edit (proposal, add_items, update_items [{n, ...}], "
@@ -253,7 +260,10 @@ PLANNER_SCHEMA: dict[str, Any] = {
                          "places [{name, match[]}], travel [{from, to, minutes}], protectedEvents [title words]."},
             "limit": {"type": "integer", "minimum": 1, "maximum": 200},
             "confirmed_by_user": {"type": "boolean", "description": "true only when the user explicitly agreed to this "
-                                  "exact change in the conversation (confirm, deadline change, dropping a todo)."},
+                                  "exact change in the conversation (confirm, deadline change, dropping a todo, an overlap)."},
+            "replace": {"type": "boolean", "description": "event_add/event_update: the user said the new time replaces what "
+                        "is there; removes overlapping plan blocks and one-off events (never classes, exams, travel, "
+                        "repeating events). Needs confirmed_by_user."},
         },
         "required": ["action"],
         "additionalProperties": False,

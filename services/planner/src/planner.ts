@@ -77,6 +77,22 @@ export interface EventView {
   category: Category | null;
   /** A deadline marker the planner keeps for a todo (change the todo, not the event). */
   deadline: boolean;
+  /** An all-day "시험(이날)" marker the planner keeps for an exam event (change the exam event). */
+  examMarker: boolean;
+}
+
+/** Something already planned in the time of a new or moved event. */
+export interface Overlap {
+  kind: 'event' | 'block';
+  id: string;
+  title: string;
+  start: string;
+  end: string;
+  category: Category | null;
+  location: string | null;
+  repeating: boolean;
+  /** replace=true removes it: plan blocks and one-off events; never classes, exams, travel or repeating events. */
+  replaceable: boolean;
 }
 
 export type Repeat = 'none' | 'daily' | 'weekdays' | 'weekly' | 'biweekly' | 'monthly' | 'yearly';
@@ -679,6 +695,7 @@ export class Planner {
           location: e.location,
           category: e.category,
           deadline: e.deadlineTodoId !== null,
+          examMarker: e.examSourceId !== null,
         };
       });
     const busy = this.busyFrom(events ?? [], day);
@@ -766,13 +783,15 @@ export class Planner {
     return toBlock(this.blockRow(id));
   }
 
-  removeBlock(id: string, actor: Actor): void {
+  removeBlock(id: string, actor: Actor, reason?: string): void {
     const row = this.blockRow(id);
     transaction(this.db, () => {
       if (row.google_event_id) this.db.prepare('UPDATE blocks SET removed = 1, updated_at = ? WHERE id = ?').run(this.iso(), id);
       else this.db.prepare('DELETE FROM blocks WHERE id = ?').run(id);
       this.markEdited(row.date);
-      this.log(actor, 'remove', 'block', id, { date: row.date, start: row.start, end: row.end, title: row.title });
+      this.log(actor, 'remove', 'block', id, {
+        date: row.date, start: row.start, end: row.end, title: row.title, todoId: row.todo_id, category: row.category, ...(reason ? { reason } : {}),
+      });
     });
   }
 
@@ -904,13 +923,60 @@ export class Planner {
     };
   }
 
-  /** Fixed events the owner asked for, written straight to the managed calendar. */
-  async addEvent(body: Record<string, unknown>, actor: Actor): Promise<{ id: string; title: string; category: Category; when: string }> {
-    const spec = this.eventSpec(body);
+  /**
+   * Fixed events the owner asked for, written straight to the managed calendar.
+   * dryRun: nothing is written; returns what is already planned in that time (overlaps).
+   * replace: after writing, removes the replaceable overlaps (the owner said the new event replaces them).
+   */
+  async addEvent(
+    body: Record<string, unknown>,
+    actor: Actor,
+  ): Promise<{ id: string; title: string; category: Category; when: string; overlaps: Overlap[]; replaced: Overlap[]; dryRun?: true }> {
+    const { dryRun, replace, rest } = runFlags(body);
+    const spec = this.eventSpec(rest);
     const cal = await this.requireCal();
+    const overlaps = await this.overlaps(spec.timing);
+    const when = describeWhen(spec.timing, spec.recurrence, this.timeZone);
+    if (dryRun) return { id: '', title: spec.title, category: spec.category, when, overlaps, replaced: [], dryRun: true };
     const id = await cal.insertEvent(specInput(spec));
-    this.log(actor, 'create', 'event', id, { title: spec.title, category: spec.category, timing: spec.timing, recurrence: spec.recurrence });
-    return { id, title: spec.title, category: spec.category, when: describeWhen(spec.timing, spec.recurrence, this.timeZone) };
+    this.log(actor, 'create', 'event', id, {
+      title: spec.title, category: spec.category, timing: spec.timing, recurrence: spec.recurrence, location: spec.location, notes: spec.notes,
+      overlaps, replace,
+    });
+    const replaced = replace ? await this.replaceOverlaps(overlaps, actor, id) : [];
+    return { id, title: spec.title, category: spec.category, when, overlaps, replaced };
+  }
+
+  /** Timed events and plan blocks that share time with `timing` (one day; all-day items never count). */
+  async overlaps(timing: Timing, skip: { eventId?: string; blockId?: string } = {}): Promise<Overlap[]> {
+    if (timing.kind !== 'timed') return [];
+    const view = await this.day(timing.date, { reconcile: false });
+    const lo = toMinutes(timing.start);
+    const hi = timing.endDate && timing.endDate !== timing.date ? 24 * 60 : toMinutes(timing.end);
+    const hits = (start: string | null, end: string | null) => start !== null && end !== null && toMinutes(start) < hi && lo < toMinutes(end);
+    const out: Overlap[] = [];
+    for (const e of view.events) {
+      if (e.allDay || e.deadline || e.examMarker || e.id === skip.eventId || !hits(e.start, e.end)) continue;
+      const repeating = e.seriesId !== null;
+      const replaceable = !repeating && e.category !== 'class' && !EXAM_TITLE.test(e.title) && !TRAVEL_TITLE.test(e.title);
+      out.push({ kind: 'event', id: e.id, title: e.title, start: e.start!, end: e.end!, category: e.category, location: e.location, repeating, replaceable });
+    }
+    for (const b of view.blocks) {
+      if (b.id === skip.blockId || !hits(b.start, b.end)) continue;
+      out.push({ kind: 'block', id: b.id, title: b.title, start: b.start, end: b.end, category: b.category, location: null, repeating: false, replaceable: true });
+    }
+    return out.sort((a, b) => toMinutes(a.start) - toMinutes(b.start));
+  }
+
+  /** Removes the replaceable overlaps; every removal is logged with what was removed and why. */
+  private async replaceOverlaps(overlaps: Overlap[], actor: Actor, by: string): Promise<Overlap[]> {
+    const replaced: Overlap[] = [];
+    for (const o of overlaps.filter((x) => x.replaceable)) {
+      if (o.kind === 'block') this.removeBlock(o.id, actor, `replaced by event ${by}`);
+      else await this.removeEvent(o.id, { scope: 'this' }, actor, `replaced by event ${by}`);
+      replaced.push(o);
+    }
+    return replaced;
   }
 
   /** timed: date + start + end (end after midnight: endDate); all-day: date (+ endDate, inclusive). */
@@ -938,6 +1004,7 @@ export class Planner {
     if (!event || event.status === 'cancelled') throw new PlannerError(404, 'not_found', `Event ${id} not found in the managed calendar`);
     if (event.plannerBlockId) throw bad('This is a plan block: use block_update / block_remove');
     if (event.deadlineTodoId) throw bad('This is a deadline marker: change the todo (todo_update) instead');
+    if (event.examSourceId) throw bad('This is an exam-day marker the planner keeps: change the exam event itself instead');
     if (scope === 'series') {
       const seriesId = event.recurrence ? event.id : event.recurringEventId;
       if (!seriesId) throw bad('This event does not repeat: use scope "this"');
@@ -948,7 +1015,12 @@ export class Planner {
     return event;
   }
 
-  async updateEvent(id: string, body: Record<string, unknown>, actor: Actor): Promise<{ id: string; scope: string }> {
+  async updateEvent(
+    id: string,
+    raw: Record<string, unknown>,
+    actor: Actor,
+  ): Promise<{ id: string; scope: string; overlaps: Overlap[]; replaced: Overlap[]; dryRun?: true }> {
+    const { dryRun, replace, rest: body } = runFlags(raw);
     only(body, ['title', 'date', 'start', 'end', 'category', 'location', 'notes', 'scope', 'repeat', ...REPEAT_FIELDS]);
     const scope = (body.scope ?? 'this') as 'this' | 'series';
     if (scope !== 'this' && scope !== 'series') throw bad('scope must be "this" (one occurrence) or "series" (every occurrence)');
@@ -985,23 +1057,32 @@ export class Planner {
       recurrence: repeatChange ? repeatRule(body, timing, this.timeZone) : scope === 'series' ? event.recurrence : undefined,
       importedFrom: event.importedFrom ?? undefined,
     };
+    const moved = timing !== current;
+    const overlaps = moved ? await this.overlaps(timing, { eventId: id }) : [];
+    if (dryRun) return { id: event.id, scope, overlaps, replaced: [], dryRun: true };
     await cal.patchEvent(event.id, input);
     this.log(actor, 'update', 'event', event.id, {
       scope,
-      before: { title: event.summary, timing: current, category: event.category, location: event.location },
-      after: { title: input.summary, timing, category: input.category, location: input.location, ...(repeatChange ? { recurrence: input.recurrence } : {}) },
+      before: { title: event.summary, timing: current, category: event.category, location: event.location, notes: event.description },
+      after: { title: input.summary, timing, category: input.category, location: input.location, notes: input.description, ...(repeatChange ? { recurrence: input.recurrence } : {}) },
+      overlaps, replace,
     });
-    return { id: event.id, scope };
+    const replaced = replace ? await this.replaceOverlaps(overlaps, actor, event.id) : [];
+    return { id: event.id, scope, overlaps, replaced };
   }
 
-  async removeEvent(id: string, body: Record<string, unknown>, actor: Actor): Promise<{ removed: string; scope: string }> {
+  async removeEvent(id: string, body: Record<string, unknown>, actor: Actor, reason?: string): Promise<{ removed: string; scope: string }> {
     only(body, ['scope']);
     const scope = (body.scope ?? 'this') as 'this' | 'series';
     if (scope !== 'this' && scope !== 'series') throw bad('scope must be "this" or "series"');
     const cal = await this.requireCal();
     const event = await this.editable(cal, id, scope);
     await cal.deleteEvent(event.id);
-    this.log(actor, 'remove', 'event', event.id, { scope, title: event.summary, timing: this.eventTiming(event), category: event.category });
+    // Everything needed to put it back is kept in the log (owner rule 2026-11-25: keep every record).
+    this.log(actor, 'remove', 'event', event.id, {
+      scope, title: event.summary, timing: this.eventTiming(event), category: event.category, location: event.location,
+      notes: event.description, recurrence: event.recurrence, seriesId: event.recurringEventId, ...(reason ? { reason } : {}),
+    });
     return { removed: event.id, scope };
   }
 
@@ -1052,6 +1133,76 @@ export class Planner {
       }
     }
     return pending.length;
+  }
+
+  // ---- exam-day markers ------------------------------------------------------------------
+
+  /**
+   * Keeps one all-day "시험(이날): STA256 기말 17:00–20:00" event for every timed exam or quiz in the
+   * Kelly calendar (owner request 2026-11-25: like the deadline markers, for every exam and quiz from now
+   * on). An all-day event with exactly that title on that day is adopted instead of duplicated.
+   * The marker follows the exam when it moves and goes away when the exam is removed.
+   */
+  async syncExamMarkers(): Promise<number> {
+    const cal = await this.cal();
+    if (!cal) return 0;
+    const today = this.today();
+    const events = await cal.listEvents(toInstant(addDays(today, -1), '00:00', this.timeZone).toISOString(),
+      toInstant(addDays(today, EXAM_MARKER_DAYS), '00:00', this.timeZone).toISOString());
+    const live = events.filter((e) => e.status !== 'cancelled');
+    const sources = live.filter((e) => isExamEvent(e));
+    const rows = this.db.prepare('SELECT * FROM exam_markers').all() as Array<{ source_event_id: string; marker_event_id: string; date: string; title: string; synced: string }>;
+    const byId = new Map(rows.map((r) => [r.source_event_id, r]));
+    const now = this.iso();
+    let changed = 0;
+    for (const e of sources) {
+      const t = this.eventTiming(e) as Extract<Timing, { kind: 'timed' }>;
+      const title = examMarkerTitle(e.summary, t.start, t.end);
+      const synced = `${t.date}|${title}|${EXAM_MARKER_FORMAT}`;
+      const row = byId.get(e.id);
+      if (row && row.synced === synced) continue;
+      const input: EventInput = {
+        summary: title,
+        description: `Personal AI 시험 표시: 이 날 시험이 있어요 (${t.start}–${t.end}, 원래 일정 "${e.summary}"). 시험 일정을 바꾸면 이 표시도 따라 바뀌어요.`,
+        location: e.location,
+        category: 'class',
+        timing: { kind: 'allDay', date: t.date, endDate: addDays(t.date, 1) },
+        examSourceId: e.id,
+      };
+      let markerId = row?.marker_event_id ?? null;
+      let action = 'update';
+      if (!markerId) {
+        // adopt an all-day event the owner (or Claude Code) already added with the same title
+        const same = live.find((x) => x.allDay && x.date === t.date && x.summary === title && !x.examSourceId && !x.deadlineTodoId);
+        markerId = same?.id ?? null;
+        action = same ? 'adopt' : 'create';
+      }
+      if (markerId && (await cal.getEvent(markerId))) await cal.patchEvent(markerId, input);
+      else {
+        markerId = await cal.insertEvent(input);
+        if (action === 'update') action = 'recreate';
+      }
+      this.db
+        .prepare(`INSERT INTO exam_markers (source_event_id, marker_event_id, date, title, synced, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)
+                  ON CONFLICT(source_event_id) DO UPDATE SET marker_event_id = excluded.marker_event_id, date = excluded.date, title = excluded.title,
+                    synced = excluded.synced, updated_at = excluded.updated_at`)
+        .run(e.id, markerId, t.date, title, synced, now, now);
+      this.log('system', action, 'exam_marker', markerId, { source: e.id, sourceTitle: e.summary, date: t.date, title, before: row ? { date: row.date, title: row.title } : null });
+      changed++;
+    }
+    // the exam was removed (or is no longer an exam): its marker goes too; past exams keep theirs
+    const current = new Set(sources.map((e) => e.id));
+    for (const r of rows) {
+      if (current.has(r.source_event_id) || daysBetween(today, r.date) < 0) continue;
+      const source = await cal.getEvent(r.source_event_id);
+      if (source && source.status !== 'cancelled' && isExamEvent(source)) continue; // outside the window, still there
+      const marker = await cal.getEvent(r.marker_event_id);
+      if (marker && marker.status !== 'cancelled') await cal.deleteEvent(r.marker_event_id);
+      this.db.prepare('DELETE FROM exam_markers WHERE source_event_id = ?').run(r.source_event_id);
+      this.log('system', 'remove', 'exam_marker', r.marker_event_id, { source: r.source_event_id, date: r.date, title: r.title, reason: 'exam event removed or changed' });
+      changed++;
+    }
+    return changed;
   }
 
   // ---- reference: the owner's old calendars, read-only ----------------------------------
@@ -1560,6 +1711,43 @@ export interface ProposalView {
 
 /** Version of the deadline marker title (see syncDeadlines). */
 const MARKER_FORMAT = 'v2';
+const EXAM_MARKER_FORMAT = 'v1';
+const EXAM_MARKER_DAYS = 120;
+/** Exams and quizzes (titles in the Kelly calendar), not study sessions about them. */
+export const EXAM_TITLE = /final exam|midterm|term test|\btest\s*\d|\bquiz\b|\bexam\b|기말|중간고사|시험|퀴즈/i;
+/** Getting somewhere cannot be replaced by something else at that time. */
+const TRAVEL_TITLE = /이동|출발|travel|commute|\bbus\b|버스/i;
+const STUDY_TITLE = /대비|준비|공부|복습|오답|훑기|지난|기출|풀기|연습|정리|study|review|prep|practice|이동|도착|대기/i;
+
+/** A timed exam or quiz in the Kelly calendar (category class or task; never a plan block or a marker). */
+export function isExamEvent(e: CalendarEvent): boolean {
+  if (e.allDay || e.plannerBlockId || e.deadlineTodoId || e.examSourceId || e.declined) return false;
+  if (e.category !== null && e.category !== 'class' && e.category !== 'task') return false;
+  return EXAM_TITLE.test(e.summary) && !STUDY_TITLE.test(e.summary) && !e.summary.startsWith('시험(이날)');
+}
+
+/** "STA256H5 Final Exam", 17:00, 20:00 -> "시험(이날): STA256 기말 17:00–20:00" (the format the owner picked). */
+export function examMarkerTitle(summary: string, start: string, end: string): string {
+  const code = /\b([A-Z]{3}\d{3})/.exec(summary)?.[1];
+  const quiz = /\bquiz\s*(\d+)|퀴즈\s*(\d+)/i.exec(summary);
+  const test = /\b(?:term\s*)?test\s*(\d+)/i.exec(summary);
+  const kind = /final|기말/i.test(summary) ? '기말'
+    : /midterm|중간/i.test(summary) ? '중간고사'
+    : quiz ? `퀴즈 ${quiz[1] ?? quiz[2]}`
+    : /quiz|퀴즈/i.test(summary) ? '퀴즈'
+    : test ? `Test ${test[1]}`
+    : '시험';
+  const what = code ? `${code} ${kind}` : summary.trim().slice(0, 80);
+  return `시험(이날): ${what} ${start}–${end}`;
+}
+
+/** dryRun / replace flags of event_add and event_update, taken out before the field check. */
+function runFlags(body: Record<string, unknown>): { dryRun: boolean; replace: boolean; rest: Record<string, unknown> } {
+  const { dryRun, replace, ...rest } = body ?? {};
+  if (dryRun !== undefined && typeof dryRun !== 'boolean') throw bad('dryRun must be true or false');
+  if (replace !== undefined && typeof replace !== 'boolean') throw bad('replace must be true or false');
+  return { dryRun: dryRun === true, replace: replace === true, rest };
+}
 
 export function deadlineTitle(todoTitle: string): string {
   return `마감(이날까지): ${todoTitle}`;

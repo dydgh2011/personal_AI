@@ -3,7 +3,7 @@
 > 모든 에이전트(Claude Code, Codex)가 **시작할 때 읽고, 끝날 때 갱신**하는 파일이다(`AGENTS.md` 0절).
 > 다음 에이전트가 이 파일만 보고 이어서 할 수 있게 쓴다. 오래된 항목은 지우고 최신 상태만 남긴다.
 
-마지막 갱신: 2026-11-25 · Claude Code
+마지막 갱신: 2026-11-26 · Claude Code
 
 ## 스택 잠금
 - **비어 있음** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
@@ -47,6 +47,17 @@
   - 지식 저장소에 2026-11-25 추가: 수면 23~06(`me`, habit), 문제 풀이·대화형 학습 선호, 공식 문제 → Claude 예상 문제 순서, Kelly 역할, 이동시간 포함(`취향과 피드백`).
 
 ## 최근 변경 (2026-11-25 밤)
+- **Kelly 일정 실수 바로잡기**(주인 요청, 플래너 변경 기록 04:56:17–04:56:25 UTC의 `hermes` 항목은 Kelly가 아니라 Claude Code가 Kelly 도구 코드로 한 것). 백업: `data/backups/planner/planner.db.20261125-235549`, `data/backups/knowledge/knowledge.db.20261125-235554`.
+  - Kelly가 한 일(11-26 04:42–04:47 UTC): HW#4를 12/1 12:00–15:00에 겹침 확인 없이 넣음(이동·점심·A3·구인·S10과 겹침), 기말 종일 일정 요청에 선호만 저장, "넣어줘"에 엉뚱한 날짜로 `confirm`을 스스로 확인 표시 붙여 호출(409로 실패, 변경 없음), "대체해줘"에 같은 시간 초안 블록을 하나 더 만듦.
+  - 고친 것: 중복 블록 삭제, HW#4 → 12/1 13:10–16:10 UTM 도서관(주인 선택), 대체된 블록 이동(구인공고 12/1 22:15–22:45, S10 12/6 21:25–22:40, A3 12/2 22:15–23:00, 모두 집, 주인 선택), 기말 종일 일정 4개 "시험(이날): <과목> 기말 <시각>"(12/10·12/11·12/16·12/19), 할 일 이름 "MAT223 HW#4"·메모·earliest 12/01, 선호 사실을 주인 말대로 고침. 다시 읽어서 확인, 12/6 마감 표시도 새 이름으로 바뀜.
+  - **코드로 막음 (2026-11-26 새벽 배포, 커밋 안 함)**: planner migration 4(백업 `data/backups/planner/planner.db.20261126-000937.pre-migration4`) 다시 만들고, `configure-hermes.mjs`(SOUL 백업 `data/backups/hermes/SOUL.md.pre-overlap-rules.*`) 뒤 hermes 재시작.
+    - 겹침 검사: `event_add`·`event_update`는 planner `dryRun`으로 먼저 보고, `block_add`는 그날을 읽어서 겹치면 쓰지 않고 목록을 주인에게 묻게 함. `replace=true`는 블록·한 번짜리 일정만 지움(수업·시험·이동·반복은 남기고 알림), 지운 일정은 다시 넣을 수 있게 전부 기록.
+    - 확인 턴 규칙(`guard.py` `ConfirmationGate`): `confirmed_by_user=true`는 같은 인자의 미리보기가 앞선 턴에 있어야 통과, 한 번만. Hermes `agent.log`에 `personal_ai.guard` 줄로 남음. Hermes 재시작 때 미리보기 기억은 비워짐(다시 미리보기하면 됨). oneshot(`hermes chat -Q`)으로는 확인이 필요한 쓰기를 할 수 없음.
+    - 시험 표시: 시험·퀴즈 일정마다 "시험(이날): …" 종일 일정 자동(`exam_markers`). 손으로 넣은 기말 4개는 이어받음(중복 0).
+    - 실환경 확인: 12/1 겹침 미리보기 2건 → 쓰기 0건, 실제 Kelly 턴(oneshot, 없는 event_id)에서 같은 턴 확인이 막힘·로그 남음. 테스트: planner 30, hermes-integration 108, configure-hermes 3 통과.
+    - **확인 못 한 것**: 주인이 Discord에서 겪는 실제 흐름(미리보기 → 답 → 실행), 새 시험 일정이 생길 때 자동 표시(기존 4개 이어받기만 봄).
+    - **Discord 매일 새 대화 (2026-11-26 새벽)**: 주인이 `hermes-session-reset-policy`(카탈로그 커뮤니티, 커밋 0f2ea5ad 고정, 코드 검토: 네트워크·파일·외부 실행 없음)를 설치·켬. Claude Code가 `data/hermes/config.yaml`에 `session_reset: {mode: daily, at_hour: 9}` 추가(백업 `data/backups/hermes/config.yaml.pre-session-reset.20261126-004529`), hermes 재시작. 컨테이너 시계가 UTC라 9 = 토론토 04:00(겨울)/05:00(여름). 플러그인 로드(`armed`), 추가 권한 tools.override는 거부됨, Discord 연결 확인. **확인 못 한 것**: 실제 초기화. 켠 뒤 첫 메시지는 시각만 기록하고, 2026-11-27 04:00(토론토) 뒤 첫 Discord 메시지에서 새 세션이 시작돼야 함 → Hermes `agent.log`의 `session-reset-policy: reset` 줄과 `state.db` sessions의 end_reason으로 확인.
+  - 참고: 기말 계획(`gen_plan.py`)은 화·목 UTM 수업·튜토리얼과 겹치게 만들어져 있음(계획 문서 264줄에서 "수업 일정은 그대로 둠"으로 확정한 부분).
 - **학교 마감 → 할 일 후보 배포**(주인 요청): school(`deadline_decisions`·`deadline_history` 표 추가, 백업 `data/backups/school/school.db.20261125-230302`), hermes-broker 다시 만들고, `configure-hermes.mjs`로 SOUL 갱신(백업 `data/backups/hermes/SOUL.md.pre-deadline-candidates.*`), hermes 재시작.
   - Quercus 과제 마감 → 후보(UTC를 토론토 날짜로, 00:00 마감은 전날). 새 과제 알림 요약 칸에 코드가 마감 시각을 씀. 일정·할 일 질문이면 결정 전 후보를 코드가 Kelly 답변 재료에 붙임.
   - Kelly `personal_ai_school`: `deadlines`, `deadline_add`(예상 시간 필요, 플래너 할 일 생성, 메모에 `[quercus:id]`로 중복 방지), `deadline_dismiss`, `deadline_reopen`. 쓰기는 모두 `confirmed_by_user` 필요.

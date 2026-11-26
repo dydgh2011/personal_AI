@@ -97,9 +97,11 @@ def _day_lines(day: dict[str, Any]) -> list[str]:
         head += " - 캘린더에 아직 반영 안 된 변경 있음"
     rows: list[tuple[str, str]] = []
     for e in day.get("events", []):
-        label = "마감·이날까지" if e.get("deadline") else CATEGORY_LABEL.get(e.get("category") or "", "일정")
+        marker = e.get("deadline") or e.get("examMarker")
+        label = ("마감·이날까지" if e.get("deadline") else "시험 표시" if e.get("examMarker")
+                 else CATEGORY_LABEL.get(e.get("category") or "", "일정"))
         when = "종일" if e.get("allDay") else f"{e['start']}-{e['end']}"
-        ref = "" if e.get("deadline") else f" (event_id {e['id']}{', 반복' if e.get('seriesId') else ''})"
+        ref = "" if marker else f" (event_id {e['id']}{', 반복' if e.get('seriesId') else ''})"
         rows.append(("00:00" if e.get("allDay") else e.get("start") or "00:00", f"  [{label}] {when} {e['title']}{ref}"))
     for b in day.get("blocks", []):
         label = CATEGORY_LABEL.get(b.get("category") or "", "할 일")
@@ -174,9 +176,27 @@ def a_confirm(client, args):
     return out
 
 
+def _minutes(t: str) -> int:
+    h, m = t.split(":")
+    return int(h) * 60 + int(m)
+
+
 def a_block_add(client, args):
     body = {"date": _date(args, "date"), "start": _time(args, "start"), "end": _time(args, "end")}
     body.update(_pick(args, {"title": "title", "todo_id": "todoId"}))
+    if args.get("confirmed_by_user") is not True:
+        day = _get(client, f"/day?date={body['date']}")
+        lo, hi = _minutes(body["start"]), _minutes(body["end"])
+        overlaps = [{"start": x["start"], "end": x["end"], "title": x["title"], "replaceable": False}
+                    for x in day.get("events", []) + day.get("blocks", [])
+                    if not x.get("allDay") and x.get("start") and x.get("end") and _minutes(x["start"]) < hi and lo < _minutes(x["end"])]
+        if overlaps:
+            raise CliError("needs_confirmation",
+                           f"A plan block {body['start']}-{body['end']} on {body['date']} overlaps:\n" + "\n".join(
+                               f"  {o['start']}-{o['end']} {o['title']}" for o in overlaps) +
+                           "\nNothing was written. To put something IN PLACE of these, use event_add/event_update with "
+                           "replace=true instead of a block. Otherwise show the owner the list, ask, end your turn, and call "
+                           "again with confirmed_by_user=true only if they want both.")
     return {"ok": True, **_post(client, "/blocks", body), "note": "Added to the draft; confirm to write it to the calendar."}
 
 
@@ -298,22 +318,76 @@ def _event_fields(src: dict[str, Any], where: str, partial: bool = False) -> dic
     return out
 
 
+# ---- overlaps: never put something on top of the owner's plan without asking (2026-11-25) ------------
+
+KEEP_NOTE = "그대로 둠: 수업·시험·이동·반복 일정"
+
+
+def _overlap_lines(overlaps: list[dict[str, Any]]) -> list[str]:
+    return [f"  {o['start']}-{o['end']} {o['title']}" + ("" if o.get("replaceable") else f" ({KEEP_NOTE})") for o in overlaps]
+
+
+def _replace_flag(args: dict[str, Any]) -> bool:
+    value = args.get("replace", False)
+    if not isinstance(value, bool):
+        raise _bad("replace must be true or false")
+    return value
+
+
+def _overlap_question(what: str, overlaps: list[dict[str, Any]]) -> CliError:
+    return CliError(
+        "needs_confirmation",
+        f"{what} overlaps what is already planned:\n" + "\n".join(_overlap_lines(overlaps)) +
+        "\nNothing was written. Show the owner this exact list (times and titles) and ask which they want: keep both, "
+        "replace (replace=true removes every item not marked '그대로 둠'), or another time. End your turn and wait. "
+        "After they answer, call again with the same arguments, confirmed_by_user=true, and replace=true only if they "
+        "said replace. Never pick the time or the replacement yourself.")
+
+
+def _replaced_lines(result: dict[str, Any]) -> list[str]:
+    lines = []
+    replaced = result.get("replaced") or []
+    if replaced:
+        lines.append("대체해서 지운 것 (기록에 남음, 다시 넣을 수 있음):")
+        lines += _overlap_lines(replaced)
+    kept = [o for o in result.get("overlaps") or [] if o["id"] not in {r["id"] for r in replaced}]
+    if kept:
+        lines.append("아직 겹치는 것:")
+        lines += _overlap_lines(kept)
+    return lines
+
+
 def a_event_add(client, args):
-    body = _event_fields({k: args[k] for k in EVENT_KEYS if k in args}, "event_add")
-    event = _post(client, "/events", body)["event"]
-    return {"ok": True, "event": event, "display": f"{event['title']} · {event['when']} ({CATEGORY_LABEL.get(event['category'])})",
-            "note": "Added to the Kelly calendar (Google Calendar). Plans now work around it."}
+    body = _event_fields({k: args[k] for k in EVENT_KEYS if k not in ("replace",) and k in args}, "event_add")
+    replace = _replace_flag(args)
+    if not body.get("allDay"):
+        preview = _post(client, "/events", {**body, "dryRun": True})["event"]
+        if preview["overlaps"] and args.get("confirmed_by_user") is not True:
+            raise _overlap_question(f"{body['title']} ({preview['when']})", preview["overlaps"])
+    event = _post(client, "/events", {**body, "replace": True} if replace else body)["event"]
+    lines = [f"{event['title']} · {event['when']} ({CATEGORY_LABEL.get(event['category'])})"] + _replaced_lines(event)
+    note = "Added to the Kelly calendar (Google Calendar). Plans now work around it."
+    if event.get("replaced"):
+        note += " Tell the owner what was removed and ask whether to move any of it to another time."
+    return {"ok": True, "event": event, "display": "\n".join(lines), "note": note}
 
 
 def a_event_update(client, args):
     event_id = _event_id(args)
-    _confirmed(args, "Changing a calendar event")
     body: dict[str, Any] = {"scope": args.get("scope") or "this"}
     body.update(_event_fields({k: args[k] for k in EVENT_KEYS if k in args and k not in ("end_date", "all_day")},
                               "event_update", partial=True))
     if len(body) == 1:
         raise _bad("give what to change: date, start, end, title, category, location, notes or the repeat rule")
-    return {"ok": True, **_post(client, f"/events/{event_id}/update", body)}
+    replace = _replace_flag(args)
+    if args.get("confirmed_by_user") is not True:
+        preview = _post(client, f"/events/{event_id}/update", {**body, "dryRun": True})["event"]
+        change = ", ".join(f"{k}={v}" for k, v in body.items() if k != "scope")
+        if preview["overlaps"]:
+            raise _overlap_question(f"Changing event {event_id} ({change})", preview["overlaps"])
+        _confirmed(args, f"Changing a calendar event ({change})")
+    result = _post(client, f"/events/{event_id}/update", {**body, "replace": True} if replace else body)["event"]
+    return {"ok": True, "event": result, "display": "\n".join(["변경함"] + _replaced_lines(result))}
 
 
 def a_event_remove(client, args):

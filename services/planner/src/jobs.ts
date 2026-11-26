@@ -68,6 +68,10 @@ export class Jobs {
         const changed = await this.planner.syncDeadlines();
         if (changed) this.logger.info('Deadline markers synced', { changed });
       });
+      await this.guard('exam-markers', async () => {
+        const changed = await this.planner.syncExamMarkers();
+        if (changed) this.logger.info('Exam-day markers synced', { changed });
+      });
     } finally {
       this.running = false;
     }

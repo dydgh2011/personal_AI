@@ -177,6 +177,8 @@ export interface CalendarEvent {
   plannerBlockId: string | null;
   /** Todo id when the event is a deadline marker. */
   deadlineTodoId: string | null;
+  /** Exam event id when the event is an all-day exam marker. */
+  examSourceId: string | null;
   /** Source event id when it was imported from another calendar. */
   importedFrom: string | null;
 }
@@ -197,6 +199,7 @@ export interface EventInput {
   recurrence?: string[] | null;
   blockId?: string;
   deadlineTodoId?: string;
+  examSourceId?: string;
   importedFrom?: string;
   /** Google pop-up reminders: off for planner blocks (Discord reminds), Google's default otherwise. */
   googleReminders?: boolean;
@@ -276,6 +279,7 @@ export function googleAccount(getToken: () => Promise<string>, timeZone: string,
           personalAiCategory: e.category,
           ...(e.blockId ? { personalAiBlockId: e.blockId } : {}),
           ...(e.deadlineTodoId ? { personalAiDeadlineTodoId: e.deadlineTodoId } : {}),
+          ...(e.examSourceId ? { personalAiExamSourceId: e.examSourceId } : {}),
           ...(e.importedFrom ? { personalAiImportedFrom: e.importedFrom } : {}),
         },
       },
@@ -365,6 +369,7 @@ export function toEvent(item: Record<string, any>): CalendarEvent {
     recurringEventId: typeof item.recurringEventId === 'string' ? item.recurringEventId : null,
     plannerBlockId: priv.personalAiBlockId ?? null,
     deadlineTodoId: priv.personalAiDeadlineTodoId ?? null,
+    examSourceId: priv.personalAiExamSourceId ?? null,
     importedFrom: priv.personalAiImportedFrom ?? null,
   };
 }

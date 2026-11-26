@@ -120,6 +120,18 @@ const MIGRATIONS: string[] = [
     PRIMARY KEY (proposal_id, n)
   );
   `,
+  // 4: one all-day "시험(이날): ..." marker per exam/quiz event (owner request 2026-11-25).
+  `
+  CREATE TABLE exam_markers (
+    source_event_id TEXT PRIMARY KEY,          -- the timed exam/quiz event in the Kelly calendar
+    marker_event_id TEXT NOT NULL,             -- the all-day marker event
+    date TEXT NOT NULL,
+    title TEXT NOT NULL,
+    synced TEXT NOT NULL,                      -- "date|title|format" last written
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+  `,
 ];
 
 export function openDatabase(file: string): DatabaseSync {

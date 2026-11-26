@@ -40,6 +40,7 @@ class FakeCalendar implements CalendarApi {
       recurringEventId: null,
       plannerBlockId: null,
       deadlineTodoId: null,
+      examSourceId: null,
       importedFrom: null,
       ...extra,
     });
@@ -60,6 +61,7 @@ class FakeCalendar implements CalendarApi {
       ...(i.recurrence !== undefined ? { recurrence: i.recurrence } : {}),
       plannerBlockId: i.blockId ?? null,
       deadlineTodoId: i.deadlineTodoId ?? null,
+      examSourceId: i.examSourceId ?? null,
       importedFrom: i.importedFrom ?? null,
     };
   }
@@ -473,6 +475,69 @@ describe('Managed calendar', () => {
     await assert.rejects(planner.removeEvent(blockEvent.id, {}, 'hermes'), /plan block/);
     await planner.removeEvent(lecture.id, { scope: 'series' }, 'hermes');
     assert.ok(!cal.events.has(lecture.id));
+  });
+
+  it('reports what a new or moved event overlaps; dryRun writes nothing; replace removes only one-off items', async () => {
+    const { cal, planner } = setup();
+
+    const travel = await planner.addEvent({ title: '이동 Sheridan → UTM', date: '2026-12-01', start: '12:00', end: '12:40', category: 'routine' }, 'hermes');
+    const lunch = await planner.addEvent({ title: '점심', date: '2026-12-01', start: '12:40', end: '13:10', category: 'routine' }, 'hermes');
+    const a3 = await planner.addEvent({ title: 'A3', date: '2026-12-01', start: '13:10', end: '14:25', category: 'task', location: 'UTM 도서관', notes: '팀 일정에 따라' }, 'hermes');
+    const lecture = await planner.addEvent({ title: 'STA256 강의', date: '2026-12-01', start: '15:00', end: '17:00', category: 'class', repeat: 'weekly', repeatDays: ['TU'], until: '2026-12-08' }, 'hermes');
+    const block = planner.addBlock({ date: '2026-12-01', start: '14:30', end: '15:30', title: 'S10' }, 'hermes');
+    const before = cal.events.size;
+
+    const preview = await planner.addEvent({ title: 'HW#4', date: '2026-12-01', start: '12:00', end: '15:30', category: 'study', dryRun: true }, 'hermes');
+    assert.equal(preview.dryRun, true);
+    assert.equal(cal.events.size, before, 'a dry run writes nothing');
+    assert.deepEqual(preview.overlaps.map((o) => [o.title, o.replaceable]),
+      [['이동 Sheridan → UTM', false], ['점심', true], ['A3', true], ['S10', true], ['STA256 강의', false]]);
+
+    const added = await planner.addEvent({ title: 'HW#4', date: '2026-12-01', start: '13:10', end: '15:30', category: 'study', replace: true }, 'hermes');
+    assert.deepEqual(added.replaced.map((o) => o.title), ['A3', 'S10']);
+    assert.ok(!cal.events.has(a3.id) && cal.events.has(lunch.id) && cal.events.has(travel.id));
+    assert.ok([...cal.events.values()].some((e) => e.recurringEventId === lecture.id || e.id === lecture.id), 'classes are never removed');
+    assert.equal((await planner.day('2026-12-01')).blocks.find((b) => b.id === block.id), undefined);
+    // the removal keeps everything needed to put it back, and why
+    const removed = planner.changes().find((c) => c.action === 'remove' && c.entityId === a3.id)!;
+    assert.equal((removed.detail as any).location, 'UTM 도서관');
+    assert.equal((removed.detail as any).notes, '팀 일정에 따라');
+    assert.match((removed.detail as any).reason, /replaced by event/);
+
+    // moving an event: overlaps of the new time, the event itself never counts
+    const moved = await planner.updateEvent(added.id, { start: '12:30', dryRun: true }, 'hermes');
+    assert.deepEqual(moved.overlaps.map((o) => o.title), ['이동 Sheridan → UTM', '점심']);
+    assert.equal(localParts(new Date(cal.events.get(added.id)!.start!), TZ).time, '13:10', 'dry run: not moved');
+    await assert.rejects(planner.addEvent({ title: 'x', date: '2026-12-01', start: '10:00', end: '11:00', category: 'study', replace: 'yes' }, 'hermes'), /replace/);
+  });
+
+  it('keeps one all-day exam-day marker per exam or quiz, adopting a matching one and following the exam', async () => {
+    const { cal, planner, jobs } = setup();
+    await planner.day('2026-11-21');
+    const sta = cal.add('STA256H5 Final Exam', '2026-12-10', '17:00', '20:00', { category: 'class' });
+    const quiz = cal.add('MAT223 Quiz 7', '2026-11-30', '09:00', '09:30', { category: 'class' });
+    cal.add('STA256 지난 시험 ① (시간 재기)', '2026-12-05', '09:00', '10:15', { category: 'study' });
+    cal.add('이동 → UTM (시험 1시간 전 출발)', '2026-12-16', '08:00', '08:40', { category: 'routine' });
+    // added by hand earlier with the same title: adopted, not duplicated
+    const manual = await planner.addEvent({ title: '시험(이날): STA256 기말 17:00–20:00', date: '2026-12-10', allDay: true, category: 'class' }, 'hermes');
+
+    await jobs.tick();
+    const markers = () => [...cal.events.values()].filter((e) => e.examSourceId);
+    assert.deepEqual(markers().map((e) => [e.summary, e.date]).sort(), [
+      ['시험(이날): MAT223 퀴즈 7 09:00–09:30', '2026-11-30'],
+      ['시험(이날): STA256 기말 17:00–20:00', '2026-12-10'],
+    ]);
+    assert.equal(cal.events.get(manual.id)!.examSourceId, sta, 'the hand-made marker is adopted');
+    assert.equal(await planner.syncExamMarkers(), 0, 'nothing to do the second time');
+    await assert.rejects(planner.updateEvent(manual.id, { title: 'x' }, 'hermes'), /exam-day marker/);
+
+    // the exam moves: the marker follows; the quiz is removed: its marker goes
+    await planner.updateEvent(sta, { date: '2026-12-11', start: '09:00', end: '12:00' }, 'hermes');
+    await planner.removeEvent(quiz, {}, 'hermes');
+    await planner.syncExamMarkers();
+    assert.deepEqual(markers().map((e) => [e.summary, e.date]), [['시험(이날): STA256 기말 09:00–12:00', '2026-12-11']]);
+    assert.ok(planner.changes().some((c) => c.entity === 'exam_marker' && c.action === 'remove'));
+    assert.ok(planner.changes().some((c) => c.entity === 'exam_marker' && c.action === 'adopt'));
   });
 
   it('keeps an all-day deadline marker per open todo in sync', async () => {
