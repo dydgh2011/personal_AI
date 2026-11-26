@@ -77,6 +77,27 @@ class Store:
                   at TEXT NOT NULL,
                   by TEXT NOT NULL
                 );
+                -- the owner's answer to each Quercus deadline (todo candidate): added to the planner or not needed
+                CREATE TABLE IF NOT EXISTS deadline_decisions (
+                  assignment TEXT PRIMARY KEY,   -- quercus:<assignment id>
+                  decision TEXT NOT NULL,        -- added | dismissed
+                  due TEXT NOT NULL,             -- the due date it was decided for (a moved due asks again)
+                  todo_id TEXT,
+                  note TEXT NOT NULL,
+                  at TEXT NOT NULL,
+                  by TEXT NOT NULL
+                );
+                -- every decision ever made, reopenings included (never deleted)
+                CREATE TABLE IF NOT EXISTS deadline_history (
+                  id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  assignment TEXT NOT NULL,
+                  decision TEXT NOT NULL,        -- added | dismissed | pending (reopened)
+                  due TEXT NOT NULL,
+                  todo_id TEXT,
+                  note TEXT NOT NULL,
+                  at TEXT NOT NULL,
+                  by TEXT NOT NULL
+                );
             """)
 
     def close(self) -> None:
@@ -162,6 +183,37 @@ class Store:
             rows = self.db.execute("SELECT value, at, by FROM settings_history WHERE key = ? ORDER BY id DESC LIMIT ?",
                                    (key, limit)).fetchall()
         return [{"value": json.loads(r[0]), "at": r[1], "by": r[2]} for r in rows]
+
+    # ---- Quercus deadlines as todo candidates ------------------------------------------------
+    def assignments(self) -> list[sqlite3.Row]:
+        with self.lock:
+            return self.db.execute("SELECT * FROM items WHERE service = 'quercus' AND kind = 'assignment' ORDER BY first_seen").fetchall()
+
+    def deadline_decisions(self) -> dict[str, dict]:
+        with self.lock:
+            rows = self.db.execute("SELECT * FROM deadline_decisions").fetchall()
+        return {r["assignment"]: dict(r) for r in rows}
+
+    def decide_deadline(self, assignment: str, decision: str, due: str, todo_id: str | None, note: str, by: str) -> str:
+        at = now_iso()
+        with self.lock:
+            if decision == "pending":
+                self.db.execute("DELETE FROM deadline_decisions WHERE assignment = ?", (assignment,))
+            else:
+                self.db.execute("""INSERT INTO deadline_decisions (assignment, decision, due, todo_id, note, at, by)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?)
+                                   ON CONFLICT(assignment) DO UPDATE SET decision = excluded.decision, due = excluded.due,
+                                     todo_id = excluded.todo_id, note = excluded.note, at = excluded.at, by = excluded.by""",
+                                (assignment, decision, due, todo_id, note, at, by))
+            self.db.execute("""INSERT INTO deadline_history (assignment, decision, due, todo_id, note, at, by)
+                               VALUES (?, ?, ?, ?, ?, ?, ?)""", (assignment, decision, due, todo_id, note, at, by))
+        return at
+
+    def deadline_history(self, assignment: str, limit: int = 20) -> list[dict]:
+        with self.lock:
+            rows = self.db.execute("SELECT decision, due, todo_id, note, at, by FROM deadline_history WHERE assignment = ? "
+                                   "ORDER BY id DESC LIMIT ?", (assignment, limit)).fetchall()
+        return [dict(r) for r in rows]
 
     def state(self, service: str) -> dict:
         with self.lock:

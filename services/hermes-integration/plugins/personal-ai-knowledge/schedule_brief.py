@@ -76,6 +76,7 @@ ASK_SCHEDULE = re.compile(
     r"언제|며칠|몇\s*일|얼마나\s*남|남았|남은|제일\s*(처음|먼저|빨리|가까|늦)|가장\s*(먼저|빠|가까|처음|늦)|"
     r"첫\s*(번째\s*)?(시험|기말|마감|과제)|다음\s*(시험|기말|마감|일정|과제|퀴즈)|순서|일정|마감|데드라인|"
     r"시험|기말|중간고사|퀴즈|과제|이번\s*주|다음\s*주|D-?day|deadline|due|exam|final|midterm|quiz", re.I)
+ASK_TODO = re.compile(r"할\s*일|해야\s*(할|하는|될)|투두|todo|to-do", re.I)
 ASK_FIRST = re.compile(r"제일\s*(처음|먼저|빨리|가까)|가장\s*(먼저|빠|가까|처음)|첫\s*(번째\s*)?|다음\s*(시험|기말|마감|일정|과제|퀴즈)|"
                        r"earliest|next", re.I)
 ASK_COMPARE = re.compile(r"어느\s*과목|어떤\s*과목|모든\s*과목|전\s*과목|과목별|과목\s*중|과목들|각\s*과목|네\s*과목|"
@@ -194,6 +195,15 @@ def _planner_items() -> list[dict[str, Any]]:
     return _cached("planner", load)
 
 
+def _school_pending() -> list[dict[str, Any]]:
+    """Quercus deadlines the owner has not decided yet (todo candidates made by the school service)."""
+    def load():
+        _, pc = _planner()
+        _, _, body = pc.request("GET", "/school/deadlines")
+        return [c for c in body.get("items", []) if c.get("status") in ("pending", "changed")]
+    return _cached("school", load)
+
+
 def _merge(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Sort by time; drop a calendar copy of an item the store already has (same day, start, course)."""
     items.sort(key=lambda i: (i["date"], i["start"] or "99:99", i["source"] != "저장소"))
@@ -209,23 +219,27 @@ def _merge(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
-def _gather(client) -> tuple[list[dict[str, Any]], list[str]]:
+def _gather(client) -> tuple[list[dict[str, Any]], list[str], list[dict[str, Any]]]:
     missing = []
-    pool = ThreadPoolExecutor(max_workers=2)
+    candidates: list[dict[str, Any]] = []
+    pool = ThreadPoolExecutor(max_workers=3)
     try:
         jobs = {pool.submit(_course_items, client): "지식 저장소", pool.submit(_planner_items): "플래너"}
-        done, _ = wait(jobs, timeout=BUDGET)
+        school = pool.submit(_school_pending)
+        done, _ = wait([*jobs, school], timeout=BUDGET)
         items: list[dict[str, Any]] = []
         for job in jobs:
             if job in done and job.exception() is None:
                 items += job.result()
             else:
                 missing.append(jobs[job])
+        if school in done and school.exception() is None:  # optional source: never listed as missing
+            candidates = school.result()
     finally:
         # Never wait past the budget: a slow source finishes in the background and fills the cache
         # for the next message (a `with` block would block here until it is done).
         pool.shutdown(wait=False)
-    return _merge(items), missing
+    return _merge(items), missing, candidates
 
 
 # ---- rendering ------------------------------------------------------------------------------------
@@ -265,8 +279,8 @@ def brief(client, query: str, session_id: str = "") -> str:
         return ""
     blocks = []
     at = now()
-    if ASK_SCHEDULE.search(query):
-        items, missing = _gather(client)
+    if ASK_SCHEDULE.search(query) or ASK_TODO.search(query):
+        items, missing, candidates = _gather(client)
         stamp = f"{at.date().isoformat()}({WEEKDAYS[at.weekday()]}) {at:%H:%M} 토론토"
         lines = [f"## Upcoming (made by code: every dated item found, sorted; time left from now = {stamp}). "
                  "Compare all of them; never answer 'first/next' from one course."]
@@ -277,6 +291,13 @@ def brief(client, query: str, session_id: str = "") -> str:
         if missing:
             lines.append(f"(읽지 못한 곳: {', '.join(missing)} - 이 목록이 전부가 아닐 수 있음)")
         blocks.append("\n".join(lines))
+        if candidates:
+            lines = ["## School deadlines not decided yet (made by code from Quercus; not in the planner). Ask the owner, "
+                     "per item, whether to add it as a todo (personal_ai_school deadline_add) or skip it (deadline_dismiss)."]
+            for c in candidates[:MAX_ITEMS]:
+                moved = " · 마감이 바뀜" if c.get("status") == "changed" else ""
+                lines.append(f"- {c.get('id')} · {c.get('course') or ''} {c.get('title')} · 마감 {c.get('dueLocal')} 토론토{moved}")
+            blocks.append("\n".join(lines))
         if ASK_FIRST.search(query):
             pick = _matching(query, items)
             if pick:

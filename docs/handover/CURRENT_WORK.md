@@ -6,7 +6,7 @@
 마지막 갱신: 2026-11-25 · Claude Code
 
 ## 스택 잠금
-- **Claude Code · school·hermes-broker 다시 만들기, hermes 재시작(학교 마감 → 할 일 후보) · 2026-11-25 23:10** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
+- **비어 있음** ← 실행 중인 스택을 바꾸거나(rebuild, restart, operator, migration) `learning-os/l1`에 합칠 때 여기에 `이름 · 무엇 · 시작 시각`을 적고 커밋·push한다. 끝나면 다시 "비어 있음"으로 바꾸고 push한다. 자세한 절차는 `CODEX_PLAN.md` 2절.
 
 ## 지금 진행 중 (맡은 범위는 `docs/handover/CODEX_PLAN.md` 1절)
 - **C · Claude Code** (2026-11-24): 커밋 작성자=주인·AI 흔적 차단 배포. 비공개 저장소 실제 확인 완료(PAT로 discovery·동기화·export). GitHub App 연결·실제 게시 켬(대상: dydgh2011/personal-ai-sandbox만). **실제 게시 성공**: sandbox PR #1(draft, 브랜치 changes/6dfcb3df…), 커밋 author·committer = 주인(GitHub 계정 연결), 메시지·PR 본문에 흔적 없음. 승인·게시는 주인이 Dashboard에서 직접(에이전트는 대신 승인하지 않음). 남은 것: CI 결과 읽기(10). 브랜치 claude/publish.
@@ -33,8 +33,9 @@
 - Learning AI 평가·초안의 실제 AI 호출(키·모델·월 상한 미설정).
 - Discord에서 "입력 중" 표시와 답 끝 📌 기록 표시.
 
-## 주인이 다음에 말을 걸 때 먼저 알릴 것 (2026-11-25)
-- **Learning 확인은 주인이 자고 일어나서 하기로 함.** 다음 대화를 시작하면 바로 알린다: `/learning/planner`에서 가용 시간 저장 → 하루/7일 선택 → Send draft to Planner → Kelly에게 시안 보여 달라고 해서 승인 → 할 일·일정 생성 확인.
+## 주인 결정 메모 (2026-11-25)
+- **Learning → 플래너 시안 확인은 미룸**(2026-11-25 밤 주인): Learning 기능이 필요해질 때 주인이 직접 확인한다. 먼저 알리지 않는다. 순서: `/learning/planner`에서 가용 시간 저장 → 하루/7일 선택 → Send draft to Planner → Kelly에게 시안 보여 달라고 해서 승인 → 할 일·일정 생성 확인.
+- **기록은 최대한 남긴다**(2026-11-25 밤 주인, `AGENTS.md` 1절): 용량·효율보다 나중에 원인을 정확히 알 수 있는 기록이 우선.
 - **기말 계획 진행 방식 (2026-11-25 주인 결정)**:
   1. 주인이 관련 정보를 텍스트 파일로 줌 → Claude Code가 정리해서 `kb.mjs`로 지식 저장소에 넣음(운영자 접근은 쓰고 바로 닫음).
   2. Claude Code가 시안을 `data/plans/final-exam-2026/plan-claude.md`에 먼저 씀 → 같은 요청을 Kelly에게 보내 `plan-kelly.md`로 저장(Claude Code는 읽지 않음) → 주인이 비교. **2026-11-25 두 시안 완료 → 주인이 FAS(Sheridan, 화·목 필수, 12/8까지)·도서관 시간·44번 막차·주말 오전 Davis Building 정보를 더 줌 → `plan-claude.md` 수정, Kelly는 같은 추가 정보로 `plan-kelly-v2.md`를 새로 씀(읽지 않음, v1도 남김). 주인 비교·확정 대기.** → **확정(2026-11-25)**: Kelly 시안의 좋은 점(매일 모든 과목=미니 블록, 전날 오답 1개, 3줄 요약)을 합쳐 `plan-claude.md` 확정, 11/26~12/19 일정 363개를 Kelly 캘린더에 반영(플래너 시안 B~Y, Kelly 플래너 도구 코드를 스크립트로 호출, 다시 읽어서 363/363 확인). 생성기 `gen_plan.py`·적용 스크립트·적용한 항목 JSON은 같은 폴더에 있음. 남은 것: 플래너의 기말 준비 할 일 4개와 밤 23:00 자동 초안이 이 계획과 겹침(주인 결정).
@@ -46,8 +47,16 @@
   - 지식 저장소에 2026-11-25 추가: 수면 23~06(`me`, habit), 문제 풀이·대화형 학습 선호, 공식 문제 → Claude 예상 문제 순서, Kelly 역할, 이동시간 포함(`취향과 피드백`).
 
 ## 최근 변경 (2026-11-25 밤)
-- **Worker 모델·effort 선택 배포** (ROADMAP 12-1): Controller v8(백업 후), controller·claude-worker·codex-worker·hermes-broker·dashboard 다시 만들고 hermes 재시작. 기본값은 둘 다 CLI 기본값(아직 바꾸지 않음). Kelly에게 "opus로, effort high로 …" 하면 그 작업만, "codex 기본 effort를 high로 바꿔줘" 하면 확인 뒤 기본값 변경. 주인 승인으로 sandbox 확인 작업 2개 실행: Claude sonnet·low, Codex low 모두 성공(CLI가 값을 받음, 보고서 `run`에 기록). **확인 못 한 것**: Dashboard `/tasks` 화면(로그인 필요). 커밋 안 함.
-- **학교 소식·대화 기록 점검(읽기만)**: 학교 항목은 모두 지식 저장소 원본으로 들어가고 검색됨(학교 원본 1,065건, 벡터 누락 0). 하지만 문서·사실로 정리되지는 않음(학교 원본에서 나온 사실 1개). Kelly 대화는 메모리 제공자를 켠 11-22 18:29 UTC 뒤로는 모두 원본 저장, 그 전 Discord 대화(11-20~22, 약 25개)는 Hermes `state.db`에만 있음. Kelly가 대화로 만든 사실은 1개, 활동 0개. Hermes 내장 메모리 MEMORY.md에 옛 내용("오디오 받아쓰기 방법 없음") 남아 있음. 주인 결정 대기.
+- **학교 마감 → 할 일 후보 배포**(주인 요청): school(`deadline_decisions`·`deadline_history` 표 추가, 백업 `data/backups/school/school.db.20261125-230302`), hermes-broker 다시 만들고, `configure-hermes.mjs`로 SOUL 갱신(백업 `data/backups/hermes/SOUL.md.pre-deadline-candidates.*`), hermes 재시작.
+  - Quercus 과제 마감 → 후보(UTC를 토론토 날짜로, 00:00 마감은 전날). 새 과제 알림 요약 칸에 코드가 마감 시각을 씀. 일정·할 일 질문이면 결정 전 후보를 코드가 Kelly 답변 재료에 붙임.
+  - Kelly `personal_ai_school`: `deadlines`, `deadline_add`(예상 시간 필요, 플래너 할 일 생성, 메모에 `[quercus:id]`로 중복 방지), `deadline_dismiss`, `deadline_reopen`. 쓰기는 모두 `confirmed_by_user` 필요.
+  - 실환경 확인: Kelly 도구 → broker → school로 후보 조회(토론토 19:00, 4점), 확인 없는 쓰기 거절, 주인 말대로 CSC236 Week 11 Exercises '안 함' 기록(이유 포함, 이력·로그 남음). 테스트: school 20, broker 20, hermes-integration 106 통과.
+  - **확인 못 한 것**: 실제 새 과제 알림 문구(새 과제가 와야 함), 주인이 Discord에서 "넣어줘" 했을 때 실제 할 일 생성(단위 테스트로만 확인). Piazza·메일 속 마감은 다루지 않음.
+  - 참고: Week 11 Exercises 마감은 11/26이 아니라 **11/25 19:00 토론토**였음(전에 UTC 날짜로 잘못 읽음).
+- **대화 기록**: 메모리 제공자를 켠 뒤 Discord 주인 메시지 8개가 모두 지식 저장소 원본에 있음을 Hermes `state.db`와 비교해 확인. 그 전 대화(11-20~22)는 주인 결정으로 옮기지 않음. 주인 정보를 사실로 정리하는 건 Kelly가 대화 중에 할 때만(자동 추출 없음).
+- **Hermes 내장 메모리 고침**: `data/hermes/memories/MEMORY.md`의 "m4a 받아쓰기 불가" 줄을 "media_submit으로 받아쓰기 가능"으로 바꿈. 원본 백업 `data/backups/hermes-memory/MEMORY.md.20261125-224817`. 새 대화부터 적용.
+- **Worker 모델·effort 선택 배포** (ROADMAP 12-1): Controller v8(백업 후), controller·claude-worker·codex-worker·hermes-broker·dashboard 다시 만들고 hermes 재시작. 기본값은 둘 다 CLI 기본값(아직 바꾸지 않음). Kelly에게 "opus로, effort high로 …" 하면 그 작업만, "codex 기본 effort를 high로 바꿔줘" 하면 확인 뒤 기본값 변경. 주인 승인으로 sandbox 확인 작업 2개 실행: Claude sonnet·low, Codex low 모두 성공(CLI가 값을 받음, 보고서 `run`에 기록). **확인 못 한 것**: Dashboard `/tasks` 화면(로그인 필요). 커밋 00f4c78.
+- **학교 소식 점검(읽기만)**: 학교 항목은 모두 지식 저장소 원본으로 들어가고 검색됨(학교 원본 1,065건, 벡터 누락 0). 문서·사실로 정리되지는 않음.
 - **지식 그래프 FAS147 연결**: 11-22 Kelly가 `me`→4과목 `part_of`를 만들었고, 11-23 Claude Code가 FAS147 문서를 만들 때 이 링크를 빠뜨렸음. 2026-11-25 주인 지적으로 `me`→`fas147` `part_of` 추가(운영자 접근 열고 바로 닫음).
 
 ## 최근 변경 (2026-11-25 새벽)

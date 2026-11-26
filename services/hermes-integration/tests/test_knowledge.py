@@ -325,7 +325,8 @@ class ScheduleBriefTest(unittest.TestCase):
         self.sb = sb
         sb._cache.clear()
         sb._pending.clear()
-        self._now, self._planner_items = sb.now, sb._planner_items
+        self._now, self._planner_items, self._school = sb.now, sb._planner_items, sb._school_pending
+        sb._school_pending = lambda: []
         sb.now = lambda: datetime(2026, 11, 24, 1, 2, tzinfo=sb.TZ)
         sb._planner_items = lambda: [
             {"date": date(2026, 11, 26), "start": None, "end": None, "what": "할 일 마감 · FAS Technical Test", "source": "플래너"},
@@ -345,7 +346,22 @@ class ScheduleBriefTest(unittest.TestCase):
         })
 
     def tearDown(self):
-        self.sb.now, self.sb._planner_items = self._now, self._planner_items
+        self.sb.now, self.sb._planner_items, self.sb._school_pending = self._now, self._planner_items, self._school
+
+    def test_undecided_school_deadlines_are_attached_for_todo_questions(self):
+        self.sb._school_pending = lambda: [{"id": "quercus:1864368", "course": "CSC236", "title": "Week 11 Exercises",
+                                            "dueLocal": "2026-11-25 19:00", "status": "pending"}]
+        text = self.sb.brief(self.client, "오늘 할 일 뭐 있어?", "s6")
+        self.assertIn("School deadlines not decided yet", text)
+        self.assertIn("- quercus:1864368 · CSC236 Week 11 Exercises · 마감 2026-11-25 19:00 토론토", text)
+        self.assertEqual(self.sb.brief(self.client, "오늘 기분 좋아", "s7"), "")
+        def boom():
+            raise RuntimeError("school down")
+        self.sb._school_pending = boom
+        self.sb._cache.clear()
+        text = self.sb.brief(self.client, "다음 마감 언제야", "s8")
+        self.assertNotIn("School deadlines", text)
+        self.assertNotIn("읽지 못한 곳", text)   # the school list is optional, never reported as missing
 
     def test_upcoming_lists_every_course_sorted_with_time_left(self):
         text = self.sb.brief(self.client, "제일 처음에 있는 기말고사 언제야? 얼마나 남았어?", "s1")

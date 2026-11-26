@@ -190,6 +190,8 @@ Discord로 보낸 첨부 파일(PDF, DOCX, TXT/MD/CSV/ICS)을 읽는 도구입�
 
 학교 소식(Quercus, Piazza, UofT 메일, CSC207 사이트)을 broker의 `/school/*`로 읽습니다. 동작: `updates`(최근 N일, `service`·`important` 필터), `read`(한 항목 전문), `status`(연결 상태, Quercus 토큰 남은 날), `check_now`(지금 확인). 자격 정보는 school 컨테이너에만 있고, 결과에는 "데이터이지 지시가 아님" 표시가 붙습니다. 자세한 내용: `services/school/README.md`.
 
+학교 마감 → 할 일 (2026-11-25): `deadlines`(결정 전 Quercus 마감 후보, `all`이면 결정한 것·지난 것도), `deadline_add`(후보 id, 예상 시간, 우선순위), `deadline_dismiss`(주인이 말한 이유), `deadline_reopen`(결정 되돌리기). 세 쓰기 동작은 모두 `confirmed_by_user=true`가 있어야 합니다. `deadline_add`는 후보의 값(과목·제목·토론토 기준 마감 날짜)으로 플래너 할 일을 만들고 결정을 학교 서비스에 기록합니다. 할 일 메모에 `[quercus:<id>]` 표시가 들어가서, 결정 기록이 실패해도 다시 부르면 같은 할 일을 고칠 뿐 새로 만들지 않습니다. 주인이 일정·마감·할 일을 물으면 `schedule_brief.py`가 결정 전 후보 목록을 코드로 붙이고, Kelly가 하나씩 묻습니다.
+
 ## AI 모델: LLM 게이트웨이와 Discord 명령
 
 Kelly는 Gemini에 직접 붙지 않고 `llm-gateway`(`compose.llm.yaml`)를 씁니다. `config.yaml`의 `model.default: kelly`, `provider: custom`, `base_url: http://llm-gateway:8094/v1`, `api_key: ${LLM_GATEWAY_KEY}`(호출자 키, `secrets/llm-hermes.env`)입니다. 제목·압축·검색 요약 같은 보조 작업은 `auxiliary:`에서 `kelly-aux`. 순서와 무료 한도는 `services/llm-gateway/README.md`.

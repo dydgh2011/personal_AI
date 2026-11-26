@@ -180,6 +180,9 @@ function schoolRoutes(): Route[] {
     s('GET', '/settings', 'settings'),
     s('POST', '/settings/mail-rule', 'settings.mailRule'),
     s('POST', '/settings/summary-style', 'settings.summaryStyle'),
+    // Quercus deadlines as todo candidates and the owner's decision on each (the school service validates).
+    s('GET', '/deadlines', 'deadlines', { all: (v) => v === '1' || v === '0' }),
+    s('POST', '/deadlines/decide', 'deadlines.decide'),
   ];
 }
 

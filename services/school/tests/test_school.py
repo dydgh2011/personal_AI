@@ -262,6 +262,93 @@ class SchoolTest(unittest.TestCase):
             server.server_close()
 
 
+def assignment(asg="1864368", due="2026-11-26T00:00:00Z", name="Week 11 Exercises", points=4.0):
+    return Item("quercus", f"todo:{asg}:{due}", "assignment", f"Due {due[:10]}: {name}", f"https://q.utoronto.ca/a/{asg}", due,
+                name, "CSC236H5 F LEC0101 20269:Introduction to the Theory of Computation",
+                {"due": due, "points_possible": points})
+
+
+class DeadlineTest(unittest.TestCase):
+    setUp = SchoolTest.setUp
+    tearDown = SchoolTest.tearDown
+
+    def test_candidates_use_the_local_date_and_the_alert_says_so(self):
+        self.school.poll()  # baseline
+        self.q.items = [assignment()]
+        self.school.poll()
+        [c] = self.school.deadline_candidates()
+        # 2026-11-26 00:00 UTC = 11-25 19:00 Toronto: the planner date is the 25th, not the 26th
+        self.assertEqual((c["id"], c["course"], c["title"], c["dueLocal"], c["deadline"], c["status"]),
+                         ("quercus:1864368", "CSC236", "Week 11 Exercises", "2026-11-25 19:00", "2026-11-25", "pending"))
+        self.now = datetime(2026, 11, 23, 17, 5, tzinfo=timezone.utc)
+        self.school.send_digest()
+        self.assertIn("마감 2026-11-25 19:00 (토론토), 4점", self.n.sent[-1]["items"][0]["summary"])
+        self.assertEqual(self.llm.calls, 0)
+
+    def test_midnight_due_means_the_day_before(self):
+        self.q.items = [assignment("7", "2026-12-02T05:00:00Z")]  # 00:00 Toronto on 12-02
+        self.school.poll()
+        self.assertEqual(self.school.deadline_candidates()[0]["deadline"], "2026-12-01")
+
+    def test_decisions_are_kept_and_a_moved_due_asks_again(self):
+        self.q.items = [assignment()]
+        self.school.poll()
+        r = self.school.decide_deadline("quercus:1864368", "dismissed", None, "점수와 상관없음 (주인)", "hermes-broker")
+        self.assertEqual(r["history"][0]["note"], "점수와 상관없음 (주인)")
+        self.assertEqual(self.school.deadline_candidates(), [])
+        self.assertEqual(self.school.deadline_candidates(include_decided=True)[0]["status"], "dismissed")
+        self.q.items = [assignment(due="2026-11-28T04:59:00Z")]  # instructor moved the due
+        self.school.poll()
+        [c] = self.school.deadline_candidates()
+        self.assertEqual((c["status"], c["deadline"]), ("changed", "2026-11-27"))
+        todo = "0b0c3a8e-1d2e-4f5a-8b6c-7d8e9f0a1b2c"
+        self.school.decide_deadline("quercus:1864368", "added", todo, "", "hermes-broker")
+        self.school.decide_deadline("quercus:1864368", "pending", None, "다시 볼게", "hermes-broker")
+        self.assertEqual(self.school.deadline_candidates()[0]["status"], "pending")
+        self.assertEqual([h["decision"] for h in self.store.deadline_history("quercus:1864368")], ["pending", "added", "dismissed"])
+        with self.assertRaises(Exception):
+            self.school.decide_deadline("quercus:1864368", "added", None, "", "x")  # added needs the todo id
+        with self.assertRaises(LookupError):
+            self.school.decide_deadline("quercus:999", "dismissed", None, "", "x")
+
+    def test_past_due_candidates_are_hidden(self):
+        self.q.items = [assignment("5", "2026-11-20T03:59:59Z", "Lab 9", 0.0), assignment("6", "2026-11-01T03:59:59Z", "Resume", 0.0)]
+        self.school.poll()
+        self.assertEqual(self.school.deadline_candidates(), [])
+        # with all=1: the recent one (3 days ago) is still listed, the one older than 14 days is not
+        self.assertEqual([c["title"] for c in self.school.deadline_candidates(include_decided=True)], ["Lab 9"])
+
+    def test_deadline_api(self):
+        self.q.items = [assignment()]
+        self.school.poll()
+        server = serve(self.school, [("hermes-broker", "b" * 40)], 0)
+        port = server.server_address[1]
+
+        def call(path, body=None):
+            req = urllib.request.Request(f"http://127.0.0.1:{port}{path}", method="POST" if body is not None else "GET",
+                                         data=None if body is None else json.dumps(body).encode(),
+                                         headers={"X-School-Key": "b" * 40, "Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req) as r:
+                    return r.status, json.loads(r.read())
+            except urllib.error.HTTPError as e:
+                with e:
+                    return e.code, json.loads(e.read())
+        try:
+            status, body = call("/deadlines")
+            self.assertEqual((status, body["items"][0]["id"]), (200, "quercus:1864368"))
+            self.assertEqual(call("/deadlines/decide", {"id": "quercus:1864368", "decision": "dismissed", "note": "안 해도 됨"})[0], 200)
+            self.assertEqual(call("/deadlines")[1]["items"], [])
+            self.assertEqual(call("/deadlines?all=1")[1]["items"][0]["decision"]["by"], "hermes-broker")
+            self.assertEqual(call("/deadlines/decide", {"id": "quercus:1864368", "decision": "delete"})[0], 400)
+            self.assertEqual(call("/deadlines/decide", {"id": "x; drop", "decision": "dismissed"})[0], 400)
+            self.assertEqual(call("/deadlines/decide", {"id": "quercus:1", "decision": "dismissed"})[0], 404)
+            self.assertEqual(call("/deadlines/decide", {"id": "quercus:1864368", "decision": "dismissed", "extra": 1})[0], 400)
+        finally:
+            server.shutdown()
+            server.server_close()
+
+
 class RulesTest(unittest.TestCase):
     def test_classify(self):
         self.assertEqual(classify(grade()), "now")

@@ -44,9 +44,21 @@
 | `mail_rule_set` | 보낸 사람·도메인 규칙 (주인이 직접 말했을 때만) |
 | `summary_style_set` | 알림 요약 방식 (주인의 말 그대로, 500자까지) |
 
+## 마감 → 할 일 후보 (2026-11-25)
+
+Quercus `/users/self/todo`의 과제(마감일이 있는 것)는 코드가 **할 일 후보**로 봅니다. AI는 후보를 만들지 않습니다.
+
+- Quercus의 마감은 UTC로 옵니다. 후보에는 토론토 시각(`dueLocal`)과 플래너용 날짜(`deadline`)를 같이 둡니다. 토론토 00:00 마감은 "그 전날까지"로 봅니다.
+- 새 과제 알림(Discord)의 요약 칸에는 AI 요약 대신 코드가 쓴 "마감 … (토론토), N점. 할 일로 넣을지 Kelly에게 말해 주세요"가 들어갑니다.
+- 주인이 정하면 Kelly 도구(`deadline_add` / `deadline_dismiss` / `deadline_reopen`, 주인 확인 필요)가 플래너에 넣고 결정을 기록합니다.
+- 결정은 `deadline_decisions`에 있고, **모든 결정은 `deadline_history`에 지우지 않고 남깁니다**(누가, 언제, 이유).
+- 강사가 마감을 바꾸면 상태가 `changed`가 되어 다시 묻습니다.
+- 배점 0점이어도 후보로 둡니다. 할지 말지는 주인이 정합니다(예: CSC236 Week 11 Exercises는 Quercus에 4점으로 나오지만 주인 말로는 성적에 안 들어감).
+- 아직은 Quercus 과제만 다룹니다. Piazza 글·메일 속 마감은 글로만 쓰여 있어서 코드로 확실히 읽을 수 없어 넣지 않았습니다.
+
 ## API (8095, 호스트 포트 없음, `X-School-Key`, 호출자: hermes-broker)
 
-`GET /status`, `GET /updates?days=&service=&important=&limit=`, `GET /item?service=&id=`, `POST /poll`, `GET /settings`, `POST /settings/mail-rule` `{match, action, note?}`, `POST /settings/summary-style` `{text}`, `GET /health`.
+`GET /status`, `GET /updates?days=&service=&important=&limit=`, `GET /item?service=&id=`, `POST /poll`, `GET /settings`, `POST /settings/mail-rule` `{match, action, note?}`, `POST /settings/summary-style` `{text}`, `GET /deadlines?all=1`, `POST /deadlines/decide` `{id, decision: added|dismissed|pending, todoId?, note?}`, `GET /health`.
 
 ## 주인이 주기적으로 할 일
 

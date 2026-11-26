@@ -330,18 +330,22 @@ describe('hermes-broker', () => {
       assert.equal((await send('POST', '/school/poll', {})).status, 200);
       assert.equal((await send('POST', '/school/settings/mail-rule', { match: '@ads.com', action: 'ignore' })).status, 200);
       assert.equal((await send('GET', '/school/updates?service=gmail')).status, 200);
+      assert.equal((await send('GET', '/school/deadlines?all=1')).status, 200);
+      assert.equal((await send('POST', '/school/deadlines/decide', { id: 'quercus:1', decision: 'dismissed' })).status, 200);
       assert.deepEqual(got.map((g) => [g.method, g.url]), [
         ['GET', '/updates?days=3&service=piazza&important=1&limit=20'],
         ['GET', '/item?service=quercus&id=stream%3A1%3At'],
         ['POST', '/poll'],
         ['POST', '/settings/mail-rule'],
         ['GET', '/updates?service=gmail'],
+        ['GET', '/deadlines?all=1'],
+        ['POST', '/deadlines/decide'],
       ]);
       assert.ok(got.every((g) => g.key === SCHOOL_KEY && g.knowledge === undefined));
-      for (const [method, path] of [['GET', '/school/updates?service=acorn'], ['GET', '/school/updates?token=1'], ['POST', '/school/updates'], ['GET', '/school/secrets'], ['POST', '/school/login']]) {
+      for (const [method, path] of [['GET', '/school/updates?service=acorn'], ['GET', '/school/updates?token=1'], ['POST', '/school/updates'], ['GET', '/school/secrets'], ['POST', '/school/login'], ['GET', '/school/deadlines?all=yes'], ['POST', '/school/deadlines']]) {
         assert.ok([400, 404, 405].includes((await send(method, path)).status), `${method} ${path}`);
       }
-      assert.equal(got.length, 5);
+      assert.equal(got.length, 7);
     } finally {
       await new Promise((r) => broker.close(r));
       await new Promise((r) => school.close(r));

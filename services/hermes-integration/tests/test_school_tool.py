@@ -63,6 +63,61 @@ class SchoolToolTest(unittest.TestCase):
         self.assertTrue(self.run_tool({"action": "settings"})["ok"])
         self.assertTrue(self.run_tool({"action": "updates", "service": "gmail"})["ok"])
 
+    def test_deadline_add_needs_the_owner_and_uses_the_candidate_fields(self):
+        cand = {"id": "quercus:1864368", "course": "CSC236", "courseName": "CSC236H5 F", "title": "Week 11 Exercises",
+                "dueLocal": "2026-11-25 19:00", "deadline": "2026-11-25", "points": 4.0, "url": "https://q/a", "status": "pending"}
+        todo = {"id": "0b0c3a8e-1d2e-4f5a-8b6c-7d8e9f0a1b2c", "title": "CSC236 Week 11 Exercises", "estimateMinutes": 60}
+        state = {"todos": []}
+
+        class Client(FakeClient):
+            def request(self, method, path, body=None, headers=None, retry=True):
+                FakeClient.calls.append((method, path, body))
+                if path.startswith("/school/deadlines/decide"):
+                    return 200, {}, {"id": body["id"], "decision": body["decision"]}
+                if path.startswith("/school/deadlines"):
+                    return 200, {}, {"items": [cand]}
+                if path == "/planner/todos?status=open":
+                    return 200, {}, {"todos": state["todos"]}
+                if path == "/planner/todos":
+                    return 200, {}, {"todo": todo}
+                if path.endswith("/update"):
+                    return 200, {}, {"todo": todo}
+                return 404, {}, {}
+
+        def run(args):
+            return plugin.run_school_tool(args, env=ENV, client_factory=Client)
+
+        listed = run({"action": "deadlines"})
+        self.assertIn("quercus:1864368 · CSC236 Week 11 Exercises · 마감 2026-11-25 19:00 토론토, 4점 · 결정 전", listed["display"])
+        # no OK from the owner: nothing written
+        self.assertEqual(run({"action": "deadline_add", "candidate_id": "quercus:1864368", "estimate_minutes": 60})["error"]["code"],
+                         "needs_confirmation")
+        self.assertEqual(run({"action": "deadline_add", "candidate_id": "quercus:1864368", "confirmed_by_user": True})["error"]["code"],
+                         "usage_error")  # estimate missing
+        self.assertEqual(run({"action": "deadline_add", "candidate_id": "x; rm", "estimate_minutes": 60, "confirmed_by_user": True})
+                         ["error"]["code"], "usage_error")
+        self.assertFalse(any(c[0] == "POST" for c in FakeClient.calls))
+        r = run({"action": "deadline_add", "candidate_id": "quercus:1864368", "estimate_minutes": 60, "confirmed_by_user": True})
+        self.assertTrue(r["ok"])
+        posts = [c for c in FakeClient.calls if c[0] == "POST"]
+        self.assertEqual(posts[0][1], "/planner/todos")
+        self.assertEqual({k: posts[0][2][k] for k in ("title", "kind", "priority", "estimateMinutes", "deadline")},
+                         {"title": "CSC236 Week 11 Exercises", "kind": "task", "priority": 2, "estimateMinutes": 60, "deadline": "2026-11-25"})
+        self.assertIn("[quercus:1864368]", posts[0][2]["notes"])
+        self.assertEqual(posts[1], ("POST", "/school/deadlines/decide",
+                                    {"id": "quercus:1864368", "decision": "added", "note": "", "todoId": todo["id"]}))
+        # a todo with the marker already exists (decision lost): it is updated, not duplicated
+        FakeClient.calls = []
+        state["todos"] = [{"id": todo["id"], "notes": "학교 마감 [quercus:1864368]"}]
+        run({"action": "deadline_add", "candidate_id": "quercus:1864368", "estimate_minutes": 60, "confirmed_by_user": True})
+        self.assertEqual([c[1] for c in FakeClient.calls if c[0] == "POST"],
+                         [f"/planner/todos/{todo['id']}/update", "/school/deadlines/decide"])
+        # dismiss keeps the owner's reason
+        FakeClient.calls = []
+        r = run({"action": "deadline_dismiss", "candidate_id": "quercus:1864368", "reason": "점수와 상관없음", "confirmed_by_user": True})
+        self.assertTrue(r["ok"])
+        self.assertEqual(FakeClient.calls[-1][2], {"id": "quercus:1864368", "decision": "dismissed", "note": "점수와 상관없음"})
+
     def test_registered(self):
         ctx = FakeContext()
         plugin.register(ctx)
